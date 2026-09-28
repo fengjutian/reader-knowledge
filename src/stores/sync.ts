@@ -3,6 +3,14 @@ import { api } from "../api/tauri";
 import type { SyncProgress } from "../types/domain";
 
 interface SyncState extends SyncProgress { run: () => Promise<void> }
+
+function syncErrorMessage(error: unknown) {
+  const message = typeof error === "string" ? error : error instanceof Error ? error.message : "同步失败";
+  return message.includes("No matching entry found in secure storage")
+    ? "请先在设置中填写并保存微信读书 API Key"
+    : message;
+}
+
 export const useSyncStore = create<SyncState>((set) => ({
   status: "idle", progress: 0, books: 0, highlights: 0, thoughts: 0,
   run: async () => {
@@ -10,7 +18,7 @@ export const useSyncStore = create<SyncState>((set) => ({
     try {
       set(await api.sync());
     } catch (error) {
-      set({ status: "failed", progress: 0, message: typeof error === "string" ? error : error instanceof Error ? error.message : "同步失败" });
+      set({ status: "failed", progress: 0, message: syncErrorMessage(error) });
     }
   },
 }));

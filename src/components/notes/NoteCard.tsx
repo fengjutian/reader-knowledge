@@ -3,12 +3,18 @@ import type { ReactNode } from "react";
 import type { Note } from "../../types/domain";
 
 function highlighted(text: string, query?: string): ReactNode {
-  const terms = query?.trim().split(/\s+/).filter(Boolean) ?? [];
+  const rawTerms = query?.trim().split(/\s+/).filter(Boolean) ?? [];
+  const terms = [...rawTerms];
+  for (const raw of rawTerms) {
+    const chars = [...raw.replace(/[^\p{L}\p{N}]/gu, "")];
+    if (chars.length > 2) for (let index = 0; index < chars.length - 1; index++) terms.push(chars.slice(index, index + 2).join(""));
+  }
+  terms.sort((a, b) => b.length - a.length);
   if (!terms.length) return text;
   const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const matcher = new RegExp(`(${escaped.join("|")})`, "gi");
   return text.split(matcher).map((part, index) =>
-    terms.some(term => part.localeCompare(term, undefined, { sensitivity: "accent" }) === 0)
+    terms.some(term => part.toLocaleLowerCase() === term.toLocaleLowerCase())
       ? <mark key={`${part}-${index}`}>{part}</mark>
       : part
   );

@@ -195,7 +195,14 @@ pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool
 }
 #[tauri::command]
 pub async fn sync_weread(db: State<'_, Database>) -> Result<SyncProgress, AppError> {
-    let secret = keyring::Entry::new("ReadFlow", "weread")?.get_password()?;
+    let secret = keyring::Entry::new("ReadFlow", "weread")?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => {
+                AppError::Message("请先在设置中填写并保存微信读书 API Key".into())
+            }
+            other => AppError::Credential(other),
+        })?;
     let client = crate::weread::client::WeReadClient::new(secret)?;
     crate::sync::run(&db, &client).await
 }
@@ -378,56 +385,27 @@ fn validate_ai_settings(settings: &AiSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-fn rag_search(db: &Database, question: &str, book_ids: &[String]) -> Result<Vec<SearchResult>, AppError> {
-    let direct = hybrid_search(db, question, None, book_ids, 20)?;
-    if !direct.is_empty() {
-        return Ok(direct);
+fn rag_search(
+    db: &Database,
+    question: &str,
+    book_ids: &[String],
+) -> Result<Vec<SearchResult>, AppError> {
+    if book_ids.len() > 1 {
+        let per_book = (20 / book_ids.len()).max(3);
+        let mut combined = Vec::new();
+        for book_id in book_ids {
+            combined.extend(hybrid_search(
+                db,
+                question,
+                None,
+                std::slice::from_ref(book_id),
+                per_book,
+            )?);
+        }
+        combined.truncate(20);
+        return Ok(combined);
     }
-    let terms = semantic_bigrams(question);
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-    let c = db.connect()?;
-    let mut query = c.prepare(
-        "SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND b.is_deleted=0
-         UNION ALL
-         SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND b.is_deleted=0",
-    )?;
-    let notes = query
-        .query_map([], |r| {
-            Ok(Note {
-                id: r.get(0)?,
-                note_type: r.get(1)?,
-                book_id: r.get(2)?,
-                book_title: r.get(3)?,
-                chapter: r.get(4)?,
-                content: r.get(5)?,
-                created_at: r.get(6)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut ranked: Vec<SearchResult> = notes
-        .into_iter()
-        .filter_map(|note| {
-            let haystack =
-                format!("{}{}{}", note.book_title, note.chapter, note.content).to_lowercase();
-            let score = terms
-                .iter()
-                .filter(|term| haystack.contains(term.as_str()))
-                .count();
-            (score > 0).then_some(SearchResult {
-                note,
-                score: -(score as f64),
-            })
-        })
-        .collect();
-    ranked.sort_by(|a, b| {
-        a.score
-            .partial_cmp(&b.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    ranked.truncate(20);
-    Ok(ranked)
+    hybrid_search(db, question, None, book_ids, 20)
 }
 
 fn hybrid_search(
@@ -443,7 +421,9 @@ fn hybrid_search(
          CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END, 0.0
          FROM notes_fts WHERE (?1 IS NULL OR note_type=?1)"
     )?;
-    let notes = query.query_map([kind], map_note)?.collect::<Result<Vec<_>, _>>()?;
+    let notes = query
+        .query_map([kind], map_note)?
+        .collect::<Result<Vec<_>, _>>()?;
     let normalized = normalize_search_text(input);
     let terms = search_terms(input);
     let mut ranked: Vec<SearchResult> = notes
@@ -453,29 +433,56 @@ fn hybrid_search(
             let title = normalize_search_text(&item.note.book_title);
             let chapter = normalize_search_text(&item.note.chapter);
             let content = normalize_search_text(&item.note.content);
-            let mut score = if !normalized.is_empty() && content.contains(&normalized) { 12.0 } else { 0.0 };
+            let mut score = if !normalized.is_empty() && content.contains(&normalized) {
+                12.0
+            } else {
+                0.0
+            };
             for term in &terms {
-                if title.contains(term) { score += 5.0; }
-                if chapter.contains(term) { score += 3.0; }
+                if title.contains(term) {
+                    score += 5.0;
+                }
+                if chapter.contains(term) {
+                    score += 3.0;
+                }
                 score += content.match_indices(term).count().min(4) as f64;
             }
-            (score > 0.0).then(|| { item.score = -score; item })
+            (score > 0.0).then(|| {
+                item.score = -score;
+                item
+            })
         })
         .collect();
-    ranked.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ranked.truncate(limit);
     Ok(ranked)
 }
 
 fn normalize_search_text(input: &str) -> String {
-    input.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+    input
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }
 
 fn search_terms(input: &str) -> Vec<String> {
-    let mut terms: Vec<String> = input.split_whitespace()
-        .map(normalize_search_text).filter(|term| !term.is_empty()).collect();
+    let mut terms: Vec<String> = input
+        .split_whitespace()
+        .map(normalize_search_text)
+        .filter(|term| !term.is_empty())
+        .collect();
     terms.extend(semantic_bigrams(input));
-    terms.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then_with(|| a.cmp(b)));
+    terms.sort_by(|a, b| {
+        b.chars()
+            .count()
+            .cmp(&a.chars().count())
+            .then_with(|| a.cmp(b))
+    });
     terms.dedup();
     terms
 }
@@ -497,7 +504,7 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::fts_query;
+    use super::{fts_query, search_terms};
 
     #[test]
     fn fts_query_uses_and_for_multiple_terms() {
@@ -512,5 +519,13 @@ mod tests {
     #[test]
     fn chinese_questions_produce_search_bigrams() {
         assert!(super::semantic_bigrams("我对组织有什么想法？").contains(&"组织".into()));
+    }
+
+    #[test]
+    fn chinese_search_combines_phrase_and_bigrams() {
+        let terms = search_terms("组织管理");
+        assert!(terms.contains(&"组织管理".into()));
+        assert!(terms.contains(&"组织".into()));
+        assert!(terms.contains(&"管理".into()));
     }
 }
