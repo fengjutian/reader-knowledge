@@ -238,10 +238,13 @@
 .graph-search { width:240px;height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--muted); }
 .graph-search:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
 .graph-search input { width:100%;border:0;outline:0;background:transparent; }
+.graph-strength { height:36px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--secondary);font-size:12px; }
+.graph-strength select { border:0;outline:0;background:transparent;color:var(--text);cursor:pointer; }
 .graph-reset { color:var(--accent)!important; }
 .graph-shell { position:relative;flex:1;min-height:450px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:radial-gradient(circle at center,color-mix(in srgb,var(--accent-soft) 35%,var(--surface)) 0,var(--surface) 62%);box-shadow:0 7px 28px #66523d0b; }
 .knowledge-graph { display:block;width:100%;height:100%;min-height:450px; }
 .graph-edges line { stroke:color-mix(in srgb,var(--secondary) 28%,transparent);stroke-width:1.2; }
+.graph-relation { cursor:pointer;transition:opacity .18s ease; }.graph-relation:hover line:not(.graph-relation__hit),.graph-relation.selected line:not(.graph-relation__hit) { stroke:var(--accent); }.graph-relation__hit { stroke:transparent!important;stroke-width:14!important; }.graph-relation.dimmed { opacity:.08; }
 .graph-node { cursor:pointer;outline:none;transition:opacity .18s ease; }
 .graph-node circle { stroke-width:2;transition:r .15s ease,stroke-width .15s ease; }
 .graph-node svg { pointer-events:none; }
@@ -265,9 +268,11 @@
 .graph-detail__actions { display:flex;gap:7px;margin-top:16px; }
 .graph-detail__actions button { display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:12px; }
 .graph-detail__actions button:last-child { background:var(--accent);border-color:var(--accent);color:white; }
+.relation-keywords { display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 15px; }.relation-keywords span { padding:5px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px; }.graph-relation-detail h2 { font-size:15px;line-height:1.8; }
 .graph-legend { position:absolute;left:16px;bottom:14px;display:flex;gap:14px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--secondary);font-size:11px; }
 .graph-legend span { display:flex;align-items:center;gap:5px; }
 .graph-legend i { width:8px;height:8px;border-radius:50%;background:var(--accent); }
 .graph-legend i.highlight { background:#d2a73d; }.graph-legend i.thought { background:#6f789f; }
+.graph-legend i.relation { width:15px;height:2px;border-radius:0;background:var(--secondary); }
 .graph-state { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--muted); }
 .graph-state svg { width:34px;height:34px;color:var(--accent); }.graph-state strong { color:var(--text);font-size:17px; }.graph-state span { font-size:13px; }

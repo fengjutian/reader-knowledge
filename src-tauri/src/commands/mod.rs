@@ -114,7 +114,7 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
     let web_link = reqwest::Url::parse(reader_path)
         .ok()
         .and_then(|mut url| {
-            url.path_segments_mut().ok()?.push(&reader_id);
+            url.path_segments_mut().ok()?.pop_if_empty().push(&reader_id);
             Some(url.to_string())
         });
     let link = web_link
@@ -665,6 +665,17 @@ mod tests {
         assert_eq!(
             weread_reader_id("3300220342"),
             "8d2321e0813abbc92g012963"
+        );
+
+        let reader_id = weread_reader_id("3300220342");
+        let mut url = reqwest::Url::parse("https://weread.qq.com/web/reader/").unwrap();
+        url.path_segments_mut()
+            .unwrap()
+            .pop_if_empty()
+            .push(&reader_id);
+        assert_eq!(
+            url.as_str(),
+            "https://weread.qq.com/web/reader/8d2321e0813abbc92g012963"
         );
     }
 
