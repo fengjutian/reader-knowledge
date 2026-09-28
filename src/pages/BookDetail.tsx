@@ -29,6 +29,17 @@ export function BookDetail() {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [closeBook]);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+    };
+  }, []);
   if (!bookId) return null;
   return <div className="book-drawer-layer" role="dialog" aria-modal="true" aria-label={book?.title || "书籍详情"}>
     <button className="book-drawer-backdrop" aria-label="关闭书籍详情" onClick={closeBook}/>
@@ -39,7 +50,7 @@ export function BookDetail() {
       {book.cover ? <img src={book.cover} alt="" referrerPolicy="no-referrer"/> : <div className="book-cover"><span>{book.title}</span></div>}
       <div><span className="eyebrow">{book.category || "微信读书"}</span><h1>{book.title}</h1><p>{book.author}</p>
         <div className="book-detail-meta"><span>{book.highlightCount} 条划线</span><span>{book.thoughtCount} 条想法</span>{book.updatedAt && <span>最近阅读 {book.updatedAt}</span>}</div>
-        {book.deepLink && <Button icon={<ExternalLink size={15}/>} onClick={() => api.openBook(book.id)}>在微信读书中打开</Button>}
+        <Button icon={<ExternalLink size={15}/>} onClick={() => api.openBook(book.id)}>在微信读书 Web 中打开</Button>
       </div>
     </header>
     <div className="section-heading"><h2>全部笔记</h2><span>{notes.length} 条</span></div>

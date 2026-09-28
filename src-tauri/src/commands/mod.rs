@@ -105,7 +105,15 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
             |row| row.get(0),
         )
         .optional()?;
-    let link = link.ok_or_else(|| AppError::Message("微信读书未返回这本书的打开链接".into()))?;
+    let web_link = reqwest::Url::parse("https://weread.qq.com/web/reader/")
+        .ok()
+        .and_then(|mut url| {
+            url.path_segments_mut().ok()?.push(&book_id);
+            Some(url.to_string())
+        });
+    let link = web_link
+        .or(link)
+        .ok_or_else(|| AppError::Message("无法生成这本书的微信读书 Web 链接".into()))?;
     app.opener()
         .open_url(link, None::<String>)
         .map_err(|error| AppError::Message(format!("无法打开微信读书：{error}")))
