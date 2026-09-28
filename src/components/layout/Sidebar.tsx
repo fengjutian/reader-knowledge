@@ -1,10 +1,11 @@
-import { LayoutDashboard, Library, Highlighter, Lightbulb, Search, Settings, Moon, Sun, BookOpen } from "lucide-react";
+import { LayoutDashboard, Library, Highlighter, Lightbulb, Search, Sparkles, Settings, Moon, Sun, BookOpen } from "lucide-react";
 import { useAppStore, type Page } from "../../stores/app";
 
 const items: { id: Page; label: string; icon: typeof Library }[] = [
   { id: "dashboard", label: "概览", icon: LayoutDashboard }, { id: "books", label: "书籍", icon: Library },
   { id: "highlights", label: "划线", icon: Highlighter }, { id: "thoughts", label: "想法", icon: Lightbulb },
   { id: "search", label: "搜索", icon: Search },
+  { id: "ai", label: "AI 助手", icon: Sparkles },
 ];
 
 export function Sidebar() {

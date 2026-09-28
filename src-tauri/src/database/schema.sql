@@ -6,4 +6,5 @@ CREATE TABLE IF NOT EXISTS thoughts (review_id TEXT PRIMARY KEY,book_id TEXT NOT
 CREATE TABLE IF NOT EXISTS weread_raw (id INTEGER PRIMARY KEY AUTOINCREMENT,entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,payload TEXT NOT NULL,fetched_at INTEGER NOT NULL,UNIQUE(entity_type,entity_id));
 CREATE TABLE IF NOT EXISTS sync_sessions (id TEXT PRIMARY KEY,source TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,status TEXT NOT NULL,books_fetched INTEGER DEFAULT 0,highlights_fetched INTEGER DEFAULT 0,thoughts_fetched INTEGER DEFAULT 0,error_message TEXT);
 CREATE TABLE IF NOT EXISTS sync_state (source TEXT PRIMARY KEY,last_synced_at INTEGER,last_successful_session TEXT);
+CREATE TABLE IF NOT EXISTS ai_settings (id INTEGER PRIMARY KEY CHECK(id=1),provider TEXT NOT NULL,endpoint TEXT NOT NULL,model TEXT NOT NULL,updated_at INTEGER NOT NULL);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(note_id UNINDEXED,note_type UNINDEXED,book_id UNINDEXED,title,chapter_title,content,tokenize='unicode61');

@@ -1,22 +1,18 @@
 use super::provider::{AiProvider, ProviderFuture};
 use crate::models::ChatMessage;
 pub struct OpenAiCompatibleProvider {
-    pub id: String,
-    pub base_url: String,
+    pub endpoint: String,
     pub model: String,
     pub api_key: String,
     pub http: reqwest::Client,
 }
 impl AiProvider for OpenAiCompatibleProvider {
-    fn id(&self) -> &str {
-        &self.id
-    }
     fn chat<'a>(&'a self, messages: &'a [ChatMessage]) -> ProviderFuture<'a> {
         Box::pin(async move {
             let body = serde_json::json!({"model":self.model,"messages":messages});
             let value: serde_json::Value = self
                 .http
-                .post(format!("{}/chat/completions", self.base_url))
+                .post(&self.endpoint)
                 .bearer_auth(&self.api_key)
                 .json(&body)
                 .send()

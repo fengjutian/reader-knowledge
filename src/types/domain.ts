@@ -10,6 +10,11 @@ export interface Book {
   progress: number;
   updatedAt: string;
 }
+export interface BookDetail extends Book {
+  category: string;
+  deepLink?: string;
+  finished: boolean;
+}
 
 export interface Note {
   id: string;
@@ -29,6 +34,9 @@ export interface DashboardStats {
 }
 
 export interface SearchResult extends Note { score: number }
+export interface Citation { index: number; note: Note }
+export interface AiAnswer { content: string; citations: Citation[] }
+export interface AiSettings { provider: string; endpoint: string; model: string }
 export interface SyncProgress {
   status: "idle" | "reading" | "processing" | "complete" | "failed";
   progress: number;

@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod database;
 mod error;
@@ -20,11 +21,18 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
             commands::list_books,
+            commands::get_book,
+            commands::list_book_notes,
+            commands::open_book,
             commands::list_notes,
             commands::search_notes,
             commands::save_secret,
             commands::test_connection,
-            commands::sync_weread
+            commands::sync_weread,
+            commands::get_ai_settings,
+            commands::save_ai_settings,
+            commands::test_ai,
+            commands::ask_ai
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReadFlow")

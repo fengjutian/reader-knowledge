@@ -1,6 +1,9 @@
+use crate::ai::provider::AiProvider;
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
-use tauri::State;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError> {
@@ -48,6 +51,64 @@ pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
         })?
         .collect::<Result<_, _>>()?;
     Ok(books)
+}
+
+#[tauri::command]
+pub fn get_book(db: State<'_, Database>, book_id: String) -> Result<BookDetail, AppError> {
+    let c = db.connect()?;
+    c.query_row(
+        "SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),
+         (SELECT count(*) FROM highlights h WHERE h.book_id=b.book_id AND h.is_deleted=0),
+         (SELECT count(*) FROM thoughts t WHERE t.book_id=b.book_id AND t.is_deleted=0),
+         CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,
+         coalesce(datetime(b.read_update_time,'unixepoch','localtime'),''),coalesce(b.category,''),b.deep_link,b.finish_reading=1
+         FROM books b WHERE b.book_id=?1 AND b.is_deleted=0",
+        [book_id],
+        |r| Ok(BookDetail { book: Book { id:r.get(0)?,title:r.get(1)?,author:r.get(2)?,cover:r.get(3)?,highlight_count:r.get(4)?,thought_count:r.get(5)?,progress:r.get(6)?,updated_at:r.get(7)? }, category:r.get(8)?,deep_link:r.get(9)?,finished:r.get(10)? }),
+    ).map_err(AppError::from)
+}
+
+#[tauri::command]
+pub fn list_book_notes(db: State<'_, Database>, book_id: String) -> Result<Vec<Note>, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare(
+        "SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,coalesce(datetime(h.create_time,'unixepoch','localtime'),'')
+         FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.book_id=?1 AND h.is_deleted=0
+         UNION ALL
+         SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'')
+         FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.book_id=?1 AND t.is_deleted=0
+         ORDER BY 7 DESC",
+    )?;
+    let notes = query
+        .query_map([book_id], |r| {
+            Ok(Note {
+                id: r.get(0)?,
+                note_type: r.get(1)?,
+                book_id: r.get(2)?,
+                book_title: r.get(3)?,
+                chapter: r.get(4)?,
+                content: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(notes)
+}
+
+#[tauri::command]
+pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Result<(), AppError> {
+    let c = db.connect()?;
+    let link: Option<String> = c
+        .query_row(
+            "SELECT deep_link FROM books WHERE book_id=?1 AND is_deleted=0",
+            [book_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let link = link.ok_or_else(|| AppError::Message("微信读书未返回这本书的打开链接".into()))?;
+    app.opener()
+        .open_url(link, None::<String>)
+        .map_err(|error| AppError::Message(format!("无法打开微信读书：{error}")))
 }
 
 #[tauri::command]
@@ -142,6 +203,221 @@ fn fts_query(input: &str) -> String {
         .join(" AND ")
 }
 
+#[tauri::command]
+pub fn get_ai_settings(db: State<'_, Database>) -> Result<Option<AiSettings>, AppError> {
+    let c = db.connect()?;
+    c.query_row(
+        "SELECT provider,endpoint,model FROM ai_settings WHERE id=1",
+        [],
+        |r| {
+            Ok(AiSettings {
+                provider: r.get(0)?,
+                endpoint: r.get(1)?,
+                model: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub fn save_ai_settings(
+    db: State<'_, Database>,
+    settings: AiSettings,
+    api_key: String,
+) -> Result<(), AppError> {
+    validate_ai_settings(&settings)?;
+    keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?
+        .set_password(&api_key)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    db.connect()?.execute("INSERT INTO ai_settings(id,provider,endpoint,model,updated_at) VALUES(1,?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,endpoint=excluded.endpoint,model=excluded.model,updated_at=excluded.updated_at", rusqlite::params![settings.provider,settings.endpoint,settings.model,now])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_ai(db: State<'_, Database>) -> Result<bool, AppError> {
+    let provider = ai_provider(&db)?;
+    provider
+        .chat(&[ChatMessage {
+            role: "user".into(),
+            content: "请只回复 OK".into(),
+        }])
+        .await?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn ask_ai(db: State<'_, Database>, question: String) -> Result<AiAnswer, AppError> {
+    if question.trim().is_empty() {
+        return Err(AppError::Message("问题不能为空".into()));
+    }
+    let results = rag_search(&db, &question)?;
+    if results.is_empty() {
+        return Err(AppError::Message(
+            "没有检索到相关笔记，无法生成有依据的回答".into(),
+        ));
+    }
+    let mut context = String::new();
+    for (index, result) in results.iter().enumerate() {
+        let source = if result.note.note_type == "thought" {
+            "用户想法"
+        } else {
+            "书籍原文划线"
+        };
+        let content: String = result.note.content.chars().take(1200).collect();
+        context.push_str(&format!(
+            "[{}]\ntype: {}\nbook: 《{}》\nchapter: {}\ncontent: {}\n\n",
+            index + 1,
+            source,
+            result.note.book_title,
+            result.note.chapter,
+            content
+        ));
+    }
+    let system = "你是 ReadFlow 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
+    let prompt = format!(
+        "以下是检索到的笔记：\n\n{}\n用户问题：{}",
+        context,
+        question.trim()
+    );
+    let provider = ai_provider(&db)?;
+    let content = provider
+        .chat(&[
+            ChatMessage {
+                role: "system".into(),
+                content: system.into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: prompt,
+            },
+        ])
+        .await?;
+    let citations = results
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| content.contains(&format!("[{}]", index + 1)))
+        .map(|(index, result)| Citation {
+            index: index + 1,
+            note: result.note,
+        })
+        .collect();
+    Ok(AiAnswer { content, citations })
+}
+
+fn ai_provider(db: &Database) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {
+    let c = db.connect()?;
+    let settings = c
+        .query_row(
+            "SELECT provider,endpoint,model FROM ai_settings WHERE id=1",
+            [],
+            |r| {
+                Ok(AiSettings {
+                    provider: r.get(0)?,
+                    endpoint: r.get(1)?,
+                    model: r.get(2)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Message("请先配置 AI Provider".into()))?;
+    validate_ai_settings(&settings)?;
+    let api_key =
+        keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?.get_password()?;
+    Ok(crate::ai::providers::OpenAiCompatibleProvider {
+        endpoint: settings.endpoint,
+        model: settings.model,
+        api_key,
+        http: reqwest::Client::new(),
+    })
+}
+
+fn validate_ai_settings(settings: &AiSettings) -> Result<(), AppError> {
+    if settings.provider.trim().is_empty() || settings.model.trim().is_empty() {
+        return Err(AppError::Message("Provider 和模型不能为空".into()));
+    }
+    let url = reqwest::Url::parse(&settings.endpoint)
+        .map_err(|_| AppError::Message("AI Endpoint 格式无效".into()))?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if url.scheme() != "https" && !(local && url.scheme() == "http") {
+        return Err(AppError::Message(
+            "AI Endpoint 必须使用 HTTPS；仅本机地址允许 HTTP".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn rag_search(db: &Database, question: &str) -> Result<Vec<SearchResult>, AppError> {
+    let direct = search_impl(db, question, None)?;
+    if !direct.is_empty() {
+        return Ok(direct);
+    }
+    let terms = semantic_bigrams(question);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let c = db.connect()?;
+    let mut query = c.prepare(
+        "SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND b.is_deleted=0
+         UNION ALL
+         SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND b.is_deleted=0",
+    )?;
+    let notes = query
+        .query_map([], |r| {
+            Ok(Note {
+                id: r.get(0)?,
+                note_type: r.get(1)?,
+                book_id: r.get(2)?,
+                book_title: r.get(3)?,
+                chapter: r.get(4)?,
+                content: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ranked: Vec<SearchResult> = notes
+        .into_iter()
+        .filter_map(|note| {
+            let haystack =
+                format!("{}{}{}", note.book_title, note.chapter, note.content).to_lowercase();
+            let score = terms
+                .iter()
+                .filter(|term| haystack.contains(term.as_str()))
+                .count();
+            (score > 0).then_some(SearchResult {
+                note,
+                score: -(score as f64),
+            })
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    ranked.truncate(20);
+    Ok(ranked)
+}
+
+fn semantic_bigrams(input: &str) -> Vec<String> {
+    let normalized: Vec<char> = input
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    let mut terms: Vec<String> = normalized
+        .windows(2)
+        .map(|pair| pair.iter().collect())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
 #[cfg(test)]
 mod tests {
     use super::fts_query;
@@ -154,5 +430,10 @@ mod tests {
     #[test]
     fn fts_query_escapes_quotes() {
         assert_eq!(fts_query("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn chinese_questions_produce_search_bigrams() {
+        assert!(super::semantic_bigrams("我对组织有什么想法？").contains(&"组织".into()));
     }
 }

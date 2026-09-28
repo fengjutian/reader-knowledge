@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardStats {
@@ -18,6 +18,15 @@ pub struct Book {
     pub thought_count: i64,
     pub progress: i64,
     pub updated_at: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookDetail {
+    #[serde(flatten)]
+    pub book: Book,
+    pub category: String,
+    pub deep_link: Option<String>,
+    pub finished: bool,
 }
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -45,4 +54,29 @@ pub struct SyncProgress {
     pub books: i64,
     pub highlights: i64,
     pub thoughts: i64,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettings {
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+}
+
+#[derive(Serialize)]
+pub struct Citation {
+    pub index: usize,
+    pub note: Note,
+}
+
+#[derive(Serialize)]
+pub struct AiAnswer {
+    pub content: String,
+    pub citations: Vec<Citation>,
 }
