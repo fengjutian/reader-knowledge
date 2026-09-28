@@ -1,0 +1,9 @@
+import { ArrowUp, BookOpen, Sparkles } from "lucide-react";
+import { motion } from "motion/react";
+import { useState } from "react";
+import { api } from "../api/tauri";
+import type { AiAnswer } from "../types/domain";
+import { PageHeader } from "../components/ui/PageHeader";
+const prompts=["总结我对《置身事内》的所有想法","我关于组织管理有哪些思考？","比较我在不同书中对公司的理解"];
+export function AI(){const [question,setQuestion]=useState("");const [answer,setAnswer]=useState<AiAnswer>();const [loading,setLoading]=useState(false);async function ask(text=question){if(!text.trim())return;setQuestion(text);setLoading(true);setAnswer(await api.ask(text));setLoading(false)}return <><PageHeader title="AI 阅读助手" subtitle="只基于你的阅读记录思考和回答。"/><div className="ai-wrap">{!answer&&!loading&&<section className="ai-empty"><span><Sparkles size={25}/></span><h2>今天想从笔记中发现什么？</h2><p>我会检索相关划线与想法，并标注每个结论的来源。</p><div className="prompt-list">{prompts.map(p=><button key={p} onClick={()=>ask(p)}>{p}<ArrowUp size={14}/></button>)}</div></section>}{loading&&<div className="ai-thinking"><Sparkles/><div><strong>正在阅读你的笔记</strong><span>检索相关内容 · 构建上下文 · 分析观点</span></div></div>}{answer&&<motion.section className="answer" initial={{opacity:0,y:10}} animate={{opacity:1,y:0}}><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><p>{answer.content}</p></div><h3>引用的笔记</h3>{answer.citations.map(c=><article className="citation" key={c.index}><span>{c.index}</span><div><strong><BookOpen size={14}/>《{c.note.bookTitle}》 · {c.note.chapter}</strong><p>{c.note.content}</p></div></article>)}</motion.section>}<form className="ask-box" onSubmit={e=>{e.preventDefault();ask()}}><textarea value={question} onChange={e=>setQuestion(e.target.value)} placeholder="问问你的阅读知识库…"/><button disabled={!question.trim()||loading}><ArrowUp size={18}/></button><small>AI 可能出错，请根据引用核实</small></form></div></>}
+

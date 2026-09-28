@@ -1,0 +1,8 @@
+import { Check, Eye, EyeOff } from "lucide-react";
+import { useState } from "react";
+import { api } from "../api/tauri";
+import { Button } from "../components/ui/Button";
+import { PageHeader } from "../components/ui/PageHeader";
+function SecretField({label,kind}:{label:string;kind:string}){const [value,setValue]=useState("");const [show,setShow]=useState(false);const [ok,setOk]=useState(false);async function test(){await api.saveSecret(kind,value);setOk(await api.testConnection(kind))}return <div className="setting-field"><label>{label}</label><div className="secret-input"><input type={show?"text":"password"} placeholder="输入 API Key" value={value} onChange={e=>setValue(e.target.value)}/><button onClick={()=>setShow(!show)}>{show?<EyeOff size={16}/>:<Eye size={16}/>}</button></div><Button variant="secondary" onClick={test} disabled={!value}>{ok?<><Check size={15}/>连接成功</>:"测试连接"}</Button></div>}
+export function Settings(){return <><PageHeader title="设置" subtitle="连接数据源与智能模型。"/><div className="settings"><section className="settings-card"><div><h2>微信读书</h2><p>密钥会安全保存在系统凭据库中。</p></div><SecretField label="Agent Gateway API Key" kind="weread"/></section><section className="settings-card"><div><h2>AI 模型</h2><p>选择用于分析笔记的主要模型。</p></div><div className="setting-field"><label>Provider</label><select><option>DeepSeek</option><option>MiniMax</option></select><label>Model</label><select><option>deepseek-chat</option><option>deepseek-reasoner</option></select></div><SecretField label="DeepSeek API Key" kind="deepseek"/></section><section className="settings-card"><div><h2>数据与隐私</h2><p>阅读记录保存在本机。AI 请求只包含问题和检索出的相关笔记。</p></div><div className="privacy-badge"><Check size={16}/>本地优先</div></section></div></>}
+
