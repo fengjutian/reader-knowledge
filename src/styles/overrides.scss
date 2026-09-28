@@ -171,8 +171,9 @@
 @keyframes drawer-in { from { transform:translateX(28px);opacity:.6; } to { transform:translateX(0);opacity:1; } }
 
 .ai-wrap {
-  max-width: 920px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   min-height: calc(100vh - 150px);
 }
 .ai-modes {
@@ -223,6 +224,7 @@
 .ai-book-options small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px; }
 .ai-book-picker__none { margin:14px 0 2px;text-align:center;color:var(--muted);font-size:12px; }
 .answer__source-link { margin:0 2px;padding:1px 4px;border:0;border-radius:4px;background:var(--accent-soft);color:var(--accent);font:inherit;font-size:.86em;vertical-align:baseline; }
+.answer { width:min(920px,100%);margin-inline:auto; }
 .answer__markdown { min-width:0;flex:1;line-height:1.85; }
 .answer__markdown > :first-child { margin-top:0; }.answer__markdown > :last-child { margin-bottom:0; }
 .answer__markdown h1,.answer__markdown h2,.answer__markdown h3,.answer__markdown h4 { margin:1.45em 0 .55em;color:var(--text);line-height:1.4;letter-spacing:-.02em;text-transform:none; }
@@ -294,3 +296,6 @@
 .graph-legend i.relation { width:15px;height:2px;border-radius:0;background:var(--secondary); }
 .graph-state { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--muted); }
 .graph-state svg { width:34px;height:34px;color:var(--accent); }.graph-state strong { color:var(--text);font-size:17px; }.graph-state span { font-size:13px; }
+.graph-analyzing { position:absolute;z-index:3;top:14px;left:50%;transform:translateX(-50%);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);color:var(--secondary);font-size:11px;box-shadow:0 3px 12px #0001; }
+.relation-evidence { display:block;width:100%;margin:7px 0;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-hover);color:var(--secondary);font-size:11px;line-height:1.55;text-align:left; }
+.relation-evidence:hover { border-color:var(--accent);color:var(--text); }
