@@ -8,7 +8,7 @@ import { useSyncStore } from "../stores/sync";
 import type { DashboardStats } from "../types/domain";
 
 export function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats>({books:0,highlights:0,thoughts:0}); const sync = useSyncStore(); useEffect(() => { api.dashboard().then(setStats) }, [sync.status, sync.progress]);
+  const [stats, setStats] = useState<DashboardStats>({books:0,highlights:0,thoughts:0}); const sync = useSyncStore(); useEffect(() => { api.dashboard().then(setStats) }, [sync.status]);
   const live = sync.status === "processing" || sync.status === "complete";
   const cards = [{ label:"书籍", value:live?sync.books:stats.books, icon:BookOpen },{label:"划线",value:live?sync.highlights:stats.highlights,icon:Highlighter},{label:"想法",value:live?sync.thoughts:stats.thoughts,icon:Lightbulb}];
   return <><PageHeader title="我的阅读" subtitle="把读过的内容，变成可以继续生长的知识。" actions={<Button icon={<RefreshCw size={16} className={sync.status === "reading" || sync.status === "processing" ? "spin" : ""}/>} onClick={sync.run} disabled={sync.status === "reading" || sync.status === "processing"}>同步微信读书</Button>}/>
