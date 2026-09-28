@@ -8,12 +8,14 @@ import { useSyncStore } from "../stores/sync";
 import type { Book } from "../types/domain";
 
 let booksCache: Book[] | null = null;
+type SortBy = "recent" | "highlights" | "thoughts" | "title";
 
 export function Books() {
   const [items, setItems] = useState<Book[]>(() => booksCache ?? []);
   const [q, setQ] = useState("");
   const [withHighlights, setWithHighlights] = useState(true);
   const [withThoughts, setWithThoughts] = useState(true);
+  const [sortBy, setSortBy] = useState<SortBy>("recent");
   const [loading, setLoading] = useState(() => booksCache === null);
   const [error, setError] = useState("");
   const [visibleCount, setVisibleCount] = useState(80);
@@ -41,12 +43,17 @@ export function Books() {
       if (!withHighlights && !withThoughts) return true;
       return (withHighlights && book.highlightCount > 0) || (withThoughts && book.thoughtCount > 0);
     })
-    .sort((a, b) => b.highlightCount - a.highlightCount || b.thoughtCount - a.thoughtCount || b.updatedAt.localeCompare(a.updatedAt)), [items, q, withHighlights, withThoughts]);
+    .sort((a, b) => {
+      if (sortBy === "highlights") return b.highlightCount - a.highlightCount || b.updatedAt.localeCompare(a.updatedAt);
+      if (sortBy === "thoughts") return b.thoughtCount - a.thoughtCount || b.updatedAt.localeCompare(a.updatedAt);
+      if (sortBy === "title") return a.title.localeCompare(b.title, "zh-CN");
+      return b.updatedAt.localeCompare(a.updatedAt) || b.highlightCount - a.highlightCount;
+    }), [items, q, withHighlights, withThoughts, sortBy]);
   const visible = filtered.slice(0, visibleCount);
-  useEffect(() => setVisibleCount(80), [q, withHighlights, withThoughts]);
+  useEffect(() => setVisibleCount(80), [q, withHighlights, withThoughts, sortBy]);
   return <>
     <PageHeader title="书籍" subtitle={`${items.length} 本书，承载你的阅读轨迹。`} />
-    <div className="toolbar"><label className="field field--search"><Search size={16} /><input value={q} onChange={event => setQ(event.target.value)} placeholder="搜索书名或作者" /></label><div className="book-note-filters" aria-label="笔记类型筛选"><button type="button" className={withHighlights ? "active" : ""} aria-pressed={withHighlights} onClick={() => setWithHighlights(value => !value)}><Highlighter size={14} />有划线{withHighlights && <Check size={12} />}</button><button type="button" className={withThoughts ? "active" : ""} aria-pressed={withThoughts} onClick={() => setWithThoughts(value => !value)}><Lightbulb size={14} />有想法{withThoughts && <Check size={12} />}</button></div><button className="filter-button"><SlidersHorizontal size={16} />划线优先</button></div>
+    <div className="toolbar"><label className="field field--search"><Search size={16} /><input value={q} onChange={event => setQ(event.target.value)} placeholder="搜索书名或作者" /></label><div className="book-note-filters" aria-label="笔记类型筛选"><button type="button" className={withHighlights ? "active" : ""} aria-pressed={withHighlights} onClick={() => setWithHighlights(value => !value)}><Highlighter size={14} />有划线{withHighlights && <Check size={12} />}</button><button type="button" className={withThoughts ? "active" : ""} aria-pressed={withThoughts} onClick={() => setWithThoughts(value => !value)}><Lightbulb size={14} />有想法{withThoughts && <Check size={12} />}</button></div><label className="filter-button book-sort"><SlidersHorizontal size={16} /><select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)} aria-label="书籍排序"><option value="recent">最近阅读</option><option value="highlights">划线最多</option><option value="thoughts">想法最多</option><option value="title">书名排序</option></select></label></div>
     {loading && <div className="notes-loading">正在打开书架…</div>}
     {!loading && error && <div className="notes-loading">读取书架失败：{error}</div>}
     {!loading && !error && items.length === 0 && <div className="notes-loading">书架暂时为空，可返回概览同步微信读书。</div>}

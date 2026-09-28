@@ -1,5 +1,5 @@
 import { ExternalLink, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/tauri";
 import { NoteCard } from "../components/notes/NoteCard";
 import { Button } from "../components/ui/Button";
@@ -11,6 +11,16 @@ export function BookDetail() {
   const [book, setBook] = useState<BookDetailType>();
   const [notes, setNotes] = useState<Note[]>([]);
   const [error, setError] = useState("");
+  const notesByChapter = useMemo(() => {
+    const groups = new Map<string, Note[]>();
+    for (const note of notes) {
+      const chapter = note.chapter.trim() || "未分章节";
+      const items = groups.get(chapter) ?? [];
+      items.push(note);
+      groups.set(chapter, items);
+    }
+    return [...groups.entries()];
+  }, [notes]);
   useEffect(() => {
     if (!bookId) return;
     setError("");
@@ -54,7 +64,7 @@ export function BookDetail() {
       </div>
     </header>
     <div className="section-heading"><h2>全部笔记</h2><span>{notes.length} 条</span></div>
-    {notes.length ? <section className="notes-list">{notes.map(note => <NoteCard key={`${note.type}-${note.id}`} note={note} focused={note.id === selectedNoteId}/>)}</section> : <div className="empty-state">这本书还没有可导出的划线或想法</div>}
+    {notes.length ? <div className="chapter-groups">{notesByChapter.map(([chapter, chapterNotes]) => <section className="chapter-group" key={chapter}><header className="chapter-group__header"><h3>{chapter}</h3><span>{chapterNotes.length} 条</span></header><div className="notes-list">{chapterNotes.map(note => <NoteCard key={`${note.type}-${note.id}`} note={note} focused={note.id === selectedNoteId}/>)}</div></section>)}</div> : <div className="empty-state">这本书还没有可导出的划线或想法</div>}
       </>}
       </div>
     </aside>
