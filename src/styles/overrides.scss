@@ -55,3 +55,72 @@
 .settings-tabs button:hover { color:var(--text); }
 .settings-tabs button.active { background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0001; }
 .field-hint { color:var(--secondary);line-height:1.4; }
+
+/* Compact desktop layout */
+:root {
+  font-family: "Source Han Serif SC", "Source Han Serif CN", "Noto Serif CJK SC", "思源宋体", "Songti SC", SimSun, serif;
+}
+
+.page {
+  max-width: none;
+  margin: 0;
+  padding: 28px 20px 48px 32px;
+}
+
+.page-header { margin-bottom: 22px; }
+.page-header h1 { font-size: 26px; margin-bottom: 4px; }
+.page-header p { font-size: 14px; }
+.stats-grid, .dashboard-grid, .book-grid { gap: 10px; }
+.stat-card { padding: 14px 16px; }
+.panel { padding: 18px; }
+.toolbar { margin-bottom: 16px; }
+.settings { gap: 10px; max-width: 920px; }
+.settings-card { padding: 18px 20px; gap: 28px; }
+.settings-tabs { gap: 3px; padding: 4px; }
+.settings-tabs button { padding: 7px 11px; }
+.setting-field { gap: 7px; }
+.setting-field select, .settings-input, .secret-input { min-height: 36px; }
+.button { padding: 7px 12px; }
+
+.ai-wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  min-height: calc(100vh - 150px);
+}
+.ai-modes {
+  display: flex;
+  gap: 4px;
+  width: max-content;
+  padding: 4px;
+  margin-bottom: 14px;
+  border-radius: 9px;
+  background: var(--surface-hover);
+}
+.ai-modes button {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--secondary);
+}
+.ai-modes button.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px #0001;
+}
+.ai-book-picker {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.ai-book-picker > div { display:flex;flex-wrap:wrap;gap:8px;margin-top:10px; }
+.ai-book-picker label { display:flex;align-items:center;gap:6px;padding:6px 9px;border-radius:7px;background:var(--surface-hover); }
+.ai-empty { margin: 12vh auto auto; }
+.ask-box { bottom: 12px; }
+
+@media(max-width:1000px) {
+  .page { padding: 24px 20px 40px 24px; }
+}
