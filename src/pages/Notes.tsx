@@ -18,7 +18,10 @@ export function Notes({ type }: { type: NoteType }) {
   useEffect(() => {
     setLoading(true);
     setError("");
-    api.notes(type).then(setNotes).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
+    const timer = window.setTimeout(() => {
+      api.notes(type).then(setNotes).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
+    }, sync.status === "processing" ? 200 : 0);
+    return () => window.clearTimeout(timer);
   }, [type, sync.status, sync.progress]);
 
   return <>
