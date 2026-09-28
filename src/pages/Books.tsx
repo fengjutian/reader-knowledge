@@ -13,7 +13,6 @@ export function Books() {
   const [error, setError] = useState("");
   const openBook = useAppStore(state => state.openBook);
   const syncStatus = useSyncStore(state => state.status);
-  const processedBooks = useSyncStore(state => state.processedBooks);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -21,9 +20,9 @@ export function Books() {
         .then(value => { setItems(value); setError(""); })
         .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
         .finally(() => setLoading(false));
-    }, syncStatus === "processing" ? 150 : 0);
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [syncStatus, processedBooks]);
+  }, [syncStatus]);
 
   const filtered = useMemo(() => items.filter(book => `${book.title}${book.author}`.toLowerCase().includes(q.toLowerCase())), [items, q]);
   return <>

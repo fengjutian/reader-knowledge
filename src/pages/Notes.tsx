@@ -14,15 +14,16 @@ export function Notes({ type }: { type: NoteType }) {
   const sync = useSyncStore();
   const thought = type === "thought";
   const syncing = sync.status === "reading" || sync.status === "processing";
+  const refreshBatch = Math.floor(sync.processedBooks / 5);
 
   useEffect(() => {
     setLoading(true);
     setError("");
     const timer = window.setTimeout(() => {
       api.notes(type).then(setNotes).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
-    }, sync.status === "processing" ? 200 : 0);
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [type, sync.status, sync.progress]);
+  }, [type, sync.status, refreshBatch]);
 
   return <>
     <PageHeader title={thought ? "想法" : "划线"} subtitle={thought ? "回到阅读时闪现的念头。" : "重读那些曾经打动你的句子。"} />

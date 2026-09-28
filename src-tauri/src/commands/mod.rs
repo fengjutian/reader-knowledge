@@ -35,7 +35,7 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
 #[tauri::command]
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
-    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),(SELECT count(*) FROM highlights h WHERE h.book_id=b.book_id AND h.is_deleted=0),(SELECT count(*) FROM thoughts t WHERE t.book_id=b.book_id AND t.is_deleted=0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),'') FROM books b WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
+    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),'') FROM books b LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
     let books = q
         .query_map([], |r| {
             Ok(Book {
@@ -116,7 +116,21 @@ pub fn list_notes(
     db: State<'_, Database>,
     note_type: Option<String>,
 ) -> Result<Vec<Note>, AppError> {
-    search_impl(&db, "", note_type).map(|v| v.into_iter().map(|r| r.note).collect())
+    let c = db.connect()?;
+    let mut query = c.prepare(
+        "SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,coalesce(datetime(h.create_time,'unixepoch','localtime'),'')
+         FROM highlights h JOIN books b ON b.book_id=h.book_id
+         WHERE h.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR ?1='highlight')
+         UNION ALL
+         SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'')
+         FROM thoughts t JOIN books b ON b.book_id=t.book_id
+         WHERE t.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR ?1='thought')
+         ORDER BY 7 DESC LIMIT 500",
+    )?;
+    let notes = query.query_map([note_type], |r| {
+        Ok(Note { id:r.get(0)?,note_type:r.get(1)?,book_id:r.get(2)?,book_title:r.get(3)?,chapter:r.get(4)?,content:r.get(5)?,created_at:r.get(6)? })
+    })?.collect::<Result<Vec<_>, _>>()?;
+    Ok(notes)
 }
 
 #[tauri::command]

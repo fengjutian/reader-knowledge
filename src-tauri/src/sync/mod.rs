@@ -180,10 +180,6 @@ fn persist(
     }
     if finalize {
         rebuild_fts(&tx)?;
-    } else {
-        for item in notes {
-            rebuild_book_fts(&tx, &item.book_id)?;
-        }
     }
     let finished_at = now();
     let book_count: i64 =
@@ -212,13 +208,6 @@ fn rebuild_fts(tx: &Transaction<'_>) -> Result<(), AppError> {
     tx.execute("DELETE FROM notes_fts", [])?;
     tx.execute("INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content) SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND b.is_deleted=0", [])?;
     tx.execute("INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content) SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND b.is_deleted=0", [])?;
-    Ok(())
-}
-
-fn rebuild_book_fts(tx: &Transaction<'_>, book_id: &str) -> Result<(), AppError> {
-    tx.execute("DELETE FROM notes_fts WHERE book_id=?1", [book_id])?;
-    tx.execute("INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content) SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.book_id=?1 AND h.is_deleted=0 AND b.is_deleted=0", [book_id])?;
-    tx.execute("INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content) SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.book_id=?1 AND t.is_deleted=0 AND b.is_deleted=0", [book_id])?;
     Ok(())
 }
 
