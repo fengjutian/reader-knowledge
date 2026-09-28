@@ -139,6 +139,9 @@ fn search_impl(
     query: &str,
     kind: Option<String>,
 ) -> Result<Vec<SearchResult>, AppError> {
+    if !query.trim().is_empty() {
+        return hybrid_search(db, query, kind.as_deref(), &[], 50);
+    }
     let c = db.connect()?;
     let sql = if query.trim().is_empty() {
         "SELECT note_id,note_type,book_id,title,chapter_title,content,
@@ -251,11 +254,21 @@ pub async fn test_ai(db: State<'_, Database>) -> Result<bool, AppError> {
 }
 
 #[tauri::command]
-pub async fn ask_ai(db: State<'_, Database>, question: String) -> Result<AiAnswer, AppError> {
+pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAnswer, AppError> {
+    let question = request.question;
+    if !matches!(request.mode.as_str(), "ask" | "summary" | "compare") {
+        return Err(AppError::Message("不支持的 AI 分析模式".into()));
+    }
+    if request.mode == "summary" && request.book_ids.len() != 1 {
+        return Err(AppError::Message("单书总结必须选择一本书".into()));
+    }
+    if request.mode == "compare" && request.book_ids.len() < 2 {
+        return Err(AppError::Message("跨书分析至少选择两本书".into()));
+    }
     if question.trim().is_empty() {
         return Err(AppError::Message("问题不能为空".into()));
     }
-    let results = rag_search(&db, &question)?;
+    let results = rag_search(&db, &question, &request.book_ids)?;
     if results.is_empty() {
         return Err(AppError::Message(
             "没有检索到相关笔记，无法生成有依据的回答".into(),
@@ -351,8 +364,8 @@ fn validate_ai_settings(settings: &AiSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-fn rag_search(db: &Database, question: &str) -> Result<Vec<SearchResult>, AppError> {
-    let direct = search_impl(db, question, None)?;
+fn rag_search(db: &Database, question: &str, book_ids: &[String]) -> Result<Vec<SearchResult>, AppError> {
+    let direct = hybrid_search(db, question, None, book_ids, 20)?;
     if !direct.is_empty() {
         return Ok(direct);
     }
@@ -401,6 +414,56 @@ fn rag_search(db: &Database, question: &str) -> Result<Vec<SearchResult>, AppErr
     });
     ranked.truncate(20);
     Ok(ranked)
+}
+
+fn hybrid_search(
+    db: &Database,
+    input: &str,
+    kind: Option<&str>,
+    book_ids: &[String],
+    limit: usize,
+) -> Result<Vec<SearchResult>, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare(
+        "SELECT note_id,note_type,book_id,title,chapter_title,content,
+         CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END, 0.0
+         FROM notes_fts WHERE (?1 IS NULL OR note_type=?1)"
+    )?;
+    let notes = query.query_map([kind], map_note)?.collect::<Result<Vec<_>, _>>()?;
+    let normalized = normalize_search_text(input);
+    let terms = search_terms(input);
+    let mut ranked: Vec<SearchResult> = notes
+        .into_iter()
+        .filter(|item| book_ids.is_empty() || book_ids.iter().any(|id| id == &item.note.book_id))
+        .filter_map(|mut item| {
+            let title = normalize_search_text(&item.note.book_title);
+            let chapter = normalize_search_text(&item.note.chapter);
+            let content = normalize_search_text(&item.note.content);
+            let mut score = if !normalized.is_empty() && content.contains(&normalized) { 12.0 } else { 0.0 };
+            for term in &terms {
+                if title.contains(term) { score += 5.0; }
+                if chapter.contains(term) { score += 3.0; }
+                score += content.match_indices(term).count().min(4) as f64;
+            }
+            (score > 0.0).then(|| { item.score = -score; item })
+        })
+        .collect();
+    ranked.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(limit);
+    Ok(ranked)
+}
+
+fn normalize_search_text(input: &str) -> String {
+    input.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+fn search_terms(input: &str) -> Vec<String> {
+    let mut terms: Vec<String> = input.split_whitespace()
+        .map(normalize_search_text).filter(|term| !term.is_empty()).collect();
+    terms.extend(semantic_bigrams(input));
+    terms.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then_with(|| a.cmp(b)));
+    terms.dedup();
+    terms
 }
 
 fn semantic_bigrams(input: &str) -> Vec<String> {

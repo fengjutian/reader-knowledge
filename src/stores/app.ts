@@ -6,9 +6,11 @@ interface AppState {
   theme: "light" | "dark";
   searchOpen: boolean;
   selectedBookId?: string;
+  selectedNoteId?: string;
   setPage: (page: Page) => void;
   setSearchOpen: (open: boolean) => void;
-  openBook: (bookId: string) => void;
+  openBook: (bookId: string, noteId?: string) => void;
+  clearSelectedNote: () => void;
   toggleTheme: () => void;
 }
 
@@ -18,7 +20,8 @@ export const useAppStore = create<AppState>((set) => ({
   searchOpen: false,
   setPage: page => set({ page }),
   setSearchOpen: searchOpen => set({ searchOpen }),
-  openBook: selectedBookId => set({ selectedBookId, page: "bookDetail" }),
+  openBook: (selectedBookId, selectedNoteId) => set({ selectedBookId, selectedNoteId, page: "bookDetail" }),
+  clearSelectedNote: () => set({ selectedNoteId: undefined }),
   toggleTheme: () => set(state => {
     const theme = state.theme === "light" ? "dark" : "light";
     localStorage.setItem("readflow-theme", theme);

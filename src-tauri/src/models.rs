@@ -80,3 +80,12 @@ pub struct AiAnswer {
     pub content: String,
     pub citations: Vec<Citation>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiRequest {
+    pub question: String,
+    pub mode: String,
+    #[serde(default)]
+    pub book_ids: Vec<String>,
+}

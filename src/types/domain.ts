@@ -36,6 +36,8 @@ export interface DashboardStats {
 export interface SearchResult extends Note { score: number }
 export interface Citation { index: number; note: Note }
 export interface AiAnswer { content: string; citations: Citation[] }
+export type AiMode = "ask" | "summary" | "compare";
+export interface AiRequest { question: string; mode: AiMode; bookIds: string[] }
 export interface AiSettings { provider: string; endpoint: string; model: string }
 export interface SyncProgress {
   status: "idle" | "reading" | "processing" | "complete" | "failed";
