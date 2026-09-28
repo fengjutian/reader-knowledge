@@ -1,0 +1,9 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS books (book_id TEXT PRIMARY KEY,title TEXT NOT NULL,author TEXT,cover TEXT,category TEXT,deep_link TEXT,read_update_time INTEGER,finish_reading INTEGER DEFAULT 0,update_time INTEGER,created_at INTEGER NOT NULL,synced_at INTEGER NOT NULL,is_deleted INTEGER DEFAULT 0,last_seen_sync_id TEXT);
+CREATE TABLE IF NOT EXISTS chapters (id INTEGER PRIMARY KEY AUTOINCREMENT,book_id TEXT NOT NULL,chapter_uid INTEGER NOT NULL,chapter_idx INTEGER,title TEXT,created_at INTEGER NOT NULL,UNIQUE(book_id,chapter_uid));
+CREATE TABLE IF NOT EXISTS highlights (bookmark_id TEXT PRIMARY KEY,book_id TEXT NOT NULL,chapter_uid INTEGER,chapter_idx INTEGER,chapter_title TEXT,mark_text TEXT NOT NULL,range_json TEXT,color_style TEXT,create_time INTEGER,synced_at INTEGER NOT NULL,is_deleted INTEGER DEFAULT 0,last_seen_sync_id TEXT);
+CREATE TABLE IF NOT EXISTS thoughts (review_id TEXT PRIMARY KEY,book_id TEXT NOT NULL,chapter_uid INTEGER,chapter_idx INTEGER,chapter_name TEXT,content TEXT NOT NULL,abstract TEXT,range_json TEXT,create_time INTEGER,synced_at INTEGER NOT NULL,is_deleted INTEGER DEFAULT 0,last_seen_sync_id TEXT);
+CREATE TABLE IF NOT EXISTS weread_raw (id INTEGER PRIMARY KEY AUTOINCREMENT,entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,payload TEXT NOT NULL,fetched_at INTEGER NOT NULL,UNIQUE(entity_type,entity_id));
+CREATE TABLE IF NOT EXISTS sync_sessions (id TEXT PRIMARY KEY,source TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,status TEXT NOT NULL,books_fetched INTEGER DEFAULT 0,highlights_fetched INTEGER DEFAULT 0,thoughts_fetched INTEGER DEFAULT 0,error_message TEXT);
+CREATE TABLE IF NOT EXISTS sync_state (source TEXT PRIMARY KEY,last_synced_at INTEGER,last_successful_session TEXT);
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(note_id UNINDEXED,note_type UNINDEXED,book_id UNINDEXED,title,chapter_title,content,tokenize='unicode61');

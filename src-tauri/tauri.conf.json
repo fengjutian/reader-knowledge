@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ReadFlow",
+  "version": "0.1.0",
+  "identifier": "com.readflow.desktop",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "app": { "windows": [{ "title": "ReadFlow", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 620 }], "security": { "csp": null } },
+  "bundle": { "active": true, "targets": "all" }
+}
