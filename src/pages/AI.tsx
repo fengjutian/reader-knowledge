@@ -1,11 +1,32 @@
 import { ArrowUp, BookOpen, Search, Sparkles, X } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "../api/tauri";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiMode, Book } from "../types/domain";
 
 const modeLabels: Record<AiMode, string> = { ask: "全库提问", summary: "单书总结", compare: "跨书分析" };
+
+function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void }) {
+  const markdown = answer.content.replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)");
+  return <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    urlTransform={url => url.startsWith("citation:") ? url : url}
+    components={{
+      a: ({ href, children }) => {
+        if (href?.startsWith("citation:")) {
+          const index = Number(href.slice("citation:".length));
+          const citation = answer.citations.find(item => item.index === index);
+          return citation ? <button type="button" className="answer__source-link" onClick={() => openBook(citation.note.bookId, citation.note.id)}>{children}</button> : <>{children}</>;
+        }
+        return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+      },
+    }}
+  >{markdown}</ReactMarkdown>;
+}
+
 export function AI() {
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState<AiMode>("ask");
@@ -61,7 +82,7 @@ export function AI() {
       {!answer && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
       {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选最相关的 20 条笔记" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
-      {answer && <section className="answer"><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><p>{answer.content.split(/(\[\d+\])/g).map((part, index) => { const match = part.match(/^\[(\d+)\]$/); const citation = match && answer.citations.find(item => item.index === Number(match[1])); return citation ? <button className="answer__source-link" key={`${part}-${index}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}>{part}</button> : <Fragment key={`${part}-${index}`}>{part}</Fragment>; })}</p></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {answer.sourcesConsidered} 条 · 引用 {answer.citations.length} 条</span></div>{answer.citations.map(citation => <button className="citation" key={`${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>}
+      {answer && <section className="answer"><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {answer.sourcesConsidered} 条 · 引用 {answer.citations.length} 条</span></div>{answer.citations.map(citation => <button className="citation" key={`${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>}
       <form className="ask-box" onSubmit={ask}><textarea value={question} onChange={event => setQuestion(event.target.value)} placeholder="问问你的阅读知识库…"/><button disabled={!question.trim() || loading}><ArrowUp size={18}/></button><small>回答严格基于引用笔记；点击引用可定位原始笔记</small></form>
     </div>
   </>;
