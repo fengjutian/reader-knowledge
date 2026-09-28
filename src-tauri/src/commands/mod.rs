@@ -351,8 +351,9 @@ fn ai_provider_with_key(
     validate_ai_settings(&settings)?;
     let api_key = match api_key.filter(|value| !value.trim().is_empty()) {
         Some(value) => value,
-        None => keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?
-            .get_password()?,
+        None => {
+            keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?.get_password()?
+        }
     };
     Ok(crate::ai::providers::OpenAiCompatibleProvider {
         endpoint: settings.endpoint,
