@@ -1,3 +1,33 @@
-use super::provider::{AiProvider,ProviderFuture}; use crate::models::ChatMessage;
-pub struct OpenAiCompatibleProvider{pub id:String,pub base_url:String,pub model:String,pub api_key:String,pub http:reqwest::Client}
-impl AiProvider for OpenAiCompatibleProvider{fn id(&self)->&str{&self.id}fn chat<'a>(&'a self,messages:&'a[ChatMessage])->ProviderFuture<'a>{Box::pin(async move{let body=serde_json::json!({"model":self.model,"messages":messages});let value:serde_json::Value=self.http.post(format!("{}/chat/completions",self.base_url)).bearer_auth(&self.api_key).json(&body).send().await?.error_for_status()?.json().await?;value["choices"][0]["message"]["content"].as_str().map(str::to_owned).ok_or_else(||crate::error::AppError::Message("AI 响应格式无效".into()))})}}
+use super::provider::{AiProvider, ProviderFuture};
+use crate::models::ChatMessage;
+pub struct OpenAiCompatibleProvider {
+    pub id: String,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    pub http: reqwest::Client,
+}
+impl AiProvider for OpenAiCompatibleProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn chat<'a>(&'a self, messages: &'a [ChatMessage]) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let body = serde_json::json!({"model":self.model,"messages":messages});
+            let value: serde_json::Value = self
+                .http
+                .post(format!("{}/chat/completions", self.base_url))
+                .bearer_auth(&self.api_key)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            value["choices"][0]["message"]["content"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| crate::error::AppError::Message("AI 响应格式无效".into()))
+        })
+    }
+}

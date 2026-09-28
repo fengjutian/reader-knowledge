@@ -1,1 +1,3 @@
-fn main() { readflow_lib::run() }
+fn main() {
+    readflow_lib::run()
+}
