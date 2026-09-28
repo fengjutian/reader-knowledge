@@ -45,6 +45,8 @@ export interface SyncProgress {
   books: number;
   highlights: number;
   thoughts: number;
+  processedBooks: number;
+  totalBooks: number;
   message?: string;
 }
 

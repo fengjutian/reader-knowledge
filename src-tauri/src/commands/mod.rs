@@ -2,7 +2,7 @@ use crate::ai::provider::AiProvider;
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
@@ -208,7 +208,7 @@ pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool
     Ok(true)
 }
 #[tauri::command]
-pub async fn sync_weread(db: State<'_, Database>) -> Result<SyncProgress, AppError> {
+pub async fn sync_weread(app: AppHandle, db: State<'_, Database>) -> Result<SyncProgress, AppError> {
     let secret = keyring::Entry::new("ReadFlow", "weread")?
         .get_password()
         .map_err(|error| match error {
@@ -218,7 +218,10 @@ pub async fn sync_weread(db: State<'_, Database>) -> Result<SyncProgress, AppErr
             other => AppError::Credential(other),
         })?;
     let client = crate::weread::client::WeReadClient::new(secret)?;
-    crate::sync::run(&db, &client).await
+    crate::sync::run(&db, &client, |progress| {
+        let _ = app.emit("sync-progress", progress);
+    })
+    .await
 }
 
 fn fts_query(input: &str) -> String {

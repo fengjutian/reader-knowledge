@@ -47,13 +47,17 @@ pub struct SearchResult {
     pub note: Note,
     pub score: f64,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SyncProgress {
     pub status: String,
     pub progress: i32,
     pub books: i64,
     pub highlights: i64,
     pub thoughts: i64,
+    #[serde(rename = "processedBooks")]
+    pub processed_books: usize,
+    #[serde(rename = "totalBooks")]
+    pub total_books: usize,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChatMessage {

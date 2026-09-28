@@ -19,7 +19,7 @@ export function Notes({ type }: { type: NoteType }) {
     setLoading(true);
     setError("");
     api.notes(type).then(setNotes).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
-  }, [type, sync.status]);
+  }, [type, sync.status, sync.progress]);
 
   return <>
     <PageHeader title={thought ? "想法" : "划线"} subtitle={thought ? "回到阅读时闪现的念头。" : "重读那些曾经打动你的句子。"} />

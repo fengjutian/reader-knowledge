@@ -13,7 +13,10 @@ struct BookNotes {
     thoughts: Vec<Value>,
 }
 
-pub async fn run(db: &Database, client: &WeReadClient) -> Result<SyncProgress, AppError> {
+pub async fn run<F>(db: &Database, client: &WeReadClient, emit: F) -> Result<SyncProgress, AppError>
+where
+    F: Fn(&SyncProgress),
+{
     let session_id = Uuid::new_v4().to_string();
     let started_at = now();
     db.connect()?.execute(
@@ -21,70 +24,82 @@ pub async fn run(db: &Database, client: &WeReadClient) -> Result<SyncProgress, A
         params![session_id, started_at],
     )?;
 
-    let fetched = fetch_all(client).await;
-    match fetched {
-        Ok((shelf, notes)) => {
-            let result = persist(db, &session_id, started_at, shelf, notes);
-            if let Err(error) = &result {
-                mark_failed(db, &session_id, error);
-            }
-            result
-        }
-        Err(error) => {
-            mark_failed(db, &session_id, &error);
-            Err(error)
-        }
-    }
-}
-
-async fn fetch_all(
-    client: &WeReadClient,
-) -> Result<(crate::weread::models::ShelfResponse, Vec<BookNotes>), AppError> {
-    let shelf = client.shelf().await?;
-    let notebooks = client.all_notebooks().await?;
-    let mut notes = Vec::with_capacity(notebooks.len());
-    for notebook in notebooks {
-        let highlights = client.highlights(&notebook.book_id).await?;
-        let thoughts = client.all_thoughts(&notebook.book_id).await?;
-        notes.push(BookNotes {
-            book_id: notebook.book_id,
-            book: notebook.book,
-            highlights,
-            thoughts,
+    let result = async {
+        let shelf = client.shelf().await?;
+        let notebooks = client.all_notebooks().await?;
+        let total = notebooks.len();
+        let shelf_progress = persist(db, &session_id, started_at, &shelf, &[], false, true)?;
+        emit(&SyncProgress {
+            status: "processing".into(),
+            progress: 10,
+            books: shelf_progress.books,
+            highlights: shelf_progress.highlights,
+            thoughts: shelf_progress.thoughts,
+            processed_books: 0,
+            total_books: total,
         });
+
+        for (index, notebook) in notebooks.into_iter().enumerate() {
+            let highlights = client.highlights(&notebook.book_id).await?;
+            let thoughts = client.all_thoughts(&notebook.book_id).await?;
+            let item = BookNotes {
+                book_id: notebook.book_id,
+                book: notebook.book,
+                highlights,
+                thoughts,
+            };
+            let mut progress = persist(db, &session_id, started_at, &shelf, &[item], false, false)?;
+            progress.status = "processing".into();
+            progress.progress = if total == 0 { 90 } else { 10 + (((index + 1) * 80 / total) as i32) };
+            progress.processed_books = index + 1;
+            progress.total_books = total;
+            emit(&progress);
+        }
+
+        let mut complete = persist(db, &session_id, started_at, &shelf, &[], true, false)?;
+        complete.processed_books = total;
+        complete.total_books = total;
+        emit(&complete);
+        Ok(complete)
     }
-    Ok((shelf, notes))
+    .await;
+    if let Err(error) = &result {
+        mark_failed(db, &session_id, error);
+    }
+    result
 }
 
 fn persist(
     db: &Database,
     session_id: &str,
     started_at: i64,
-    shelf: crate::weread::models::ShelfResponse,
-    notes: Vec<BookNotes>,
+    shelf: &crate::weread::models::ShelfResponse,
+    notes: &[BookNotes],
+    finalize: bool,
+    write_shelf: bool,
 ) -> Result<SyncProgress, AppError> {
     let mut connection = db.connect()?;
     let tx = connection.transaction()?;
-    let mut highlight_count = 0_i64;
-    let mut thought_count = 0_i64;
 
-    save_raw(
-        &tx,
-        "shelf",
-        "current",
-        &serde_json::to_value(&shelf)?,
-        started_at,
-    )?;
-    for book in &shelf.books {
-        tx.execute(
+    if write_shelf {
+        save_raw(
+            &tx,
+            "shelf",
+            "current",
+            &serde_json::to_value(&shelf)?,
+            started_at,
+        )?;
+        for book in &shelf.books {
+            tx.execute(
             "INSERT INTO books(book_id,title,author,cover,category,deep_link,read_update_time,finish_reading,update_time,created_at,synced_at,is_deleted,last_seen_sync_id)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,0,?11)
              ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=excluded.deep_link,read_update_time=excluded.read_update_time,finish_reading=excluded.finish_reading,update_time=excluded.update_time,synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
             params![book.book_id,book.title,book.author,book.cover,book.category,book.deep_link,book.read_update_time,book.finish_reading,book.update_time,started_at,session_id],
-        )?;
+            )?;
+        }
     }
 
-    for item in &notes {
+    for item in notes {
         if let Some(book) = &item.book {
             let title = string(book, "title").unwrap_or_else(|| "未命名书籍".into());
             tx.execute(
@@ -130,7 +145,6 @@ fn persist(
                  ON CONFLICT(bookmark_id) DO UPDATE SET book_id=excluded.book_id,chapter_uid=excluded.chapter_uid,chapter_idx=excluded.chapter_idx,chapter_title=excluded.chapter_title,mark_text=excluded.mark_text,range_json=excluded.range_json,color_style=excluded.color_style,create_time=excluded.create_time,synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
                 params![id,item.book_id,chapter_uid,chapter_idx,chapter_title,content,json_text(value.get("range")),string(value,"colorStyle"),integer(value,"createTime"),started_at,session_id],
             )?;
-            highlight_count += 1;
         }
         for wrapper in &item.thoughts {
             let value = wrapper.get("review").unwrap_or(wrapper);
@@ -146,38 +160,51 @@ fn persist(
                  ON CONFLICT(review_id) DO UPDATE SET book_id=excluded.book_id,chapter_uid=excluded.chapter_uid,chapter_idx=excluded.chapter_idx,chapter_name=excluded.chapter_name,content=excluded.content,abstract=excluded.abstract,range_json=excluded.range_json,create_time=excluded.create_time,synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
                 params![id,item.book_id,integer(value,"chapterUid"),integer(value,"chapterIdx"),string(value,"chapterName"),content,string(value,"abstract"),json_text(value.get("range")),integer(value,"createTime"),started_at,session_id],
             )?;
-            thought_count += 1;
         }
     }
 
     // 只有全部官方接口和分页成功后，才执行软删除。
-    tx.execute(
-        "UPDATE books SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
-        params![session_id],
-    )?;
-    tx.execute(
-        "UPDATE highlights SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
-        params![session_id],
-    )?;
-    tx.execute(
-        "UPDATE thoughts SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
-        params![session_id],
-    )?;
-    rebuild_fts(&tx)?;
+    if finalize {
+        tx.execute(
+            "UPDATE books SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "UPDATE highlights SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "UPDATE thoughts SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
+            params![session_id],
+        )?;
+    }
+    if finalize {
+        rebuild_fts(&tx)?;
+    } else {
+        for item in notes {
+            rebuild_book_fts(&tx, &item.book_id)?;
+        }
+    }
     let finished_at = now();
     let book_count: i64 =
         tx.query_row("SELECT count(*) FROM books WHERE is_deleted=0", [], |row| {
             row.get(0)
         })?;
-    tx.execute("UPDATE sync_sessions SET finished_at=?2,status='success',books_fetched=?3,highlights_fetched=?4,thoughts_fetched=?5 WHERE id=?1", params![session_id,finished_at,book_count,highlight_count,thought_count])?;
-    tx.execute("INSERT INTO sync_state(source,last_synced_at,last_successful_session) VALUES('weread',?1,?2) ON CONFLICT(source) DO UPDATE SET last_synced_at=excluded.last_synced_at,last_successful_session=excluded.last_successful_session", params![finished_at,session_id])?;
+    let highlight_count: i64 = tx.query_row("SELECT count(*) FROM highlights WHERE is_deleted=0", [], |row| row.get(0))?;
+    let thought_count: i64 = tx.query_row("SELECT count(*) FROM thoughts WHERE is_deleted=0", [], |row| row.get(0))?;
+    if finalize {
+        tx.execute("UPDATE sync_sessions SET finished_at=?2,status='success',books_fetched=?3,highlights_fetched=?4,thoughts_fetched=?5 WHERE id=?1", params![session_id,finished_at,book_count,highlight_count,thought_count])?;
+        tx.execute("INSERT INTO sync_state(source,last_synced_at,last_successful_session) VALUES('weread',?1,?2) ON CONFLICT(source) DO UPDATE SET last_synced_at=excluded.last_synced_at,last_successful_session=excluded.last_successful_session", params![finished_at,session_id])?;
+    }
     tx.commit()?;
     Ok(SyncProgress {
-        status: "complete".into(),
-        progress: 100,
+        status: if finalize { "complete" } else { "processing" }.into(),
+        progress: if finalize { 100 } else { 0 },
         books: book_count,
         highlights: highlight_count,
         thoughts: thought_count,
+        processed_books: 0,
+        total_books: 0,
     })
 }
 
