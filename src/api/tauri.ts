@@ -17,10 +17,10 @@ export const api = {
   search: (query: string, noteType?: Note["type"]) => call<SearchResult[]>("search_notes", { query, noteType }),
   aiSettings: () => call<AiSettings | null>("get_ai_settings"),
   saveAiSettings: (settings: AiSettings, apiKey: string) => call<void>("save_ai_settings", { settings, apiKey }),
-  testAi: () => call<boolean>("test_ai"),
+  testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),
   ask: (request: AiRequest) => call<AiAnswer>("ask_ai", { request }),
   sync: () => call<SyncProgress>("sync_weread"),
   saveSecret: (kind: string, value: string) => call<void>("save_secret", { kind, value }),
-  testConnection: (kind: string) => call<boolean>("test_connection", { kind }),
+  testConnection: (kind: string, value?: string) => call<boolean>("test_connection", { kind, value }),
 };
 

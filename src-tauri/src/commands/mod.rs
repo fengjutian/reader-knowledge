@@ -181,8 +181,11 @@ pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
     Ok(())
 }
 #[tauri::command]
-pub async fn test_connection(kind: String) -> Result<bool, AppError> {
-    let secret = keyring::Entry::new("ReadFlow", &kind)?.get_password()?;
+pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool, AppError> {
+    let secret = match value.filter(|value| !value.trim().is_empty()) {
+        Some(value) => value,
+        None => keyring::Entry::new("ReadFlow", &kind)?.get_password()?,
+    };
     if kind == "weread" {
         crate::weread::client::WeReadClient::new(secret)?
             .test()
@@ -242,8 +245,8 @@ pub fn save_ai_settings(
 }
 
 #[tauri::command]
-pub async fn test_ai(db: State<'_, Database>) -> Result<bool, AppError> {
-    let provider = ai_provider(&db)?;
+pub async fn test_ai(db: State<'_, Database>, api_key: Option<String>) -> Result<bool, AppError> {
+    let provider = ai_provider_with_key(&db, api_key)?;
     provider
         .chat(&[ChatMessage {
             role: "user".into(),
@@ -323,6 +326,13 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
 }
 
 fn ai_provider(db: &Database) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {
+    ai_provider_with_key(db, None)
+}
+
+fn ai_provider_with_key(
+    db: &Database,
+    api_key: Option<String>,
+) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {
     let c = db.connect()?;
     let settings = c
         .query_row(
@@ -339,8 +349,11 @@ fn ai_provider(db: &Database) -> Result<crate::ai::providers::OpenAiCompatiblePr
         .optional()?
         .ok_or_else(|| AppError::Message("请先配置 AI Provider".into()))?;
     validate_ai_settings(&settings)?;
-    let api_key =
-        keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?.get_password()?;
+    let api_key = match api_key.filter(|value| !value.trim().is_empty()) {
+        Some(value) => value,
+        None => keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?
+            .get_password()?,
+    };
     Ok(crate::ai::providers::OpenAiCompatibleProvider {
         endpoint: settings.endpoint,
         model: settings.model,
