@@ -34,7 +34,7 @@ export function BookDetail() {
     <button className="book-drawer-backdrop" aria-label="关闭书籍详情" onClick={closeBook}/>
     <aside className="book-drawer">
       <div className="book-drawer__top"><span>书籍详情</span><button className="icon-button" aria-label="关闭" onClick={closeBook}><X size={19}/></button></div>
-      <div className="book-drawer__content">+      {error ? <div className="empty-state"><p>{error}</p><Button variant="secondary" onClick={closeBook}>关闭</Button></div> : !book ? <div className="empty-state">正在读取书籍…</div> : <>
+      <div className="book-drawer__content">{error ? <div className="empty-state"><p>{error}</p><Button variant="secondary" onClick={closeBook}>关闭</Button></div> : !book ? <div className="empty-state">正在读取书籍…</div> : <>
     <header className="book-detail-header">
       {book.cover ? <img src={book.cover} alt="" referrerPolicy="no-referrer"/> : <div className="book-cover"><span>{book.title}</span></div>}
       <div><span className="eyebrow">{book.category || "微信读书"}</span><h1>{book.title}</h1><p>{book.author}</p>
