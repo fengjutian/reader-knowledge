@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type Page = "dashboard" | "books" | "bookDetail" | "highlights" | "thoughts" | "search" | "ai" | "settings";
+export type Page = "dashboard" | "books" | "highlights" | "thoughts" | "search" | "ai" | "settings";
 interface AppState {
   page: Page;
   theme: "light" | "dark";
@@ -10,6 +10,7 @@ interface AppState {
   setPage: (page: Page) => void;
   setSearchOpen: (open: boolean) => void;
   openBook: (bookId: string, noteId?: string) => void;
+  closeBook: () => void;
   clearSelectedNote: () => void;
   toggleTheme: () => void;
 }
@@ -20,7 +21,8 @@ export const useAppStore = create<AppState>((set) => ({
   searchOpen: false,
   setPage: page => set({ page }),
   setSearchOpen: searchOpen => set({ searchOpen }),
-  openBook: (selectedBookId, selectedNoteId) => set({ selectedBookId, selectedNoteId, page: "bookDetail" }),
+  openBook: (selectedBookId, selectedNoteId) => set({ selectedBookId, selectedNoteId }),
+  closeBook: () => set({ selectedBookId: undefined, selectedNoteId: undefined }),
   clearSelectedNote: () => set({ selectedNoteId: undefined }),
   toggleTheme: () => set(state => {
     const theme = state.theme === "light" ? "dark" : "light";

@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/tauri";
 import { NoteCard } from "../components/notes/NoteCard";
@@ -7,7 +7,7 @@ import { useAppStore } from "../stores/app";
 import type { BookDetail as BookDetailType, Note } from "../types/domain";
 
 export function BookDetail() {
-  const { selectedBookId: bookId, selectedNoteId, clearSelectedNote, setPage } = useAppStore();
+  const { selectedBookId: bookId, selectedNoteId, clearSelectedNote, closeBook } = useAppStore();
   const [book, setBook] = useState<BookDetailType>();
   const [notes, setNotes] = useState<Note[]>([]);
   const [error, setError] = useState("");
@@ -24,13 +24,19 @@ export function BookDetail() {
     const timer = window.setTimeout(clearSelectedNote, 2600);
     return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
   }, [selectedNoteId, notes, clearSelectedNote]);
-  if (!bookId) return <div className="empty-state">没有选择书籍</div>;
-  if (error) return <div className="empty-state"><p>{error}</p><Button variant="secondary" onClick={() => setPage("books")}>返回书籍</Button></div>;
-  if (!book) return <div className="empty-state">正在读取书籍…</div>;
-  return <>
-    <button className="back-button" onClick={() => setPage("books")}><ArrowLeft size={16}/>返回书籍</button>
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") closeBook(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [closeBook]);
+  if (!bookId) return null;
+  return <div className="book-drawer-layer" role="dialog" aria-modal="true" aria-label={book?.title || "书籍详情"}>
+    <button className="book-drawer-backdrop" aria-label="关闭书籍详情" onClick={closeBook}/>
+    <aside className="book-drawer">
+      <div className="book-drawer__top"><span>书籍详情</span><button className="icon-button" aria-label="关闭" onClick={closeBook}><X size={19}/></button></div>
+      <div className="book-drawer__content">+      {error ? <div className="empty-state"><p>{error}</p><Button variant="secondary" onClick={closeBook}>关闭</Button></div> : !book ? <div className="empty-state">正在读取书籍…</div> : <>
     <header className="book-detail-header">
-      {book.cover ? <img src={book.cover} alt=""/> : <div className="book-cover"><span>{book.title}</span></div>}
+      {book.cover ? <img src={book.cover} alt="" referrerPolicy="no-referrer"/> : <div className="book-cover"><span>{book.title}</span></div>}
       <div><span className="eyebrow">{book.category || "微信读书"}</span><h1>{book.title}</h1><p>{book.author}</p>
         <div className="book-detail-meta"><span>{book.highlightCount} 条划线</span><span>{book.thoughtCount} 条想法</span>{book.updatedAt && <span>最近阅读 {book.updatedAt}</span>}</div>
         {book.deepLink && <Button icon={<ExternalLink size={15}/>} onClick={() => api.openBook(book.id)}>在微信读书中打开</Button>}
@@ -38,5 +44,8 @@ export function BookDetail() {
     </header>
     <div className="section-heading"><h2>全部笔记</h2><span>{notes.length} 条</span></div>
     {notes.length ? <section className="notes-list">{notes.map(note => <NoteCard key={`${note.type}-${note.id}`} note={note} focused={note.id === selectedNoteId}/>)}</section> : <div className="empty-state">这本书还没有可导出的划线或想法</div>}
-  </>;
+      </>}
+      </div>
+    </aside>
+  </div>;
 }
