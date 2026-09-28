@@ -169,19 +169,6 @@ fn weread_reader_id(book_id: &str) -> String {
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use super::weread_reader_id;
-
-    #[test]
-    fn builds_the_real_web_reader_id_for_a_numeric_book_id() {
-        assert_eq!(
-            weread_reader_id("3300220342"),
-            "8d2321e0813abbc92g012963"
-        );
-    }
-}
-
 #[tauri::command]
 pub fn list_notes(
     db: State<'_, Database>,
@@ -382,6 +369,9 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     if request.mode == "compare" && request.book_ids.len() < 2 {
         return Err(AppError::Message("跨书分析至少选择两本书".into()));
     }
+    if request.mode == "compare" && request.book_ids.len() > 100 {
+        return Err(AppError::Message("跨书分析最多选择 100 本书".into()));
+    }
     if question.trim().is_empty() {
         return Err(AppError::Message("问题不能为空".into()));
     }
@@ -398,7 +388,13 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         } else {
             "书籍原文划线"
         };
-        let content_limit = if request.mode == "compare" { 700 } else { 1200 };
+        let content_limit = if request.mode == "compare" && request.book_ids.len() > 30 {
+            420
+        } else if request.mode == "compare" {
+            700
+        } else {
+            1200
+        };
         let content: String = result.note.content.chars().take(content_limit).collect();
         context.push_str(&format!(
             "[{}]\ntype: {}\nbook: 《{}》\nchapter: {}\ncontent: {}\n\n",
@@ -512,10 +508,16 @@ fn rag_search(
 ) -> Result<Vec<SearchResult>, AppError> {
     let search_input = if mode == "ask" { question } else { "" };
     if book_ids.len() > 1 {
-        // 跨书分析不能只把固定的 20 条平均分配，否则书越多，每本书的
-        // 代表性越差。每本保留 5 条，并用总上限控制上下文大小。
-        let per_book = 5;
-        let total_limit = (book_ids.len() * per_book).min(60);
+        // 小范围比较保留更多证据；大范围分析保证每本书至少有一个样本，
+        // 避免固定总上限导致排在后面的书完全没有进入上下文。
+        let per_book = if book_ids.len() <= 12 {
+            5
+        } else if book_ids.len() <= 30 {
+            3
+        } else {
+            1
+        };
+        let total_limit = book_ids.len() * per_book;
         let mut combined = Vec::new();
         for book_id in book_ids {
             combined.extend(hybrid_search(
@@ -547,9 +549,10 @@ fn hybrid_search(
         let book_id = book_ids.first().map(String::as_str);
         let sql = format!("{base} WHERE (?1 IS NULL OR note_type=?1) AND (?2 IS NULL OR book_id=?2) LIMIT ?3");
         let mut query = c.prepare(&sql)?;
-        query
+        let rows = query
             .query_map(rusqlite::params![kind, book_id, limit as i64], map_note)?
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
     } else {
         let match_query = search_terms(input)
             .into_iter()
@@ -565,9 +568,10 @@ fn hybrid_search(
         if matched.is_empty() {
             let fallback_sql = format!("{base} WHERE (?1 IS NULL OR note_type=?1) LIMIT 800");
             let mut fallback = c.prepare(&fallback_sql)?;
-            fallback
+            let rows = fallback
                 .query_map([kind], map_note)?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         } else {
             matched
         }
@@ -654,7 +658,15 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fts_query, search_terms};
+    use super::{fts_query, search_terms, weread_reader_id};
+
+    #[test]
+    fn builds_the_real_web_reader_id_for_a_numeric_book_id() {
+        assert_eq!(
+            weread_reader_id("3300220342"),
+            "8d2321e0813abbc92g012963"
+        );
+    }
 
     #[test]
     fn fts_query_uses_and_for_multiple_terms() {
