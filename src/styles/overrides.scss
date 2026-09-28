@@ -170,11 +170,48 @@
 .chapter-group__header span { color:var(--muted);font-size:11px; }
 @keyframes drawer-in { from { transform:translateX(28px);opacity:.6; } to { transform:translateX(0);opacity:1; } }
 
+.ai-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+  min-height: calc(100vh - 150px);
+}
+.ai-history {
+  min-width: 0;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+.ai-history__new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  font-weight: 600;
+}
+.ai-history__new:hover { background:var(--surface-hover); }
+.ai-history__title { margin:20px 8px 8px;color:var(--muted);font-size:11px;letter-spacing:.08em; }
+.ai-history__list { display:flex;flex-direction:column;gap:3px; }
+.ai-history__item { display:flex;align-items:center;border-radius:8px;color:var(--secondary); }
+.ai-history__item:hover,.ai-history__item.active { background:var(--surface-hover);color:var(--text); }
+.ai-history__item.active { color:var(--accent); }
+.ai-history__open { display:flex;align-items:center;gap:8px;min-width:0;flex:1;padding:9px 7px;border:0;background:transparent;text-align:left; }
+.ai-history__open svg { flex:none; }
+.ai-history__open span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.ai-history__delete { display:grid;place-items:center;flex:none;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted);opacity:0; }
+.ai-history__item:hover .ai-history__delete,.ai-history__item.active .ai-history__delete { opacity:1; }
+.ai-history__delete:hover { background:var(--accent-soft);color:var(--accent); }
+.ai-history__empty { margin:14px 8px;color:var(--muted);font-size:12px;line-height:1.6; }
 .ai-wrap {
   width: 100%;
   max-width: none;
   margin: 0;
   min-height: calc(100vh - 150px);
+  min-width: 0;
 }
 .ai-modes {
   display: flex;
@@ -276,6 +313,7 @@
 
 @media(max-width:1000px) {
   .page { padding: 24px 20px 40px 24px; }
+  .ai-layout { grid-template-columns:180px minmax(0,1fr);gap:18px; }
   .ai-book-options { grid-template-columns:1fr; }
 }
 
