@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShelfResponse {
     #[serde(default)]
@@ -15,7 +15,7 @@ impl ShelfResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShelfBook {
     pub book_id: String,
@@ -32,7 +32,7 @@ pub struct ShelfBook {
     pub update_time: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebooksResponse {
     #[serde(default)]
@@ -41,7 +41,7 @@ pub struct NotebooksResponse {
     pub has_more: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebookBook {
     pub book_id: String,
@@ -59,7 +59,7 @@ impl NotebookBook {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BookmarkListResponse {
     #[serde(default)]
     pub updated: Vec<serde_json::Value>,
@@ -67,7 +67,7 @@ pub struct BookmarkListResponse {
     pub chapters: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewsResponse {
     #[serde(default)]

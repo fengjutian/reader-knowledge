@@ -3,6 +3,7 @@ mod commands;
 mod database;
 mod error;
 mod models;
+mod sync;
 mod weread;
 
 use tauri::Manager;

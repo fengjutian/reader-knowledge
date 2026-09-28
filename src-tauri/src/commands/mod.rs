@@ -27,19 +27,21 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
     let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),(SELECT count(*) FROM highlights h WHERE h.book_id=b.book_id AND h.is_deleted=0),(SELECT count(*) FROM thoughts t WHERE t.book_id=b.book_id AND t.is_deleted=0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(b.read_update_time,'') FROM books b WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
-    Ok(q.query_map([], |r| {
-        Ok(Book {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            author: r.get(2)?,
-            cover: r.get(3)?,
-            highlight_count: r.get(4)?,
-            thought_count: r.get(5)?,
-            progress: r.get(6)?,
-            updated_at: r.get(7)?,
-        })
-    })?
-    .collect::<Result<_, _>>()?)
+    let books = q
+        .query_map([], |r| {
+            Ok(Book {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                author: r.get(2)?,
+                cover: r.get(3)?,
+                highlight_count: r.get(4)?,
+                thought_count: r.get(5)?,
+                progress: r.get(6)?,
+                updated_at: r.get(7)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(books)
 }
 
 #[tauri::command]
@@ -109,29 +111,9 @@ pub async fn test_connection(kind: String) -> Result<bool, AppError> {
 }
 #[tauri::command]
 pub async fn sync_weread(db: State<'_, Database>) -> Result<SyncProgress, AppError> {
-    let c = db.connect()?;
-    let counts = (
-        c.query_row("SELECT count(*) FROM books WHERE is_deleted=0", [], |r| {
-            r.get(0)
-        })?,
-        c.query_row(
-            "SELECT count(*) FROM highlights WHERE is_deleted=0",
-            [],
-            |r| r.get(0),
-        )?,
-        c.query_row(
-            "SELECT count(*) FROM thoughts WHERE is_deleted=0",
-            [],
-            |r| r.get(0),
-        )?,
-    );
-    Ok(SyncProgress {
-        status: "complete".into(),
-        progress: 100,
-        books: counts.0,
-        highlights: counts.1,
-        thoughts: counts.2,
-    })
+    let secret = keyring::Entry::new("ReadFlow", "weread")?.get_password()?;
+    let client = crate::weread::client::WeReadClient::new(secret)?;
+    crate::sync::run(&db, &client).await
 }
 
 #[derive(Serialize)]
@@ -146,8 +128,5 @@ pub struct AiAnswer {
 }
 #[tauri::command]
 pub fn ask_ai(_db: State<'_, Database>, _question: String) -> Result<AiAnswer, AppError> {
-    Ok(AiAnswer {
-        content: "当前知识库没有足够的相关笔记，无法形成有依据的回答。请先同步微信读书。".into(),
-        citations: vec![],
-    })
+    Err(AppError::Message("AI 服务尚未配置，不能生成回答".into()))
 }
