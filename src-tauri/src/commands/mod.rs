@@ -99,7 +99,12 @@ pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
 }
 #[tauri::command]
 pub async fn test_connection(kind: String) -> Result<bool, AppError> {
-    let _ = keyring::Entry::new("ReadFlow", &kind)?.get_password()?;
+    let secret = keyring::Entry::new("ReadFlow", &kind)?.get_password()?;
+    if kind == "weread" {
+        crate::weread::client::WeReadClient::new(secret)?
+            .test()
+            .await?;
+    }
     Ok(true)
 }
 #[tauri::command]
