@@ -241,7 +241,38 @@
 .answer__sources-head h3 { margin:0; }
 .answer__sources-head span { color:var(--muted);font-size:12px; }
 .ai-empty { margin: 12vh auto auto; }
-.ask-box { bottom: 12px; }
+.ask-box {
+  bottom: 12px;
+  width: min(920px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+  padding: 13px 14px 9px 18px;
+  border-radius: 24px;
+}
+.ask-box__composer { display:flex;align-items:flex-end;gap:12px; }
+.ask-box textarea {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  min-height: 26px;
+  max-height: 160px;
+  height: auto;
+  padding: 2px 0 3px;
+  overflow-y: auto;
+  line-height: 1.55;
+}
+.ask-box button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  float: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+}
+.ask-box button:disabled { cursor:not-allowed;opacity:.35; }
+.ask-box small { margin-top:3px; }
 
 @media(max-width:1000px) {
   .page { padding: 24px 20px 40px 24px; }

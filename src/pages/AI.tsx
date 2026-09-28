@@ -1,5 +1,5 @@
 import { ArrowUp, BookOpen, Search, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/tauri";
@@ -36,8 +36,15 @@ export function AI() {
   const [answer, setAnswer] = useState<AiAnswer>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const openBook = useAppStore(state => state.openBook);
   useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [question]);
   const selectedBooks = useMemo(() => bookIds.map(id => books.find(book => book.id === id)).filter((book): book is Book => Boolean(book)), [bookIds, books]);
   const visibleBooks = useMemo(() => {
     const query = bookQuery.trim().toLocaleLowerCase();
@@ -83,7 +90,13 @@ export function AI() {
       {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选最相关的 20 条笔记" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
       {answer && <section className="answer"><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {answer.sourcesConsidered} 条 · 引用 {answer.citations.length} 条</span></div>{answer.citations.map(citation => <button className="citation" key={`${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>}
-      <form className="ask-box" onSubmit={ask}><textarea value={question} onChange={event => setQuestion(event.target.value)} placeholder="问问你的阅读知识库…"/><button disabled={!question.trim() || loading}><ArrowUp size={18}/></button><small>回答严格基于引用笔记；点击引用可定位原始笔记</small></form>
+      <form className="ask-box" onSubmit={ask}>
+        <div className="ask-box__composer">
+          <textarea ref={textareaRef} rows={1} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="问问你的阅读知识库…"/>
+          <button type="submit" aria-label="发送" disabled={!question.trim() || loading}><ArrowUp size={18}/></button>
+        </div>
+        <small>回答严格基于引用笔记；点击引用可定位原始笔记</small>
+      </form>
     </div>
   </>;
 }
