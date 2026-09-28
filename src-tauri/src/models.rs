@@ -80,9 +80,11 @@ pub struct Citation {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiAnswer {
     pub content: String,
     pub citations: Vec<Citation>,
+    pub sources_considered: usize,
 }
 
 #[derive(Deserialize)]

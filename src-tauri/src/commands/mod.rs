@@ -370,6 +370,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             },
         ])
         .await?;
+    let sources_considered = results.len();
     let citations = results
         .into_iter()
         .enumerate()
@@ -379,7 +380,11 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             note: result.note,
         })
         .collect();
-    Ok(AiAnswer { content, citations })
+    Ok(AiAnswer {
+        content,
+        citations,
+        sources_considered,
+    })
 }
 
 fn ai_provider(db: &Database) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {
@@ -468,14 +473,38 @@ fn hybrid_search(
     limit: usize,
 ) -> Result<Vec<SearchResult>, AppError> {
     let c = db.connect()?;
-    let mut query = c.prepare(
-        "SELECT note_id,note_type,book_id,title,chapter_title,content,
-         CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END, 0.0
-         FROM notes_fts WHERE (?1 IS NULL OR note_type=?1)"
-    )?;
-    let notes = query
-        .query_map([kind], map_note)?
-        .collect::<Result<Vec<_>, _>>()?;
+    let base = "SELECT note_id,note_type,book_id,title,chapter_title,content,
+        CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END, 0.0
+        FROM notes_fts";
+    let notes = if input.trim().is_empty() {
+        let book_id = book_ids.first().map(String::as_str);
+        let sql = format!("{base} WHERE (?1 IS NULL OR note_type=?1) AND (?2 IS NULL OR book_id=?2) LIMIT ?3");
+        let mut query = c.prepare(&sql)?;
+        query
+            .query_map(rusqlite::params![kind, book_id, limit as i64], map_note)?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let match_query = search_terms(input)
+            .into_iter()
+            .take(12)
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let sql = format!("{base} WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) LIMIT 500");
+        let mut query = c.prepare(&sql)?;
+        let matched = query
+            .query_map(rusqlite::params![match_query, kind], map_note)?
+            .collect::<Result<Vec<_>, _>>()?;
+        if matched.is_empty() {
+            let fallback_sql = format!("{base} WHERE (?1 IS NULL OR note_type=?1) LIMIT 800");
+            let mut fallback = c.prepare(&fallback_sql)?;
+            fallback
+                .query_map([kind], map_note)?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            matched
+        }
+    };
     let normalized = normalize_search_text(input);
     let terms = search_terms(input);
     let mut ranked: Vec<SearchResult> = notes
