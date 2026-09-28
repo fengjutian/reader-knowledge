@@ -5,7 +5,7 @@ type Node = Book & { x: number; y: number };
 type Evidence = { bookId: string; text: string; noteId: string };
 type Edge = { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: Evidence[] };
 type Analysis = { nodes: Node[]; candidates: Edge[] };
-const LIMITS = { all: { books: Infinity, edges: Infinity, neighbors: 3 }, strong: { books: 20, edges: 20, neighbors: 1 }, balanced: { books: 28, edges: 38, neighbors: 2 }, broad: { books: 36, edges: 60, neighbors: 3 } };
+const LIMITS = { all: { books: Infinity, edges: Infinity, neighbors: 12 }, strong: { books: Infinity, edges: Infinity, neighbors: 5 }, balanced: { books: Infinity, edges: Infinity, neighbors: 10 }, broad: { books: Infinity, edges: Infinity, neighbors: 20 } };
 const STOP = new Set(["我们","你们","他们","这个","那个","一个","什么","就是","因为","所以","但是","如果","可以","没有","不是","已经","自己","这种","这样","以及","对于","进行","需要","可能","时候","这里","其中","那些","这些","问题","认为","关系","之后","之前","只是","还是","很多","一些","一种","如何","为什么","其实","非常","现在","发现","开始","能够","通过","方式"]);
 let analysis: Analysis = { nodes: [], candidates: [] };
 
@@ -29,7 +29,7 @@ function analyze(booksInput: Book[], notes: Note[]) {
   const notesByBook = new Map<string, Note[]>();
   notes.forEach(note => { const list = notesByBook.get(note.bookId) ?? []; if (list.length < 250) list.push(note); notesByBook.set(note.bookId, list); });
   const counts = books.map(book => {
-    const map = new Map<string, number>(); addTerms(map, book.title, 5); addTerms(map, book.author, 2);
+    const map = new Map<string, number>(); addTerms(map, book.title, 5); addTerms(map, book.author, 3); addTerms(map, book.category, 4);
     for (const note of notesByBook.get(book.id) ?? []) { addTerms(map, note.chapter, 1.5); addTerms(map, note.content.slice(0, 800), note.type === "thought" ? 2.2 : 1); }
     return map;
   });

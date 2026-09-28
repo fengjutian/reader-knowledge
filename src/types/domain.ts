@@ -4,6 +4,7 @@ export interface Book {
   id: string;
   title: string;
   author: string;
+  category: string;
   cover: string;
   highlightCount: number;
   thoughtCount: number;
@@ -11,7 +12,6 @@ export interface Book {
   updatedAt: string;
 }
 export interface BookDetail extends Book {
-  category: string;
   deepLink?: string;
   finished: boolean;
 }

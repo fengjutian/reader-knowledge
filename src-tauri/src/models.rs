@@ -13,6 +13,7 @@ pub struct Book {
     pub id: String,
     pub title: String,
     pub author: String,
+    pub category: String,
     pub cover: String,
     pub highlight_count: i64,
     pub thought_count: i64,

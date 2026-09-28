@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Search, Sparkles, X } from "lucide-react";
+import { ArrowUp, BookOpen, MessageSquare, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,6 +8,21 @@ import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiMode, Book } from "../types/domain";
 
 const modeLabels: Record<AiMode, string> = { ask: "全库提问", summary: "单书总结", compare: "跨书分析" };
+const historyKey = "readflow-ai-history";
+
+interface AiConversation {
+  id: string;
+  question: string;
+  answer: AiAnswer;
+  mode: AiMode;
+  bookIds: string[];
+  createdAt: number;
+}
+
+function loadHistory(): AiConversation[] {
+  try { return JSON.parse(localStorage.getItem(historyKey) || "[]") as AiConversation[]; }
+  catch { return []; }
+}
 
 function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void }) {
   const markdown = answer.content.replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)");
@@ -34,10 +49,13 @@ export function AI() {
   const [bookIds, setBookIds] = useState<string[]>([]);
   const [bookQuery, setBookQuery] = useState("");
   const [answer, setAnswer] = useState<AiAnswer>();
+  const [history, setHistory] = useState<AiConversation[]>(loadHistory);
+  const [activeConversationId, setActiveConversationId] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const openBook = useAppStore(state => state.openBook);
+  useEffect(() => { localStorage.setItem(historyKey, JSON.stringify(history)); }, [history]);
   useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -55,8 +73,19 @@ export function AI() {
       .slice(0, 100);
   }, [bookQuery, books]);
   function changeMode(next: AiMode) {
-    setMode(next); setAnswer(undefined); setError(""); setBookIds([]); setBookQuery("");
+    setMode(next); setAnswer(undefined); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
     setQuestion(next === "summary" ? "请总结这本书的核心观点，并区分原文与我的想法。" : next === "compare" ? "请比较这些书对同一主题的观点、共识与分歧。" : "");
+  }
+  function newConversation() {
+    setQuestion(""); setAnswer(undefined); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
+  }
+  function openConversation(conversation: AiConversation) {
+    setActiveConversationId(conversation.id); setQuestion(conversation.question); setAnswer(conversation.answer);
+    setMode(conversation.mode); setBookIds(conversation.bookIds); setError("");
+  }
+  function deleteConversation(id: string) {
+    setHistory(current => current.filter(item => item.id !== id));
+    if (activeConversationId === id) newConversation();
   }
   function toggleBook(id: string) {
     setBookIds(current => {
@@ -72,12 +101,29 @@ export function AI() {
     if (mode === "summary" && bookIds.length !== 1) { setError("请选择一本书进行总结"); return; }
     if (mode === "compare" && bookIds.length < 2) { setError("请至少选择两本书进行跨书分析"); return; }
     setLoading(true); setError(""); setAnswer(undefined);
-    try { setAnswer(await api.ask({ question, mode, bookIds })); }
+    try {
+      const nextAnswer = await api.ask({ question, mode, bookIds });
+      const conversation: AiConversation = { id: crypto.randomUUID(), question: question.trim(), answer: nextAnswer, mode, bookIds: [...bookIds], createdAt: Date.now() };
+      setAnswer(nextAnswer); setActiveConversationId(conversation.id);
+      setHistory(current => [conversation, ...current].slice(0, 50));
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoading(false); }
   }
   return <><PageHeader title="AI 阅读助手" subtitle="仅使用本地检索出的阅读笔记回答，并附带可定位的来源。"/>
-    <div className="ai-wrap">
+    <div className="ai-layout">
+      <aside className="ai-history">
+        <button className="ai-history__new" onClick={newConversation}><Plus size={16}/>新对话</button>
+        <div className="ai-history__title">最近对话</div>
+        <div className="ai-history__list">
+          {history.map(conversation => <div key={conversation.id} className={`ai-history__item ${activeConversationId === conversation.id ? "active" : ""}`}>
+            <button className="ai-history__open" onClick={() => openConversation(conversation)} title={conversation.question}><MessageSquare size={14}/><span>{conversation.question}</span></button>
+            <button className="ai-history__delete" onClick={() => deleteConversation(conversation.id)} aria-label="删除对话"><Trash2 size={14}/></button>
+          </div>)}
+          {history.length === 0 && <p className="ai-history__empty">提问后，对话会保存在这里</p>}
+        </div>
+      </aside>
+      <div className="ai-wrap">
       <div className="ai-modes">{(Object.keys(modeLabels) as AiMode[]).map(value => <button key={value} className={mode === value ? "active" : ""} onClick={() => changeMode(value)}>{modeLabels[value]}</button>)}</div>
       {(mode === "summary" || mode === "compare") && <section className="ai-book-picker">
         <div className="ai-book-picker__head"><div><strong>{mode === "summary" ? "选择一本书" : "选择 2–100 本书"}</strong><span>{mode === "summary" ? "仅显示有笔记的书" : "小范围深度比较，大范围确保每本书都参与分析"}</span></div><em>{bookIds.length} 本已选</em></div>
@@ -97,6 +143,7 @@ export function AI() {
         </div>
         <small>回答严格基于引用笔记；点击引用可定位原始笔记</small>
       </form>
+      </div>
     </div>
   </>;
 }

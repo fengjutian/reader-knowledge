@@ -35,18 +35,19 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
 #[tauri::command]
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
-    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),'') FROM books b LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
+    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),'') FROM books b LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
     let books = q
         .query_map([], |r| {
             Ok(Book {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 author: r.get(2)?,
-                cover: r.get(3)?,
-                highlight_count: r.get(4)?,
-                thought_count: r.get(5)?,
-                progress: r.get(6)?,
-                updated_at: r.get(7)?,
+                category: r.get(3)?,
+                cover: r.get(4)?,
+                highlight_count: r.get(5)?,
+                thought_count: r.get(6)?,
+                progress: r.get(7)?,
+                updated_at: r.get(8)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -64,7 +65,7 @@ pub fn get_book(db: State<'_, Database>, book_id: String) -> Result<BookDetail, 
          coalesce(datetime(b.read_update_time,'unixepoch','localtime'),''),coalesce(b.category,''),b.deep_link,b.finish_reading=1
          FROM books b WHERE b.book_id=?1 AND b.is_deleted=0",
         [book_id],
-        |r| Ok(BookDetail { book: Book { id:r.get(0)?,title:r.get(1)?,author:r.get(2)?,cover:r.get(3)?,highlight_count:r.get(4)?,thought_count:r.get(5)?,progress:r.get(6)?,updated_at:r.get(7)? }, category:r.get(8)?,deep_link:r.get(9)?,finished:r.get(10)? }),
+        |r| Ok(BookDetail { book: Book { id:r.get(0)?,title:r.get(1)?,author:r.get(2)?,category:r.get(8)?,cover:r.get(3)?,highlight_count:r.get(4)?,thought_count:r.get(5)?,progress:r.get(6)?,updated_at:r.get(7)? }, deep_link:r.get(9)?,finished:r.get(10)? }),
     ).map_err(AppError::from)
 }
 
