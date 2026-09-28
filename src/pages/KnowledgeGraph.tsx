@@ -31,7 +31,11 @@ export function KnowledgeGraph() {
       setGraph(event.data.graph);
       if (event.data.type === "result") {
         setAnalyzing(false);
-        setFocusId(current => current ?? event.data.graph.edges[0]?.from ?? event.data.graph.nodes[0]?.id);
+        setFocusId(current => {
+          if (current) return current;
+          const connected = new Set(event.data.graph.edges.flatMap(edge => [edge.from, edge.to]));
+          return [...event.data.graph.nodes].filter(node => connected.has(node.id)).sort((a, b) => (b.highlightCount + b.thoughtCount) - (a.highlightCount + a.thoughtCount))[0]?.id ?? event.data.graph.nodes[0]?.id;
+        });
       }
       if (event.data.analysis && cacheKeyRef.current) void writeGraphCache(cacheKeyRef.current, event.data.analysis);
     };

@@ -19,6 +19,18 @@ function addTerms(counts: Map<string, number>, text: string, weight: number) {
   words(text).forEach(word => counts.set(word, (counts.get(word) ?? 0) + weight));
 }
 
+function titleKey(title: string) {
+  return title.toLowerCase()
+    .replace(/[《》〈〉「」『』【】()（）\[\]\s·:：,，.。!！?？\-—_]/g, "")
+    .replace(/第?[一二三四五六七八九十百千万\d]+[册卷部]?/g, "")
+    .replace(/全[一二三四五六七八九十百千万\d]+册|全集|全本|珍藏版|典藏版|精装版|新版|修订版|插图版|青少版|少儿版|人民文学版|电子书/g, "");
+}
+
+function sameWork(left: Book, right: Book) {
+  const a = titleKey(left.title), b = titleKey(right.title);
+  return a.length >= 3 && b.length >= 3 && (a === b || (Math.min(a.length, b.length) >= 4 && (a.includes(b) || b.includes(a))));
+}
+
 function position(books: Book[]) {
   const count = Math.max(1, books.length);
   return books.map((book, index): Node => { const angle = index * 2.399963, radius = 35 + Math.sqrt(index / count) * 270; return { ...book, x: 500 + Math.cos(angle) * radius * 1.55, y: 325 + Math.sin(angle) * radius }; });
@@ -29,7 +41,7 @@ function analyze(booksInput: Book[], notes: Note[]) {
   const notesByBook = new Map<string, Note[]>();
   notes.forEach(note => { const list = notesByBook.get(note.bookId) ?? []; if (list.length < 250) list.push(note); notesByBook.set(note.bookId, list); });
   const counts = books.map(book => {
-    const map = new Map<string, number>(); addTerms(map, book.title, 5); addTerms(map, book.author, 3); addTerms(map, book.category, 4);
+    const map = new Map<string, number>(); addTerms(map, book.title, 1.2); addTerms(map, book.author, 2.5); addTerms(map, book.category, 4);
     for (const note of notesByBook.get(book.id) ?? []) { addTerms(map, note.chapter, 1.5); addTerms(map, note.content.slice(0, 800), note.type === "thought" ? 2.2 : 1); }
     return map;
   });
@@ -42,7 +54,7 @@ function analyze(booksInput: Book[], notes: Note[]) {
   postings.forEach((items, word) => { if (items.length > 50) return; for (let a = 0; a < items.length; a += 1) for (let b = a + 1; b < items.length; b += 1) { const key = `${items[a].index}:${items[b].index}`, pair = pairs.get(key) ?? { dot: 0, shared: [] }, weight = items[a].value * items[b].value; pair.dot += weight; pair.shared.push({ word, weight }); pairs.set(key, pair); } });
   const candidates: Edge[] = [];
   pairs.forEach((pair, key) => {
-    const [a, b] = key.split(":").map(Number), score = pair.dot / (lengths[a] * lengths[b]); if (score <= .015 || pair.shared.length < 2) return;
+    const [a, b] = key.split(":").map(Number), score = pair.dot / (lengths[a] * lengths[b]); if (score <= .015 || pair.shared.length < 2 || sameWork(books[a], books[b])) return;
     const keywords = pair.shared.sort((x, y) => y.weight - x.weight).slice(0, 5).map(item => item.word);
     const evidence = [a, b].flatMap(index => { const note = (notesByBook.get(books[index].id) ?? []).find(item => keywords.some(word => item.content.includes(word))); return note ? [{ bookId: books[index].id, noteId: note.id, text: note.content.slice(0, 150) }] : []; });
     const relation = books[a].author && books[a].author === books[b].author ? "同一作者" : score >= .28 ? "高度主题相似" : score >= .12 ? "主题相近" : "潜在关联";
