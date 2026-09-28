@@ -101,7 +101,7 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
     let link: Option<String> = c
         .query_row(
             "SELECT deep_link FROM books WHERE book_id=?1 AND is_deleted=0",
-            [book_id],
+            [&book_id],
             |row| row.get(0),
         )
         .optional()?;
