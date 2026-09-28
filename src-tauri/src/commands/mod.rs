@@ -1,4 +1,5 @@
 use crate::{database::Database, error::AppError, models::*};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::State;
 
@@ -19,14 +20,20 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
             [],
             |r| r.get(0),
         )?,
-        last_synced_at: None,
+        last_synced_at: c
+            .query_row(
+                "SELECT datetime(last_synced_at,'unixepoch','localtime') FROM sync_state WHERE source='weread'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?,
     })
 }
 
 #[tauri::command]
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
-    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),(SELECT count(*) FROM highlights h WHERE h.book_id=b.book_id AND h.is_deleted=0),(SELECT count(*) FROM thoughts t WHERE t.book_id=b.book_id AND t.is_deleted=0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(b.read_update_time,'') FROM books b WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
+    let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.cover,''),(SELECT count(*) FROM highlights h WHERE h.book_id=b.book_id AND h.is_deleted=0),(SELECT count(*) FROM thoughts t WHERE t.book_id=b.book_id AND t.is_deleted=0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),'') FROM books b WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
     let books = q
         .query_map([], |r| {
             Ok(Book {

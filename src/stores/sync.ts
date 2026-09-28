@@ -11,7 +11,7 @@ export const useSyncStore = create<SyncState>((set) => ({
       setTimeout(() => set(s => s.status === "reading" ? { status: "processing", progress: 62, message: "正在整理笔记…" } : s), 500);
       set(await api.sync());
     } catch (error) {
-      set({ status: "failed", progress: 0, message: error instanceof Error ? error.message : "同步失败" });
+      set({ status: "failed", progress: 0, message: typeof error === "string" ? error : error instanceof Error ? error.message : "同步失败" });
     }
   },
 }));
