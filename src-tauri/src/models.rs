@@ -25,7 +25,6 @@ pub struct Book {
 pub struct BookDetail {
     #[serde(flatten)]
     pub book: Book,
-    pub category: String,
     pub deep_link: Option<String>,
     pub finished: bool,
 }

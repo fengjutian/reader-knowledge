@@ -15,12 +15,14 @@
     "@radix-ui/react-scroll-area": "^1.2.10",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tauri-apps/api": "^2.8.0",
+    "graphology": "^0.26.0",
     "lucide-react": "^0.468.0",
     "motion": "^12.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "sigma": "^3.0.3",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
