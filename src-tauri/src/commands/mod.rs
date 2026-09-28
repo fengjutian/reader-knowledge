@@ -389,7 +389,9 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         } else {
             "书籍原文划线"
         };
-        let content_limit = if request.mode == "compare" && request.book_ids.len() > 30 {
+        let content_limit = if request.mode == "ask" && results.len() > 30 {
+            700
+        } else if request.mode == "compare" && request.book_ids.len() > 30 {
             420
         } else if request.mode == "compare" {
             700
@@ -410,7 +412,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
         "compare" => "任务类型：跨书分析。明确列出各书的共识、分歧与可互相补充之处。",
-        _ => "任务类型：基于阅读知识库回答问题。",
+        _ => "任务类型：基于阅读知识库回答问题。对于宽泛主题，应综合尽可能多的相关书籍与笔记，先说明知识库覆盖范围，再按主题组织回答，避免只围绕单本书展开。",
     };
     let prompt = format!(
         "{}\n\n以下是检索到的笔记：\n\n{}\n用户问题：{}",
@@ -532,7 +534,7 @@ fn rag_search(
         combined.truncate(total_limit);
         return Ok(combined);
     }
-    hybrid_search(db, search_input, None, book_ids, 20)
+    hybrid_search(db, search_input, None, book_ids, 48)
 }
 
 fn hybrid_search(
@@ -561,7 +563,7 @@ fn hybrid_search(
             .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" OR ");
-        let sql = format!("{base} WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) LIMIT 500");
+        let sql = format!("{base} WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) ORDER BY bm25(notes_fts) LIMIT 1200");
         let mut query = c.prepare(&sql)?;
         let matched = query
             .query_map(rusqlite::params![match_query, kind], map_note)?
@@ -613,6 +615,25 @@ fn hybrid_search(
             .partial_cmp(&b.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    if book_ids.is_empty() && limit > 20 {
+        let mut diverse = Vec::with_capacity(limit);
+        let mut overflow = Vec::new();
+        let mut per_book = std::collections::HashMap::<String, usize>::new();
+        for item in ranked {
+            let count = per_book.entry(item.note.book_id.clone()).or_default();
+            if *count < 8 {
+                *count += 1;
+                diverse.push(item);
+            } else {
+                overflow.push(item);
+            }
+        }
+        if diverse.len() < limit {
+            diverse.extend(overflow.into_iter().take(limit - diverse.len()));
+        }
+        diverse.truncate(limit);
+        return Ok(diverse);
+    }
     ranked.truncate(limit);
     Ok(ranked)
 }
@@ -632,6 +653,10 @@ fn search_terms(input: &str) -> Vec<String> {
         .filter(|term| !term.is_empty())
         .collect();
     terms.extend(semantic_bigrams(input));
+    let normalized = normalize_search_text(input);
+    if normalized.contains("清朝") || normalized.contains("清代") || normalized.contains("清史") {
+        terms.extend(["清朝", "清代", "清史", "大清", "满清"].map(str::to_string));
+    }
     terms.sort_by(|a, b| {
         b.chars()
             .count()

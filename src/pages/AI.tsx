@@ -110,7 +110,7 @@ export function AI() {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoading(false); }
   }
-  return <><PageHeader title="AI 阅读助手" subtitle="仅使用本地检索出的阅读笔记回答，并附带可定位的来源。"/>
+  return <div className="ai-page"><PageHeader title="AI 阅读助手" subtitle="仅使用本地检索出的阅读笔记回答，并附带可定位的来源。"/>
     <div className="ai-layout">
       <aside className="ai-history">
         <button className="ai-history__new" onClick={newConversation}><Plus size={16}/>新对话</button>
@@ -133,7 +133,7 @@ export function AI() {
         {visibleBooks.length === 0 && <p className="ai-book-picker__none">没有找到有笔记的书</p>}
       </section>}
       {!answer && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
-      {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选最相关的 20 条笔记" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
+      {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
       {answer && <section className="answer"><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {answer.sourcesConsidered} 条 · 引用 {answer.citations.length} 条</span></div>{answer.citations.map(citation => <button className="citation" key={`${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>}
       <form className="ask-box" onSubmit={ask}>
@@ -145,5 +145,5 @@ export function AI() {
       </form>
       </div>
     </div>
-  </>;
+  </div>;
 }

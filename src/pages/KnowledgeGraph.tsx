@@ -1,4 +1,4 @@
-import { BookOpen, Focus, Link2, Search, Share2, X } from "lucide-react";
+import { BookOpen, ChevronDown, Focus, Link2, Search, Share2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/tauri";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -19,10 +19,12 @@ export function KnowledgeGraph() {
   const [books, setBooks] = useState<Book[]>([]), [notes, setNotes] = useState<Note[]>([]), [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false), [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   const [error, setError] = useState(""), [query, setQuery] = useState(""), [strength, setStrength] = useState<Strength>("all");
+  const [pickerOpen, setPickerOpen] = useState(false), [pickerScroll, setPickerScroll] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(), [edgeId, setEdgeId] = useState<string>(), [focusId, setFocusId] = useState<string>();
   const openBook = useAppStore(state => state.openBook);
   const workerRef = useRef<Worker | null>(null);
   const cacheKeyRef = useRef("");
+  const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => { Promise.all([api.books(), api.notes()]).then(([b, n]) => { setBooks(b); setNotes(n); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false)); }, []);
   useEffect(() => {
     const worker = new Worker(new URL("../workers/knowledgeGraph.worker.ts", import.meta.url), { type: "module" });
@@ -52,6 +54,7 @@ export function KnowledgeGraph() {
     return () => { cancelled = true; };
   }, [books, notes, loading, error]);
   useEffect(() => { if (!loading && books.length) workerRef.current?.postMessage({ type: "filter", strength }); }, [strength, loading, books.length]);
+  useEffect(() => { const close = (event: MouseEvent) => { if (!pickerRef.current?.contains(event.target as globalThis.Node)) setPickerOpen(false); }; document.addEventListener("mousedown", close); return () => document.removeEventListener("mousedown", close); }, []);
   const viewGraph = useMemo(() => {
     if (!focusId) return { nodes: [], edges: [] as Edge[] };
     const edges = graph.edges.filter(edge => edge.from === focusId || edge.to === focusId).sort((a, b) => b.score - a.score).slice(0, 20);
@@ -66,9 +69,10 @@ export function KnowledgeGraph() {
   }, [focusId, graph]);
   const selected = graph.nodes.find(node => node.id === selectedId), selectedEdge = graph.edges.find(edge => edge.id === edgeId);
   const q = query.trim().toLowerCase();
-  const searchResults = q ? books.filter(book => `${book.title}${book.author}`.toLowerCase().includes(q)).slice(0, 8) : [];
+  const pickerBooks = useMemo(() => q ? books.filter(book => `${book.title}${book.author}${book.category}`.toLowerCase().includes(q)) : books, [books, q]);
+  const pickerStart = Math.max(0, Math.floor(pickerScroll / 46) - 2), pickerItems = pickerBooks.slice(pickerStart, pickerStart + 12);
   return <div className="knowledge-graph-page"><PageHeader title="书籍关系图谱" subtitle="从你的划线与想法中，发现书与书之间的共同主题。" />
-    <div className="graph-toolbar"><div className="graph-search-wrap"><label className="graph-search"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="选择一本中心书籍" /></label>{searchResults.length > 0 && <div className="graph-search-results">{searchResults.map(book => <button key={book.id} onClick={() => { setFocusId(book.id); setQuery(""); setSelectedId(book.id); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}><option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="all">12 个关联</option><option value="broad">20 个关联</option></select></label><span>{viewGraph.nodes.length > 0 ? `${viewGraph.nodes.length - 1} 本关联书籍` : "请选择一本书"}</span></div>
+    <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { setFocusId(book.id); setQuery(""); setSelectedId(book.id); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}><option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="all">12 个关联</option><option value="broad">20 个关联</option></select></label><span>{viewGraph.nodes.length > 0 ? `${viewGraph.nodes.length - 1} 本关联书籍` : "请选择一本书"}</span></div>
     <section className="graph-shell">{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{analyzing && !!graph.nodes.length && <div className="graph-analyzing">正在补充关系…</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}{!loading && !analyzing && !error && !graph.nodes.length && <div className="graph-state"><Share2/><strong>还没有发现可靠的书籍关系</strong><span>更多划线与想法会让关联分析更加准确。</span></div>}
       {!loading && !error && !!viewGraph.nodes.length && <KnowledgeGraphCanvas nodes={viewGraph.nodes} edges={viewGraph.edges} focusId={focusId} selectedId={selectedId} selectedEdgeId={edgeId} onNodeClick={id => { setSelectedId(id); setEdgeId(undefined); }} onNodeOpen={id => { setFocusId(id); setSelectedId(id); setEdgeId(undefined); }} onEdgeClick={id => { setEdgeId(id); setSelectedId(undefined); }}/>}
       {selected && <aside className="graph-detail"><button className="graph-detail__close" onClick={() => setSelectedId(undefined)}><X size={16}/></button><span className="graph-kind">书籍</span><h2>{selected.title}</h2><p>{selected.author}</p><small>{selected.highlightCount} 条划线 · {selected.thoughtCount} 条想法 · {graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).length} 本关联书籍</small><div className="graph-detail__actions"><button onClick={() => setFocusId(selected.id)}><Focus size={14}/>查看关系网</button><button onClick={() => openBook(selected.id)}><BookOpen size={14}/>打开书籍</button></div></aside>}
