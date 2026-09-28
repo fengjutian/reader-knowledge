@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardStats {
@@ -45,9 +45,4 @@ pub struct SyncProgress {
     pub books: i64,
     pub highlights: i64,
     pub thoughts: i64,
-}
-#[derive(Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
 }

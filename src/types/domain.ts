@@ -29,9 +29,6 @@ export interface DashboardStats {
 }
 
 export interface SearchResult extends Note { score: number }
-export interface Citation { index: number; note: Note }
-export interface AiAnswer { content: string; citations: Citation[] }
-
 export interface SyncProgress {
   status: "idle" | "reading" | "processing" | "complete" | "failed";
   progress: number;

@@ -9,11 +9,6 @@ pub struct ShelfResponse {
     pub albums: Vec<serde_json::Value>,
     pub mp: Option<serde_json::Value>,
 }
-impl ShelfResponse {
-    pub fn visible_entry_count(&self) -> usize {
-        self.books.len() + self.albums.len() + usize::from(self.mp.is_some())
-    }
-}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,11 +48,6 @@ pub struct NotebookBook {
     #[serde(default)]
     pub bookmark_count: i64,
     pub sort: i64,
-}
-impl NotebookBook {
-    pub fn total_note_count(&self) -> i64 {
-        self.review_count + self.note_count + self.bookmark_count
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

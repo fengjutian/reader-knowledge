@@ -1,4 +1,3 @@
-mod ai;
 mod commands;
 mod database;
 mod error;
@@ -25,8 +24,7 @@ pub fn run() {
             commands::search_notes,
             commands::save_secret,
             commands::test_connection,
-            commands::sync_weread,
-            commands::ask_ai
+            commands::sync_weread
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReadFlow")

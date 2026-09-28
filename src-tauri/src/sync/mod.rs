@@ -256,3 +256,31 @@ fn mark_failed(db: &Database, id: &str, error: &AppError) {
         Ok(c)
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{chapter_map, integer, json_text, string};
+    use serde_json::json;
+
+    #[test]
+    fn maps_chapters_by_official_uid() {
+        let chapters = chapter_map(&[
+            json!({"chapterUid": 10, "chapterIdx": 2, "title": "第二章"}),
+            json!({"chapterUid": 11, "title": "附录"}),
+        ]);
+        assert_eq!(chapters.get(&10), Some(&(Some(2), "第二章".into())));
+        assert_eq!(chapters.get(&11), Some(&(None, "附录".into())));
+    }
+
+    #[test]
+    fn extracts_only_matching_json_types() {
+        let value = json!({"name":"内容","time":123,"range":{"start":1}});
+        assert_eq!(string(&value, "name").as_deref(), Some("内容"));
+        assert_eq!(integer(&value, "time"), Some(123));
+        assert_eq!(string(&value, "time"), None);
+        assert_eq!(
+            json_text(value.get("range")).as_deref(),
+            Some("{\"start\":1}")
+        );
+    }
+}

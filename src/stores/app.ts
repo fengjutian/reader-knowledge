@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type Page = "dashboard" | "books" | "highlights" | "thoughts" | "search" | "ai" | "settings";
+export type Page = "dashboard" | "books" | "highlights" | "thoughts" | "search" | "settings";
 interface AppState {
   page: Page;
   theme: "light" | "dark";

@@ -1,3 +1,32 @@
 .dashboard-grid {
   grid-template-columns: 1fr;
 }
+
+.progress--active > div {
+  animation: sync-indeterminate 1.25s ease-in-out infinite;
+}
+
+@keyframes sync-indeterminate {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(330%); }
+}
+
+.search-filters {
+  display: flex;
+  gap: 6px;
+  margin: 14px 0 0;
+
+  button {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--secondary);
+  }
+
+  button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}

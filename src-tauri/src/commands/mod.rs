@@ -1,6 +1,5 @@
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
-use serde::Serialize;
 use tauri::State;
 
 #[tauri::command]
@@ -60,8 +59,18 @@ pub fn list_notes(
 }
 
 #[tauri::command]
-pub fn search_notes(db: State<'_, Database>, query: String) -> Result<Vec<SearchResult>, AppError> {
-    search_impl(&db, &query, None)
+pub fn search_notes(
+    db: State<'_, Database>,
+    query: String,
+    note_type: Option<String>,
+) -> Result<Vec<SearchResult>, AppError> {
+    if note_type
+        .as_deref()
+        .is_some_and(|value| value != "highlight" && value != "thought")
+    {
+        return Err(AppError::Message("不支持的笔记类型".into()));
+    }
+    search_impl(&db, &query, note_type)
 }
 
 fn search_impl(
@@ -71,18 +80,19 @@ fn search_impl(
 ) -> Result<Vec<SearchResult>, AppError> {
     let c = db.connect()?;
     let sql = if query.trim().is_empty() {
-        "SELECT note_id,note_type,book_id,title,chapter_title,content,0.0 FROM notes_fts WHERE (?1 IS NULL OR note_type=?1) LIMIT 100"
+        "SELECT note_id,note_type,book_id,title,chapter_title,content,
+         CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END,
+         0.0 FROM notes_fts WHERE (?1 IS NULL OR note_type=?1) ORDER BY 7 DESC LIMIT 100"
     } else {
-        "SELECT note_id,note_type,book_id,title,chapter_title,content,bm25(notes_fts) FROM notes_fts WHERE notes_fts MATCH ?2 AND (?1 IS NULL OR note_type=?1) ORDER BY bm25(notes_fts) LIMIT 20"
+        "SELECT note_id,note_type,book_id,title,chapter_title,content,
+         CASE note_type WHEN 'highlight' THEN coalesce(datetime((SELECT create_time FROM highlights WHERE bookmark_id=note_id),'unixepoch','localtime'),'') ELSE coalesce(datetime((SELECT create_time FROM thoughts WHERE review_id=note_id),'unixepoch','localtime'),'') END,
+         bm25(notes_fts) FROM notes_fts WHERE notes_fts MATCH ?2 AND (?1 IS NULL OR note_type=?1) ORDER BY bm25(notes_fts) LIMIT 20"
     };
     let mut q = c.prepare(sql)?;
     let rows = if query.trim().is_empty() {
         q.query_map(rusqlite::params![kind], map_note)?
     } else {
-        q.query_map(
-            rusqlite::params![kind, format!("\"{}\"", query.replace('"', "\"\""))],
-            map_note,
-        )?
+        q.query_map(rusqlite::params![kind, fts_query(query)], map_note)?
     };
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -95,9 +105,9 @@ fn map_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<SearchResult> {
             book_title: r.get(3)?,
             chapter: r.get(4)?,
             content: r.get(5)?,
-            created_at: String::new(),
+            created_at: r.get(6)?,
         },
-        score: r.get(6)?,
+        score: r.get(7)?,
     })
 }
 
@@ -123,17 +133,26 @@ pub async fn sync_weread(db: State<'_, Database>) -> Result<SyncProgress, AppErr
     crate::sync::run(&db, &client).await
 }
 
-#[derive(Serialize)]
-pub struct Citation {
-    index: i32,
-    note: Note,
+fn fts_query(input: &str) -> String {
+    input
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
-#[derive(Serialize)]
-pub struct AiAnswer {
-    content: String,
-    citations: Vec<Citation>,
-}
-#[tauri::command]
-pub fn ask_ai(_db: State<'_, Database>, _question: String) -> Result<AiAnswer, AppError> {
-    Err(AppError::Message("AI 服务尚未配置，不能生成回答".into()))
+
+#[cfg(test)]
+mod tests {
+    use super::fts_query;
+
+    #[test]
+    fn fts_query_uses_and_for_multiple_terms() {
+        assert_eq!(fts_query("组织 管理"), "\"组织\" AND \"管理\"");
+    }
+
+    #[test]
+    fn fts_query_escapes_quotes() {
+        assert_eq!(fts_query("a\"b"), "\"a\"\"b\"");
+    }
 }
