@@ -180,6 +180,15 @@ pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
     keyring::Entry::new("ReadFlow", &kind)?.set_password(&value)?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn has_secret(kind: String) -> Result<bool, AppError> {
+    match keyring::Entry::new("ReadFlow", &kind)?.get_password() {
+        Ok(value) => Ok(!value.is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(error) => Err(AppError::Credential(error)),
+    }
+}
 #[tauri::command]
 pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool, AppError> {
     let secret = match value.filter(|value| !value.trim().is_empty()) {
@@ -278,7 +287,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     if question.trim().is_empty() {
         return Err(AppError::Message("问题不能为空".into()));
     }
-    let results = rag_search(&db, &question, &request.book_ids)?;
+    let results = rag_search(&db, &question, &request.mode, &request.book_ids)?;
     if results.is_empty() {
         return Err(AppError::Message(
             "没有检索到相关笔记，无法生成有依据的回答".into(),
@@ -302,8 +311,14 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         ));
     }
     let system = "你是 ReadFlow 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
+    let task = match request.mode.as_str() {
+        "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
+        "compare" => "任务类型：跨书分析。明确列出各书的共识、分歧与可互相补充之处。",
+        _ => "任务类型：基于阅读知识库回答问题。",
+    };
     let prompt = format!(
-        "以下是检索到的笔记：\n\n{}\n用户问题：{}",
+        "{}\n\n以下是检索到的笔记：\n\n{}\n用户问题：{}",
+        task,
         context,
         question.trim()
     );
@@ -388,15 +403,17 @@ fn validate_ai_settings(settings: &AiSettings) -> Result<(), AppError> {
 fn rag_search(
     db: &Database,
     question: &str,
+    mode: &str,
     book_ids: &[String],
 ) -> Result<Vec<SearchResult>, AppError> {
+    let search_input = if mode == "ask" { question } else { "" };
     if book_ids.len() > 1 {
         let per_book = (20 / book_ids.len()).max(3);
         let mut combined = Vec::new();
         for book_id in book_ids {
             combined.extend(hybrid_search(
                 db,
-                question,
+                search_input,
                 None,
                 std::slice::from_ref(book_id),
                 per_book,
@@ -405,7 +422,7 @@ fn rag_search(
         combined.truncate(20);
         return Ok(combined);
     }
-    hybrid_search(db, question, None, book_ids, 20)
+    hybrid_search(db, search_input, None, book_ids, 20)
 }
 
 fn hybrid_search(
@@ -433,7 +450,9 @@ fn hybrid_search(
             let title = normalize_search_text(&item.note.book_title);
             let chapter = normalize_search_text(&item.note.chapter);
             let content = normalize_search_text(&item.note.content);
-            let mut score = if !normalized.is_empty() && content.contains(&normalized) {
+            let mut score = if normalized.is_empty() {
+                1.0
+            } else if content.contains(&normalized) {
                 12.0
             } else {
                 0.0

@@ -21,6 +21,7 @@ export const api = {
   ask: (request: AiRequest) => call<AiAnswer>("ask_ai", { request }),
   sync: () => call<SyncProgress>("sync_weread"),
   saveSecret: (kind: string, value: string) => call<void>("save_secret", { kind, value }),
+  hasSecret: (kind: string) => call<boolean>("has_secret", { kind }),
   testConnection: (kind: string, value?: string) => call<boolean>("test_connection", { kind, value }),
 };
 

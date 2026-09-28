@@ -27,6 +27,7 @@ pub fn run() {
             commands::list_notes,
             commands::search_notes,
             commands::save_secret,
+            commands::has_secret,
             commands::test_connection,
             commands::sync_weread,
             commands::get_ai_settings,

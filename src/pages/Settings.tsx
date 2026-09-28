@@ -17,9 +17,11 @@ const errorText = (error: unknown, fallback: string) => {
 
 function SecretField({ label, kind }: { label: string; kind: string }) {
   const [value, setValue] = useState(""); const [show, setShow] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [status, setStatus] = useState<Status>("idle"); const [message, setMessage] = useState("");
-  async function test() { setStatus("testing"); setMessage(""); try { await api.saveSecret(kind, value); await api.testConnection(kind, value); setStatus("success"); } catch (error) { setStatus("error"); setMessage(errorText(error, "连接失败")); } }
-  return <div className="setting-field"><label>{label}</label><div className="secret-input"><input type={show ? "text" : "password"} placeholder="输入 API Key" value={value} onChange={e => { setValue(e.target.value); setStatus("idle"); }} /><button type="button" aria-label={show ? "隐藏密钥" : "显示密钥"} onClick={() => setShow(!show)}>{show ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><Button variant="secondary" onClick={test} disabled={!value || status === "testing"}>{status === "success" ? <><Check size={15} />连接成功</> : status === "testing" ? "正在连接…" : "保存并测试连接"}</Button>{status === "error" && <small className="field-error">{message}</small>}</div>;
+  useEffect(() => { api.hasSecret(kind).then(setSaved).catch(() => setSaved(false)); }, [kind]);
+  async function test() { setStatus("testing"); setMessage(""); try { if (value) await api.saveSecret(kind, value); await api.testConnection(kind, value || undefined); setSaved(true); setValue(""); setStatus("success"); } catch (error) { setStatus("error"); setMessage(errorText(error, "连接失败")); } }
+  return <div className="setting-field"><label>{label}{saved && <span className="secret-saved"><Check size={12} />已保存</span>}</label><div className="secret-input"><input type={show ? "text" : "password"} placeholder={saved ? "••••••••••••（留空则继续使用）" : "输入 API Key"} value={value} onChange={e => { setValue(e.target.value); setStatus("idle"); }} /><button type="button" aria-label={show ? "隐藏密钥" : "显示密钥"} onClick={() => setShow(!show)}>{show ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><Button variant="secondary" onClick={test} disabled={(!value && !saved) || status === "testing"}>{status === "success" ? <><Check size={15} />连接成功</> : status === "testing" ? "正在连接…" : saved && !value ? "测试已保存的 Key" : "保存并测试连接"}</Button>{status === "error" && <small className="field-error">{message}</small>}</div>;
 }
 
 function AiSettings() {
