@@ -128,6 +128,12 @@
 .stat-card,.panel,.book-card,.note-card,.settings-card { border-color:#ded5c7;box-shadow:0 1px 0 #fff inset,0 4px 16px #66523d0a; }
 .status-dot { background:#66836a;box-shadow:0 0 0 5px #66836a1f; }
 .progress div { background:#9d3f32; }
+.sync-progress-wrap { margin:22px 0 18px; }
+.sync-progress-wrap .progress { margin:7px 0 0; }
+.sync-progress-label,.book-progress-label { display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px; }
+.sync-progress-label strong,.book-progress-label strong { color:var(--secondary);font-weight:600; }
+.book-progress-wrap { margin-top:14px; }
+.book-progress-wrap .book-progress { margin-top:6px; }
 .quick-search { background:#f5f1e8;border-color:#ded5c7; }
 .settings-tabs,.ai-modes { background:#eae3d7; }
 .settings-tabs button.active,.ai-modes button.active { color:#6f3027;background:#fffaf2;box-shadow:0 1px 4px #59432c14; }
