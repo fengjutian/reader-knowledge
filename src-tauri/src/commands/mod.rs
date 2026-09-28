@@ -105,10 +105,16 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
             |row| row.get(0),
         )
         .optional()?;
-    let web_link = reqwest::Url::parse("https://weread.qq.com/web/reader/")
+    let reader_id = weread_reader_id(&book_id);
+    let reader_path = if book_id.starts_with("MP_WXS_") {
+        "https://weread.qq.com/web/mp/reader/"
+    } else {
+        "https://weread.qq.com/web/reader/"
+    };
+    let web_link = reqwest::Url::parse(reader_path)
         .ok()
         .and_then(|mut url| {
-            url.path_segments_mut().ok()?.push(&book_id);
+            url.path_segments_mut().ok()?.push(&reader_id);
             Some(url.to_string())
         });
     let link = web_link
@@ -117,6 +123,63 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
     app.opener()
         .open_url(link, None::<String>)
         .map_err(|error| AppError::Message(format!("无法打开微信读书：{error}")))
+}
+
+/// Converts the book id returned by the WeRead API into the opaque id used by
+/// the web reader. The API id itself is not a valid `/web/reader/` path.
+fn weread_reader_id(book_id: &str) -> String {
+    let digest = format!("{:x}", md5::compute(book_id.as_bytes()));
+    let (kind, transformed): (char, Vec<String>) = if book_id.chars().all(|c| c.is_ascii_digit()) {
+        (
+            '3',
+            book_id
+                .as_bytes()
+                .chunks(9)
+                .map(|chunk| {
+                    let value = std::str::from_utf8(chunk)
+                        .expect("numeric book id is valid UTF-8")
+                        .parse::<u64>()
+                        .expect("numeric book id fits into u64");
+                    format!("{value:x}")
+                })
+                .collect(),
+        )
+    } else {
+        (
+            '4',
+            vec![book_id
+                .chars()
+                .map(|c| format!("{:x}", c as u32))
+                .collect()],
+        )
+    };
+
+    let mut result = format!("{}{}2{}", &digest[..3], kind, &digest[digest.len() - 2..]);
+    for (index, part) in transformed.iter().enumerate() {
+        result.push_str(&format!("{:02x}{part}", part.len()));
+        if index + 1 < transformed.len() {
+            result.push('g');
+        }
+    }
+    if result.len() < 20 {
+        result.push_str(&digest[..20 - result.len()]);
+    }
+    let checksum = format!("{:x}", md5::compute(result.as_bytes()));
+    result.push_str(&checksum[..3]);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::weread_reader_id;
+
+    #[test]
+    fn builds_the_real_web_reader_id_for_a_numeric_book_id() {
+        assert_eq!(
+            weread_reader_id("3300220342"),
+            "8d2321e0813abbc92g012963"
+        );
+    }
 }
 
 #[tauri::command]
@@ -335,7 +398,8 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         } else {
             "书籍原文划线"
         };
-        let content: String = result.note.content.chars().take(1200).collect();
+        let content_limit = if request.mode == "compare" { 700 } else { 1200 };
+        let content: String = result.note.content.chars().take(content_limit).collect();
         context.push_str(&format!(
             "[{}]\ntype: {}\nbook: 《{}》\nchapter: {}\ncontent: {}\n\n",
             index + 1,
@@ -448,7 +512,10 @@ fn rag_search(
 ) -> Result<Vec<SearchResult>, AppError> {
     let search_input = if mode == "ask" { question } else { "" };
     if book_ids.len() > 1 {
-        let per_book = (20 / book_ids.len()).max(3);
+        // 跨书分析不能只把固定的 20 条平均分配，否则书越多，每本书的
+        // 代表性越差。每本保留 5 条，并用总上限控制上下文大小。
+        let per_book = 5;
+        let total_limit = (book_ids.len() * per_book).min(60);
         let mut combined = Vec::new();
         for book_id in book_ids {
             combined.extend(hybrid_search(
@@ -459,7 +526,7 @@ fn rag_search(
                 per_book,
             )?);
         }
-        combined.truncate(20);
+        combined.truncate(total_limit);
         return Ok(combined);
     }
     hybrid_search(db, search_input, None, book_ids, 20)
