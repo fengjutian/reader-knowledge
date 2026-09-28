@@ -389,7 +389,9 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         } else {
             "书籍原文划线"
         };
-        let content_limit = if request.mode == "ask" && results.len() > 30 {
+        let content_limit = if request.mode == "ask" && results.len() > 100 {
+            220
+        } else if request.mode == "ask" && results.len() > 30 {
             700
         } else if request.mode == "compare" && request.book_ids.len() > 30 {
             420
@@ -534,7 +536,7 @@ fn rag_search(
         combined.truncate(total_limit);
         return Ok(combined);
     }
-    hybrid_search(db, search_input, None, book_ids, 48)
+    hybrid_search(db, search_input, None, book_ids, 200)
 }
 
 fn hybrid_search(
@@ -563,7 +565,7 @@ fn hybrid_search(
             .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" OR ");
-        let sql = format!("{base} WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) ORDER BY bm25(notes_fts) LIMIT 1200");
+        let sql = format!("{base} WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) ORDER BY bm25(notes_fts) LIMIT 5000");
         let mut query = c.prepare(&sql)?;
         let matched = query
             .query_map(rusqlite::params![match_query, kind], map_note)?

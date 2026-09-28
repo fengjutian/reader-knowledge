@@ -225,6 +225,9 @@
   min-width: 0;
 }
 .ai-modes {
+  position: sticky;
+  top: 0;
+  z-index: 6;
   display: flex;
   gap: 4px;
   width: max-content;
@@ -232,6 +235,7 @@
   margin-bottom: 14px;
   border-radius: 9px;
   background: var(--surface-hover);
+  box-shadow: 0 8px 16px color-mix(in srgb,var(--bg) 88%,transparent);
 }
 .ai-modes button {
   padding: 7px 12px;
