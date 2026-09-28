@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 struct BookNotes {
     book_id: String,
+    book: Option<Value>,
     highlights: crate::weread::models::BookmarkListResponse,
     thoughts: Vec<Value>,
 }
@@ -47,6 +48,7 @@ async fn fetch_all(
         let thoughts = client.all_thoughts(&notebook.book_id).await?;
         notes.push(BookNotes {
             book_id: notebook.book_id,
+            book: notebook.book,
             highlights,
             thoughts,
         });
@@ -83,6 +85,16 @@ fn persist(
     }
 
     for item in &notes {
+        if let Some(book) = &item.book {
+            let title = string(book, "title").unwrap_or_else(|| "未命名书籍".into());
+            tx.execute(
+                "INSERT INTO books(book_id,title,author,cover,category,deep_link,created_at,synced_at,is_deleted,last_seen_sync_id)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?7,0,?8)
+                 ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=coalesce(excluded.deep_link,books.deep_link),synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
+                params![item.book_id,title,string(book,"author"),string(book,"cover"),string(book,"category"),string(book,"deepLink"),started_at,session_id],
+            )?;
+            save_raw(&tx, "notebook", &item.book_id, book, started_at)?;
+        }
         save_raw(
             &tx,
             "highlights",
@@ -153,13 +165,17 @@ fn persist(
     )?;
     rebuild_fts(&tx)?;
     let finished_at = now();
-    tx.execute("UPDATE sync_sessions SET finished_at=?2,status='success',books_fetched=?3,highlights_fetched=?4,thoughts_fetched=?5 WHERE id=?1", params![session_id,finished_at,shelf.books.len() as i64,highlight_count,thought_count])?;
+    let book_count: i64 =
+        tx.query_row("SELECT count(*) FROM books WHERE is_deleted=0", [], |row| {
+            row.get(0)
+        })?;
+    tx.execute("UPDATE sync_sessions SET finished_at=?2,status='success',books_fetched=?3,highlights_fetched=?4,thoughts_fetched=?5 WHERE id=?1", params![session_id,finished_at,book_count,highlight_count,thought_count])?;
     tx.execute("INSERT INTO sync_state(source,last_synced_at,last_successful_session) VALUES('weread',?1,?2) ON CONFLICT(source) DO UPDATE SET last_synced_at=excluded.last_synced_at,last_successful_session=excluded.last_successful_session", params![finished_at,session_id])?;
     tx.commit()?;
     Ok(SyncProgress {
         status: "complete".into(),
         progress: 100,
-        books: shelf.books.len() as i64,
+        books: book_count,
         highlights: highlight_count,
         thoughts: thought_count,
     })

@@ -5,6 +5,7 @@ src-tauri/target/
 *.db
 *.db-shm
 *.db-wal
+*.tsbuildinfo
 !README.md
 !docs/
 !docs/**

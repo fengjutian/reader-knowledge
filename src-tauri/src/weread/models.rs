@@ -45,6 +45,7 @@ pub struct NotebooksResponse {
 #[serde(rename_all = "camelCase")]
 pub struct NotebookBook {
     pub book_id: String,
+    pub book: Option<serde_json::Value>,
     #[serde(default)]
     pub review_count: i64,
     #[serde(default)]
