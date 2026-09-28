@@ -252,13 +252,15 @@ pub fn get_ai_settings(db: State<'_, Database>) -> Result<Option<AiSettings>, Ap
 pub fn save_ai_settings(
     db: State<'_, Database>,
     settings: AiSettings,
-    api_key: String,
+    api_key: Option<String>,
 ) -> Result<(), AppError> {
     validate_ai_settings(&settings)?;
-    let entry = keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?;
-    entry.set_password(&api_key)?;
-    if entry.get_password()? != api_key {
-        return Err(AppError::Message("AI Key 未能正确保存到系统凭据库，请重试".into()));
+    if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
+        let entry = keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?;
+        entry.set_password(&api_key)?;
+        if entry.get_password()? != api_key {
+            return Err(AppError::Message("AI Key 未能正确保存到系统凭据库，请重试".into()));
+        }
     }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
