@@ -177,7 +177,12 @@ fn map_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<SearchResult> {
 
 #[tauri::command]
 pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
-    keyring::Entry::new("ReadFlow", &kind)?.set_password(&value)?;
+    let entry = keyring::Entry::new("ReadFlow", &kind)?;
+    entry.set_password(&value)?;
+    let persisted = entry.get_password()?;
+    if persisted != value {
+        return Err(AppError::Message("密钥未能正确保存到系统凭据库，请重试".into()));
+    }
     Ok(())
 }
 
@@ -250,8 +255,11 @@ pub fn save_ai_settings(
     api_key: String,
 ) -> Result<(), AppError> {
     validate_ai_settings(&settings)?;
-    keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?
-        .set_password(&api_key)?;
+    let entry = keyring::Entry::new("ReadFlow", &format!("ai:{}", settings.provider))?;
+    entry.set_password(&api_key)?;
+    if entry.get_password()? != api_key {
+        return Err(AppError::Message("AI Key 未能正确保存到系统凭据库，请重试".into()));
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
