@@ -15,6 +15,7 @@ export const api = {
   books: () => call<Book[]>("list_books"),
   bookMetadata: () => call<BookMetadataRow[]>("list_book_metadata"),
   fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),
+  fetchDoubanBookMetadata: (bookId: string, url: string) => call<MetadataFetchResult>("fetch_douban_book_metadata", { bookId, url }),
   fetchBooksMetadata: (bookIds: string[], source: string, force = false) => call<MetadataFetchResult[]>("fetch_books_metadata", { bookIds, source, force }),
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),
   bookNotes: (bookId: string) => call<Note[]>("list_book_notes", { bookId }),

@@ -7,6 +7,49 @@ fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
+pub async fn fetch_douban_url(db: &Database, book_id: &str, input_url: &str) -> Result<MetadataFetchResult, AppError> {
+    let url = reqwest::Url::parse(input_url.trim()).map_err(|_| AppError::Message("请输入有效的豆瓣图书链接".into()))?;
+    if url.scheme() != "https" || url.host_str() != Some("book.douban.com") || !url.path().starts_with("/subject/") {
+        return Err(AppError::Message("仅支持 https://book.douban.com/subject/... 链接".into()));
+    }
+    let source_id = url.path_segments().and_then(|mut parts| { parts.next(); parts.next().map(str::to_owned) }).filter(|v| !v.is_empty()).ok_or_else(|| AppError::Message("豆瓣链接缺少条目 ID".into()))?;
+    db.connect()?.query_row("SELECT 1 FROM books WHERE book_id=?1 AND is_deleted=0", [book_id], |_| Ok(()))?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("Mozilla/5.0 (compatible; ReadFlow/0.1; personal metadata lookup)").redirect(reqwest::redirect::Policy::limited(3)).build()?;
+    let response = client.get(url.clone()).send().await?.error_for_status()?;
+    if response.url().host_str() != Some("book.douban.com") {
+        return Err(AppError::Message("豆瓣要求安全验证，本次拉取已停止".into()));
+    }
+    let html = response.text().await?;
+    if html.contains("sec.douban.com") || html.contains("captcha") || html.contains("安全验证") {
+        return Err(AppError::Message("豆瓣要求安全验证，本次拉取已停止".into()));
+    }
+    let data = parse_douban_html(&html, &source_id, url.as_str())?;
+    save(db, book_id, "douban", &data)?;
+    Ok(MetadataFetchResult { book_id:book_id.into(), source:"douban".into(), status:"updated".into(), message:"豆瓣公开条目信息已保存到本地".into() })
+}
+
+fn parse_douban_html(html: &str, source_id: &str, source_url: &str) -> Result<Value, AppError> {
+    let json_ld = html.find("<script type=\"application/ld+json\">")
+        .and_then(|start| { let body=&html[start+35..]; body.find("</script>").map(|end| &body[..end]) })
+        .and_then(|body| serde_json::from_str::<Value>(body.trim()).ok());
+    let meta = |property: &str| -> Option<String> {
+        let marker=format!("property=\"{property}\"");
+        let start=html.find(&marker)?;
+        let tag_start=html[..start].rfind('<')?;
+        let tag_end=html[start..].find('>')?+start;
+        let tag=&html[tag_start..=tag_end];
+        let content=tag.find("content=\"")?+9;
+        let end=tag[content..].find('\"')?+content;
+        Some(tag[content..end].replace("&amp;", "&").replace("&quot;", "\""))
+    };
+    let title=json_ld.as_ref().and_then(|v|v.get("name")).and_then(Value::as_str).map(str::to_owned).or_else(||meta("og:title")).ok_or_else(||AppError::Message("无法从豆瓣页面识别书名，页面结构可能已变化".into()))?;
+    let authors=json_ld.as_ref().and_then(|v|v.get("author")).and_then(Value::as_array).map(|values|values.iter().filter_map(|a|a.get("name").and_then(Value::as_str).map(str::to_owned)).collect::<Vec<_>>()).unwrap_or_default();
+    let isbn=json_ld.as_ref().and_then(|v|v.get("isbn")).and_then(Value::as_str).map(|v|vec![v.to_owned()]).unwrap_or_default();
+    let image=json_ld.as_ref().and_then(|v|v.get("image")).and_then(Value::as_str).map(str::to_owned).or_else(||meta("og:image"));
+    let description=json_ld.as_ref().and_then(|v|v.get("description")).and_then(Value::as_str).map(str::to_owned).or_else(||meta("og:description"));
+    Ok(json!({"source_id":source_id,"source_url":source_url,"title":title,"authors":authors,"isbn":isbn,"cover_url":image,"description":description,"subjects":[],"raw":json_ld.unwrap_or_else(||json!({"title":title}))}))
+}
+
 pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
     let c = db.connect()?;
     let mut q = c.prepare(
@@ -16,7 +59,7 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
          FROM books b
          LEFT JOIN book_metadata_sources m ON m.book_id=b.book_id AND m.source=(
            SELECT source FROM book_metadata_sources x WHERE x.book_id=b.book_id
-           ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'open_library' THEN 1 WHEN 'google_books' THEN 2 ELSE 9 END LIMIT 1)
+           ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END LIMIT 1)
          LEFT JOIN (SELECT book_id,group_concat(source) sources,max(fetched_at) last_fetched_at FROM book_metadata_sources GROUP BY book_id) s ON s.book_id=b.book_id
          WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC,b.title"
     )?;

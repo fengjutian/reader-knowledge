@@ -117,6 +117,11 @@ pub async fn fetch_book_metadata(db: State<'_, Database>, book_id: String, sourc
 }
 
 #[tauri::command]
+pub async fn fetch_douban_book_metadata(db: State<'_, Database>, book_id: String, url: String) -> Result<MetadataFetchResult, AppError> {
+    crate::metadata::fetch_douban_url(&db, &book_id, &url).await
+}
+
+#[tauri::command]
 pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>, source: String, force: bool) -> Result<Vec<MetadataFetchResult>, AppError> {
     if book_ids.len() > 100 { return Err(AppError::Message("单次最多补全 100 本书".into())); }
     let mut results=Vec::with_capacity(book_ids.len());
