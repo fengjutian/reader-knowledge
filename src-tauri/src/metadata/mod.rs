@@ -100,19 +100,53 @@ pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> R
 }
 
 async fn fetch_open_library(client:&reqwest::Client,title:&str,author:&str)->Result<Option<Value>,AppError>{
-    let value:Value=client.get("https://openlibrary.org/search.json").query(&[("title",title),("author",author),("limit","1")]).send().await?.error_for_status()?.json().await?;
-    let Some(d)=value.get("docs").and_then(Value::as_array).and_then(|v|v.first()) else{return Ok(None)};
+    let core=core_title(title);
+    let mut searches=vec![("title",title.to_owned(),Some(author.to_owned()))];
+    if core!=title { searches.push(("title",core.clone(),Some(author.to_owned()))); }
+    searches.push(("q",core,None));
+    let mut found=None;
+    for (key,term,by_author) in searches {
+        let mut request=client.get("https://openlibrary.org/search.json").query(&[(key,term.as_str()),("limit","5")]);
+        if let Some(ref author)=by_author { if !author.trim().is_empty() { request=request.query(&[("author",author)]); } }
+        let value:Value=request.send().await?.error_for_status()?.json().await?;
+        if let Some(d)=best_match(value.get("docs").and_then(Value::as_array),title,author,"title","author_name") { found=Some(d.clone()); break; }
+    }
+    let Some(d)=found else{return Ok(None)};
     let key=d.get("key").and_then(Value::as_str).unwrap_or("");
     let cover=d.get("cover_i").and_then(Value::as_i64).map(|id|format!("https://covers.openlibrary.org/b/id/{id}-L.jpg"));
     Ok(Some(json!({"source_id":key,"source_url":format!("https://openlibrary.org{key}"),"title":d.get("title"),"authors":d.get("author_name"),"isbn":d.get("isbn"),"publisher":d.get("publisher").and_then(Value::as_array).and_then(|v|v.first()),"published_date":d.get("first_publish_year"),"page_count":d.get("number_of_pages_median"),"subjects":d.get("subject"),"cover_url":cover,"raw":d})))
 }
 
 async fn fetch_google_books(client:&reqwest::Client,title:&str,author:&str)->Result<Option<Value>,AppError>{
-    let query=format!("intitle:{title} inauthor:{author}");
-    let value:Value=client.get("https://www.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","1")]).send().await?.error_for_status()?.json().await?;
-    let Some(item)=value.get("items").and_then(Value::as_array).and_then(|v|v.first()) else{return Ok(None)};
+    let core=core_title(title);
+    let queries=[format!("intitle:{title} inauthor:{author}"),format!("intitle:{core}"),core];
+    let mut found=None;
+    for query in queries {
+        let value:Value=client.get("https://www.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","5")]).send().await?.error_for_status()?.json().await?;
+        if let Some(items)=value.get("items").and_then(Value::as_array) {
+            let best=items.iter().max_by_key(|item| match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors"));
+            if let Some(item)=best.filter(|item|match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors")>0) { found=Some(item.clone()); break; }
+        }
+    }
+    let Some(item)=found else{return Ok(None)};
     let info=&item["volumeInfo"];
     Ok(Some(json!({"source_id":item.get("id"),"source_url":info.get("infoLink"),"title":info.get("title"),"authors":info.get("authors"),"isbn":info.get("industryIdentifiers").and_then(Value::as_array).map(|ids|ids.iter().filter_map(|x|x.get("identifier")).cloned().collect::<Vec<_>>()),"publisher":info.get("publisher"),"published_date":info.get("publishedDate"),"page_count":info.get("pageCount"),"subjects":info.get("categories"),"cover_url":info.get("imageLinks").and_then(|x|x.get("thumbnail")),"description":info.get("description"),"rating":info.get("averageRating"),"rating_count":info.get("ratingsCount"),"raw":item})))
+}
+
+fn core_title(title:&str)->String {
+    title.split(['：',':','（','(','【','[']).next().unwrap_or(title).trim().to_owned()
+}
+fn normalized(value:&str)->String { value.chars().filter(|c|c.is_alphanumeric()).flat_map(char::to_lowercase).collect() }
+fn match_score(item:&Value,title:&str,author:&str,title_key:&str,authors_key:&str)->i32 {
+    let candidate=item.get(title_key).and_then(Value::as_str).unwrap_or("");
+    let target=normalized(&core_title(title)); let candidate=normalized(&core_title(candidate));
+    let mut score=if candidate==target { 100 } else if !target.is_empty()&&(candidate.contains(&target)||target.contains(&candidate)) { 60 } else { 0 };
+    let authors=item.get(authors_key).and_then(Value::as_array).map(|v|v.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    let author=normalized(author); let authors=normalized(&authors); if !author.is_empty()&&(authors.contains(&author)||author.contains(&authors)) { score+=20; }
+    score
+}
+fn best_match<'a>(items:Option<&'a Vec<Value>>,title:&str,author:&str,title_key:&str,authors_key:&str)->Option<&'a Value>{
+    items?.iter().max_by_key(|item|match_score(item,title,author,title_key,authors_key)).filter(|item|match_score(item,title,author,title_key,authors_key)>0)
 }
 
 fn save(db:&Database,book_id:&str,source:&str,d:&Value)->Result<(),AppError>{
