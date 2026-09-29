@@ -410,7 +410,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             content
         ));
     }
-    let system = "你是 ReadFlow 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
+    let system = "你是 wereader-knowledge 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
         "compare" => "任务类型：跨书分析。明确列出各书的共识、分歧与可互相补充之处。",

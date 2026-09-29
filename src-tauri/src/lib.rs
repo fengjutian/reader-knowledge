@@ -36,5 +36,5 @@ pub fn run() {
             commands::ask_ai
         ])
         .run(tauri::generate_context!())
-        .expect("error while running ReadFlow")
+        .expect("error while running wereader-knowledge")
 }

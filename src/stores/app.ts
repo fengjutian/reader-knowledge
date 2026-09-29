@@ -17,7 +17,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   page: "dashboard",
-  theme: (localStorage.getItem("wereader-knowledge-theme") as "light" | "dark") || "light",
+  theme: (localStorage.getItem("readflow-theme") as "light" | "dark") || "light",
   searchOpen: false,
   setPage: page => set({ page }),
   setSearchOpen: searchOpen => set({ searchOpen }),
@@ -26,7 +26,7 @@ export const useAppStore = create<AppState>((set) => ({
   clearSelectedNote: () => set({ selectedNoteId: undefined }),
   toggleTheme: () => set(state => {
     const theme = state.theme === "light" ? "dark" : "light";
-    localStorage.setItem("wereader-knowledge-theme", theme);
+    localStorage.setItem("readflow-theme", theme);
     return { theme };
   }),
 }));

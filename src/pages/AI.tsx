@@ -8,7 +8,7 @@ import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiMode, AiTurn, Book } from "../types/domain";
 
 const modeLabels: Record<AiMode, string> = { ask: "全库提问", summary: "单书总结", compare: "跨书分析" };
-const historyKey = "wereader-knowledge-ai-history";
+const historyKey = "readflow-ai-history";
 
 interface AiConversation {
   id: string;
@@ -57,6 +57,7 @@ export function AI() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const openBook = useAppStore(state => state.openBook);
   useEffect(() => { localStorage.setItem(historyKey, JSON.stringify(history)); }, [history]);
   useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
@@ -66,6 +67,7 @@ export function AI() {
     textarea.style.height = "0";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [question]);
+  useEffect(() => { requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })); }, [turns, loading]);
   const selectedBooks = useMemo(() => bookIds.map(id => books.find(book => book.id === id)).filter((book): book is Book => Boolean(book)), [bookIds, books]);
   const visibleBooks = useMemo(() => {
     const query = bookQuery.trim().toLocaleLowerCase();
@@ -129,7 +131,7 @@ export function AI() {
           {history.length === 0 && <p className="ai-history__empty">提问后，对话会保存在这里</p>}
         </div>
       </aside>
-      <div className="ai-wrap">
+      <div className="ai-wrap" ref={scrollRef}>
       <div className="ai-modes">{(Object.keys(modeLabels) as AiMode[]).map(value => <button key={value} className={mode === value ? "active" : ""} onClick={() => changeMode(value)}>{modeLabels[value]}</button>)}</div>
       {(mode === "summary" || mode === "compare") && <section className="ai-book-picker">
         <div className="ai-book-picker__head"><div><strong>{mode === "summary" ? "选择一本书" : "选择 2–100 本书"}</strong><span>{mode === "summary" ? "仅显示有笔记的书" : "小范围深度比较，大范围确保每本书都参与分析"}</span></div><em>{bookIds.length} 本已选</em></div>

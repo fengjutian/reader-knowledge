@@ -1,4 +1,4 @@
-const DB_NAME = "wereader-knowledge-graph";
+const DB_NAME = "readflow-graph";
 const STORE = "analyses";
 
 function database() {

@@ -1,3 +1,3 @@
 fn main() {
-    readflow_lib::run()
+    wereader_knowledge_lib::run()
 }
