@@ -80,12 +80,12 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
 }
 
 pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> Result<MetadataFetchResult, AppError> {
-    if !matches!(source, "open_library" | "google_books") {
+    if !matches!(source, "smart" | "open_library" | "google_books") {
         return Err(AppError::Message("不支持的数据源".into()));
     }
     let c = db.connect()?;
     let (title, author): (String,String) = c.query_row("SELECT title,coalesce(author,'') FROM books WHERE book_id=?1 AND is_deleted=0", [book_id], |r| Ok((r.get(0)?,r.get(1)?)))?;
-    if !force {
+    if !force && source != "smart" {
         let fresh: Option<i64> = c.query_row("SELECT fetched_at FROM book_metadata_sources WHERE book_id=?1 AND source=?2", params![book_id,source], |r| r.get(0)).optional()?;
         if fresh.is_some_and(|v| now()-v < 7*24*60*60) {
             return Ok(MetadataFetchResult { book_id:book_id.into(), source:source.into(), status:"cached".into(), message:"使用 7 天内的本地缓存".into() });
@@ -93,10 +93,18 @@ pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> R
     }
     drop(c);
     let client=reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("ReadFlow/0.1 personal metadata client").build()?;
-    let data = if source == "open_library" { fetch_open_library(&client,&title,&author).await? } else { fetch_google_books(&client,&title,&author).await? };
+    let google_key=keyring::Entry::new("ReadFlow","google_books").ok().and_then(|entry|entry.get_password().ok()).filter(|value|!value.trim().is_empty());
+    let (actual_source,data) = match source {
+        "open_library" => ("open_library",fetch_open_library(&client,&title,&author).await?),
+        "google_books" => ("google_books",fetch_google_books(&client,&title,&author,google_key.as_deref()).await?),
+        _ => match fetch_google_books(&client,&title,&author,google_key.as_deref()).await {
+            Ok(Some(value)) => ("google_books",Some(value)),
+            Ok(None) | Err(_) => ("open_library",fetch_open_library(&client,&title,&author).await?),
+        },
+    };
     let Some(data)=data else { return Ok(MetadataFetchResult { book_id:book_id.into(),source:source.into(),status:"not_found".into(),message:"未找到可靠匹配".into() }) };
-    save(db,book_id,source,&data)?;
-    Ok(MetadataFetchResult { book_id:book_id.into(),source:source.into(),status:"updated".into(),message:"已保存到本地".into() })
+    save(db,book_id,actual_source,&data)?;
+    Ok(MetadataFetchResult { book_id:book_id.into(),source:actual_source.into(),status:"updated".into(),message:format!("已从 {actual_source} 保存到本地") })
 }
 
 async fn fetch_open_library(client:&reqwest::Client,title:&str,author:&str)->Result<Option<Value>,AppError>{
@@ -117,12 +125,16 @@ async fn fetch_open_library(client:&reqwest::Client,title:&str,author:&str)->Res
     Ok(Some(json!({"source_id":key,"source_url":format!("https://openlibrary.org{key}"),"title":d.get("title"),"authors":d.get("author_name"),"isbn":d.get("isbn"),"publisher":d.get("publisher").and_then(Value::as_array).and_then(|v|v.first()),"published_date":d.get("first_publish_year"),"page_count":d.get("number_of_pages_median"),"subjects":d.get("subject"),"cover_url":cover,"raw":d})))
 }
 
-async fn fetch_google_books(client:&reqwest::Client,title:&str,author:&str)->Result<Option<Value>,AppError>{
+async fn fetch_google_books(client:&reqwest::Client,title:&str,author:&str,api_key:Option<&str>)->Result<Option<Value>,AppError>{
     let core=core_title(title);
     let queries=[format!("intitle:{title} inauthor:{author}"),format!("intitle:{core}"),core];
     let mut found=None;
     for query in queries {
-        let value:Value=client.get("https://www.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","5")]).send().await?.error_for_status()?.json().await?;
+        let mut request=client.get("https://www.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","5")]);
+        if let Some(key)=api_key { request=request.query(&[("key",key)]); }
+        let response=request.send().await?;
+        if response.status()==reqwest::StatusCode::TOO_MANY_REQUESTS { return Err(AppError::Message("Google Books 请求已限流，请在设置中配置 API Key 或稍后重试".into())); }
+        let value:Value=response.error_for_status()?.json().await?;
         if let Some(items)=value.get("items").and_then(Value::as_array) {
             let best=items.iter().max_by_key(|item| match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors"));
             if let Some(item)=best.filter(|item|match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors")>0) { found=Some(item.clone()); break; }
