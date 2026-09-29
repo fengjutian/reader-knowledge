@@ -325,6 +325,101 @@ pub fn get_ai_settings(db: State<'_, Database>) -> Result<Option<AiSettings>, Ap
 }
 
 #[tauri::command]
+pub fn get_embedding_settings(db: State<'_, Database>) -> Result<Option<EmbeddingSettings>, AppError> {
+    db.connect()?.query_row("SELECT provider,endpoint,model FROM embedding_settings WHERE id=1", [], |row| Ok(EmbeddingSettings { provider: row.get(0)?, endpoint: row.get(1)?, model: row.get(2)? })).optional().map_err(AppError::from)
+}
+
+#[tauri::command]
+pub fn save_embedding_settings(db: State<'_, Database>, settings: EmbeddingSettings, api_key: Option<String>) -> Result<(), AppError> {
+    let url = reqwest::Url::parse(&settings.endpoint).map_err(|_| AppError::Message("Embedding Endpoint 格式无效".into()))?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if url.scheme() != "https" && !(local && url.scheme() == "http") { return Err(AppError::Message("Embedding Endpoint 必须使用 HTTPS".into())); }
+    if settings.provider.trim().is_empty() || settings.model.trim().is_empty() { return Err(AppError::Message("Embedding Provider 和模型不能为空".into())); }
+    if let Some(value) = api_key.filter(|value| !value.trim().is_empty()) { keyring::Entry::new("ReadFlow", &format!("embedding:{}", settings.provider))?.set_password(&value)?; }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    db.connect()?.execute("INSERT INTO embedding_settings(id,provider,endpoint,model,updated_at) VALUES(1,?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,endpoint=excluded.endpoint,model=excluded.model,updated_at=excluded.updated_at", rusqlite::params![settings.provider,settings.endpoint,settings.model,now])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_embedding(db: State<'_, Database>) -> Result<bool, AppError> {
+    let settings = embedding_settings(&db)?;
+    let provider = ai_provider_for_name(&db, &settings.provider)?;
+    provider.embed(&settings.endpoint, &settings.model, &["测试文本".into()]).await?;
+    Ok(true)
+}
+
+fn embedding_settings(db: &Database) -> Result<EmbeddingSettings, AppError> {
+    db.connect()?.query_row("SELECT provider,endpoint,model FROM embedding_settings WHERE id=1", [], |row| Ok(EmbeddingSettings { provider: row.get(0)?, endpoint: row.get(1)?, model: row.get(2)? })).optional()?.ok_or_else(|| AppError::Message("请先在设置中配置远程 Embedding 服务".into()))
+}
+
+fn ai_provider_for_name(_db: &Database, provider_name: &str) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {
+    let api_key = keyring::Entry::new("ReadFlow", &format!("embedding:{provider_name}")).and_then(|entry| entry.get_password()).or_else(|_| keyring::Entry::new("ReadFlow", &format!("ai:{provider_name}")).and_then(|entry| entry.get_password())).map_err(|_| AppError::Message("未找到 Embedding API Key，请在设置中填写并保存".into()))?;
+    Ok(crate::ai::providers::OpenAiCompatibleProvider { endpoint: String::new(), model: String::new(), api_key, http: reqwest::Client::new() })
+}
+
+fn cosine(left: &[f32], right: &[f32]) -> f64 {
+    if left.len() != right.len() || left.is_empty() { return 0.0; }
+    let mut dot = 0.0f64; let mut a = 0.0f64; let mut b = 0.0f64;
+    for (x, y) in left.iter().zip(right) { let x = *x as f64; let y = *y as f64; dot += x * y; a += x * x; b += y * y; }
+    if a == 0.0 || b == 0.0 { 0.0 } else { dot / (a.sqrt() * b.sqrt()) }
+}
+
+#[tauri::command]
+pub async fn build_semantic_relations(db: State<'_, Database>) -> Result<Vec<SemanticRelation>, AppError> {
+    let settings = embedding_settings(&db)?;
+    let provider = ai_provider_for_name(&db, &settings.provider)?;
+    let notes = {
+        let c = db.connect()?;
+        let mut query = c.prepare("SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,'' FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND b.is_deleted=0 UNION ALL SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,'' FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND b.is_deleted=0")?;
+        let values = query.query_map([], |r| Ok(Note { id:r.get(0)?,note_type:r.get(1)?,book_id:r.get(2)?,book_title:r.get(3)?,chapter:r.get(4)?,content:r.get(5)?,created_at:r.get(6)? }))?.collect::<Result<Vec<_>,_>>()?;
+        values
+    };
+    if notes.len() < 2 { return Ok(Vec::new()); }
+    let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
+    let mut missing = Vec::new();
+    {
+        let c = db.connect()?;
+        for note in &notes {
+            let text = format!("书名：{}\n章节：{}\n{}", note.book_title, note.chapter, note.content.chars().take(1600).collect::<String>());
+            let hash = format!("{:x}", md5::compute(format!("{}|{}", settings.model, text).as_bytes()));
+            let cached: Option<String> = c.query_row("SELECT vector_json FROM note_embeddings WHERE note_id=?1 AND content_hash=?2 AND model=?3", rusqlite::params![note.id,hash,settings.model], |row| row.get(0)).optional()?;
+            if let Some(json) = cached { vectors.insert(note.id.clone(), serde_json::from_str(&json)?); } else { missing.push((note.id.clone(), note.book_id.clone(), hash, text)); }
+        }
+    }
+    for batch in missing.chunks(32) {
+        let input = batch.iter().map(|item| item.3.clone()).collect::<Vec<_>>();
+        let embedded = provider.embed(&settings.endpoint, &settings.model, &input).await?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+        let mut c = db.connect()?; let tx = c.transaction()?;
+        for ((id, book_id, hash, _), vector) in batch.iter().zip(embedded) {
+            tx.execute("INSERT INTO note_embeddings(note_id,book_id,content_hash,model,vector_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(note_id) DO UPDATE SET book_id=excluded.book_id,content_hash=excluded.content_hash,model=excluded.model,vector_json=excluded.vector_json,updated_at=excluded.updated_at", rusqlite::params![id,book_id,hash,settings.model,serde_json::to_string(&vector)?,now])?;
+            vectors.insert(id.clone(), vector);
+        }
+        tx.commit()?;
+    }
+    let mut by_book: HashMap<String, Vec<&Note>> = HashMap::new();
+    for note in &notes { if vectors.contains_key(&note.id) { by_book.entry(note.book_id.clone()).or_default().push(note); } }
+    let mut book_vectors: HashMap<String, Vec<f32>> = HashMap::new();
+    for (book_id, items) in &by_book {
+        let Some(first) = items.first().and_then(|note| vectors.get(&note.id)) else { continue; };
+        let mut mean = vec![0.0f32; first.len()];
+        for note in items { if let Some(vector) = vectors.get(&note.id) { for (value, component) in mean.iter_mut().zip(vector) { *value += component; } } }
+        for value in &mut mean { *value /= items.len() as f32; }
+        book_vectors.insert(book_id.clone(), mean);
+    }
+    let ids = book_vectors.keys().cloned().collect::<Vec<_>>(); let mut candidates = Vec::new();
+    for a in 0..ids.len() { for b in a+1..ids.len() {
+        let score = cosine(&book_vectors[&ids[a]], &book_vectors[&ids[b]]); if score < 0.35 { continue; }
+        let best = |book_id: &String, target: &Vec<f32>| by_book[book_id].iter().max_by(|x,y| cosine(&vectors[&x.id],target).total_cmp(&cosine(&vectors[&y.id],target))).copied();
+        let evidence = [best(&ids[a], &book_vectors[&ids[b]]), best(&ids[b], &book_vectors[&ids[a]])].into_iter().flatten().map(|note| SemanticEvidence { book_id:note.book_id.clone(),note_id:note.id.clone(),text:note.content.chars().take(180).collect() }).collect();
+        candidates.push(SemanticRelation { id:format!("{}:{}",ids[a],ids[b]),from:ids[a].clone(),to:ids[b].clone(),score,keywords:Vec::new(),relation:if score >= 0.72 { "高度语义相关".into() } else if score >= 0.52 { "语义相关".into() } else { "潜在语义关联".into() },evidence });
+    }}
+    candidates.sort_by(|a,b| b.score.total_cmp(&a.score)); let mut degree: HashMap<String,usize> = HashMap::new();
+    Ok(candidates.into_iter().filter(|edge| { if degree.get(&edge.from).copied().unwrap_or(0)>=12 && degree.get(&edge.to).copied().unwrap_or(0)>=12 { return false; } *degree.entry(edge.from.clone()).or_default()+=1; *degree.entry(edge.to.clone()).or_default()+=1; true }).collect())
+}
+
+#[tauri::command]
 pub fn save_ai_settings(
     db: State<'_, Database>,
     settings: AiSettings,

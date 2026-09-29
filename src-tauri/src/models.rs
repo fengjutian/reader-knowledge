@@ -73,6 +73,34 @@ pub struct AiSettings {
     pub model: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingSettings {
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticRelation {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub score: f64,
+    pub keywords: Vec<String>,
+    pub relation: String,
+    pub evidence: Vec<SemanticEvidence>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticEvidence {
+    pub book_id: String,
+    pub note_id: String,
+    pub text: String,
+}
+
 #[derive(Serialize)]
 pub struct Citation {
     pub index: usize,

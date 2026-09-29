@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, Note, RelationAnalysis, SearchResult, SyncProgress } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, EmbeddingSettings, Note, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -18,6 +18,10 @@ export const api = {
   aiSettings: () => call<AiSettings | null>("get_ai_settings"),
   saveAiSettings: (settings: AiSettings, apiKey?: string) => call<void>("save_ai_settings", { settings, apiKey }),
   testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),
+  embeddingSettings: () => call<EmbeddingSettings | null>("get_embedding_settings"),
+  saveEmbeddingSettings: (settings: EmbeddingSettings, apiKey?: string) => call<void>("save_embedding_settings", { settings, apiKey }),
+  testEmbedding: () => call<boolean>("test_embedding"),
+  semanticRelations: () => call<SemanticRelation[]>("build_semantic_relations"),
   ask: (request: AiRequest) => call<AiAnswer>("ask_ai", { request }),
   analyzeRelation: (leftBookId: string, rightBookId: string, keywords: string[], refresh = false) => call<RelationAnalysis>("analyze_book_relation", { request: { leftBookId, rightBookId, keywords, refresh } }),
   cachedRelation: (leftBookId: string, rightBookId: string, keywords: string[]) => call<RelationAnalysis | null>("get_cached_relation_analysis", { request: { leftBookId, rightBookId, keywords, refresh: false } }),

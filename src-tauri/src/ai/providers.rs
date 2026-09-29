@@ -46,3 +46,23 @@ impl AiProvider for OpenAiCompatibleProvider {
         })
     }
 }
+
+impl OpenAiCompatibleProvider {
+    pub async fn embed(&self, endpoint: &str, model: &str, input: &[String]) -> Result<Vec<Vec<f32>>, crate::error::AppError> {
+        let response = self.http.post(endpoint).bearer_auth(&self.api_key).json(&serde_json::json!({ "model": model, "input": input })).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(crate::error::AppError::Message(format!("Embedding 服务请求失败（HTTP {}）", status.as_u16())));
+        }
+        let value: serde_json::Value = response.json().await?;
+        let data = value["data"].as_array().ok_or_else(|| crate::error::AppError::Message("Embedding 响应格式无效".into()))?;
+        let mut ordered = data.iter().map(|item| {
+            let index = item["index"].as_u64().unwrap_or(0) as usize;
+            let vector = item["embedding"].as_array().ok_or_else(|| crate::error::AppError::Message("Embedding 向量格式无效".into()))?.iter().map(|value| value.as_f64().unwrap_or(0.0) as f32).collect::<Vec<_>>();
+            Ok((index, vector))
+        }).collect::<Result<Vec<_>, crate::error::AppError>>()?;
+        ordered.sort_by_key(|item| item.0);
+        if ordered.len() != input.len() { return Err(crate::error::AppError::Message("Embedding 返回数量与输入不一致".into())); }
+        Ok(ordered.into_iter().map(|item| item.1).collect())
+    }
+}

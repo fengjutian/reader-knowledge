@@ -36,6 +36,10 @@ pub fn run() {
             commands::ask_ai,
             commands::analyze_book_relation,
             commands::get_cached_relation_analysis
+            ,commands::get_embedding_settings
+            ,commands::save_embedding_settings
+            ,commands::test_embedding
+            ,commands::build_semantic_relations
         ])
         .run(tauri::generate_context!())
         .expect("error while running wereader")
