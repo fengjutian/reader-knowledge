@@ -2,9 +2,11 @@ import { create } from "zustand";
 
 export type Page = "dashboard" | "books" | "highlights" | "thoughts" | "search" | "ai" | "graph" | "settings";
 export type Theme = "light" | "dark" | "voyage";
+export type FontFamily = "system" | "source-han-sans" | "source-han-serif" | "lxgw-wenkai";
 interface AppState {
   page: Page;
   theme: Theme;
+  fontFamily: FontFamily;
   searchOpen: boolean;
   selectedBookId?: string;
   selectedNoteId?: string;
@@ -17,6 +19,7 @@ interface AppState {
   openAiCompare: (bookIds: string[]) => void;
   clearAiDraft: () => void;
   setTheme: (theme: Theme) => void;
+  setFontFamily: (fontFamily: FontFamily) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -24,6 +27,10 @@ export const useAppStore = create<AppState>((set) => ({
   theme: (() => {
     const saved = localStorage.getItem("readflow-theme");
     return saved === "dark" || saved === "voyage" ? saved : "light";
+  })(),
+  fontFamily: (() => {
+    const saved = localStorage.getItem("wereader-font-family");
+    return saved === "source-han-sans" || saved === "source-han-serif" || saved === "lxgw-wenkai" ? saved : "system";
   })(),
   searchOpen: false,
   setPage: page => set({ page }),
@@ -36,6 +43,10 @@ export const useAppStore = create<AppState>((set) => ({
   setTheme: theme => set(() => {
     localStorage.setItem("readflow-theme", theme);
     return { theme };
+  }),
+  setFontFamily: fontFamily => set(() => {
+    localStorage.setItem("wereader-font-family", fontFamily);
+    return { fontFamily };
   }),
 }));
 

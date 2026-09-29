@@ -42,6 +42,7 @@ export interface AiRequest { question: string; mode: AiMode; bookIds: string[]; 
 export interface AiSettings { provider: string; endpoint: string; model: string }
 export interface EmbeddingSettings { provider: string; endpoint: string; model: string }
 export interface SemanticRelation { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: { bookId: string; noteId: string; text: string }[] }
+export interface LocalModelStatus { installed: boolean; sizeBytes: number; model: string }
 export type RelationKind = "same_concept" | "agreement" | "conflict" | "complementary" | "causal" | "application" | "uncertain";
 export interface RelationEvidence { bookId: string; noteId: string; noteType: NoteType; text: string }
 export interface RelationClaim { relation: RelationKind; summary: string; confidence: number; evidence: RelationEvidence[] }

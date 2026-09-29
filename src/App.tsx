@@ -13,11 +13,12 @@ import { Settings } from "./pages/Settings";
 const KnowledgeGraph = lazy(() => import("./pages/KnowledgeGraph").then(module => ({ default: module.KnowledgeGraph })));
 const pages: Record<Page, ReactNode> = {dashboard:<Dashboard/>,books:<Books/>,highlights:<Notes type="highlight"/>,thoughts:<Notes type="thought"/>,search:<SearchPage/>,ai:<AI/>,graph:<Suspense fallback={<div className="notes-loading">正在打开图谱…</div>}><KnowledgeGraph/></Suspense>,settings:<Settings/>};
 export default function App(){
-  const {page,theme,selectedBookId}=useAppStore();
+  const {page,theme,fontFamily,selectedBookId}=useAppStore();
   const visitedPages=useRef(new Set<Page>()).current;
   const scrollPositions=useRef<Partial<Record<Page,number>>>({});
   visitedPages.add(page);
   useEffect(()=>{document.documentElement.dataset.theme=theme},[theme]);
+  useEffect(()=>{document.documentElement.dataset.font=fontFamily},[fontFamily]);
   useLayoutEffect(()=>{
     const frame=requestAnimationFrame(()=>window.scrollTo({top:scrollPositions.current[page]??0}));
     return ()=>{cancelAnimationFrame(frame);scrollPositions.current[page]=window.scrollY};

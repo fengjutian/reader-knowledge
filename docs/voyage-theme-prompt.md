@@ -15,15 +15,15 @@
 ## 设计令牌
 
 ```css
---bg:#f7f8ff; --surface:rgba(255,255,255,.86); --surface-hover:#edf0ff;
---text:#101122; --secondary:#62677d; --muted:#9196aa; --border:#dfe3f1;
---accent:#5c5ce2; --accent-soft:#ececff;
---glow-pink:rgba(240,139,195,.24); --glow-blue:rgba(126,153,255,.20); --glow-mint:rgba(115,220,214,.15);
+--bg:#f1f8ed; --surface:rgba(255,255,252,.91); --surface-hover:#e5efe0;
+--text:#17271c; --secondary:#566557; --muted:#819083; --border:#cbd9c8;
+--accent:#173f38; --accent-soft:#dcebd5;
+--watercolor-teal:#2e756e; --watercolor-wine:#7f2945; --watercolor-copper:#b07a49;
 ```
 
 ## 验收要点
 
-- 首屏能明显感受到冷白、蓝紫和柔焦光晕组成的主题个性。
+- 首屏能明显感受到薄荷纸面、墨绿交互与原创水彩星云组成的主题个性。
 - 卡片内容区清晰，玻璃效果不会降低可读性。
 - 主题覆盖所有页面，而非只修改首页。
 - 与默认纸张主题、深色主题可切换并持久化保存。

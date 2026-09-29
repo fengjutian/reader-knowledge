@@ -62,6 +62,7 @@
 .settings-tabs button:hover { color:var(--text); }
 .settings-tabs button.active { background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0001; }
 .settings-card--appearance { align-items:start; }
+.appearance-settings { display:flex;flex-direction:column;gap:10px; }
 .theme-options { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:100%; }
 .theme-option { position:relative;display:flex;min-width:0;flex-direction:column;gap:10px;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
 .theme-option:hover { border-color:var(--accent);transform:translateY(-1px); }
@@ -84,12 +85,28 @@
 .theme-option__copy strong { font-size:13px; }
 .theme-option__copy small { overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
 .theme-option__check { position:absolute;right:12px;bottom:29px;display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:var(--accent);color:white; }
+.font-options { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%; }
+.font-option { position:relative;display:flex;min-width:0;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
+.font-option:hover { border-color:var(--accent);transform:translateY(-1px); }
+.font-option.active { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft); }
+.font-option__sample { overflow:hidden;font-size:17px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap; }
+.font-option__copy { display:flex;flex-direction:column;gap:2px;padding-right:22px; }
+.font-option__copy strong { font-size:13px; }
+.font-option__copy small { color:var(--muted);font-size:10px;line-height:1.4; }
+.font-option__check { position:absolute;right:10px;bottom:11px;display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:var(--accent);color:white; }
+.font-option--system { font-family:"Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,sans-serif; }
+.font-option--source-han-sans { font-family:"Source Han Sans SC","Source Han Sans CN","Noto Sans CJK SC","思源黑体",sans-serif; }
+.font-option--source-han-serif { font-family:"Source Han Serif SC","Source Han Serif CN","Noto Serif CJK SC","思源宋体",serif; }
+.font-option--lxgw-wenkai { font-family:"LXGW WenKai","霞鹜文楷","KaiTi",cursive; }
+.note-card blockquote { font-family:var(--app-font); }
 .field-hint { color:var(--secondary);line-height:1.4; }
+.local-model-status { display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px; }.local-model-status > span { padding:4px 8px;border-radius:999px;background:var(--surface-hover); }.local-model-status > span.installed { color:#27875a;background:color-mix(in srgb,#27875a 12%,transparent); }
 .secret-saved { display:inline-flex;align-items:center;gap:3px;margin-left:8px;color:#27875a;font-weight:500; }
 
 /* Compact desktop layout */
 :root {
-  font-family: "Source Han Serif SC", "Source Han Serif CN", "Noto Serif CJK SC", "思源宋体", "Songti SC", SimSun, serif;
+  --app-font:"Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;
+  font-family:var(--app-font);
   --bg: #f5f1e8;
   --surface: #fffdf8;
   --surface-hover: #eee8dc;
@@ -101,6 +118,10 @@
   --accent-soft: #f3e1d9;
   --radius-lg: 11px;
 }
+
+[data-font=source-han-sans] { --app-font:"Source Han Sans SC","Source Han Sans CN","Noto Sans CJK SC","思源黑体","Microsoft YaHei UI",sans-serif; }
+[data-font=source-han-serif] { --app-font:"Source Han Serif SC","Source Han Serif CN","Noto Serif CJK SC","思源宋体","Songti SC",SimSun,serif; }
+[data-font=lxgw-wenkai] { --app-font:"LXGW WenKai","霞鹜文楷","KaiTi","STKaiti",serif; }
 
 [data-theme=dark] {
   --bg: #201e1a;
@@ -442,24 +463,34 @@
 .relation-evidence { display:block;width:100%;margin:7px 0;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-hover);color:var(--secondary);font-size:11px;line-height:1.55;text-align:left; }
 .relation-evidence:hover { border-color:var(--accent);color:var(--text); }
 
+/* Fixed application viewport: each page owns its scroll area. */
+html,body,#root { height:100%;overflow:hidden; }
+.app-shell { height:100vh;min-height:0;overflow:hidden; }
+.main-content { height:100vh;overflow:hidden; }
+.page { height:100vh;overflow-y:auto;overscroll-behavior:contain; }
+.page:has(.settings) { display:flex;min-height:0;flex-direction:column;overflow:hidden; }
+.page:has(.settings) > .page-header { flex:none; }
+.page:has(.settings) .settings { min-height:0;flex:1;overflow-y:auto;padding-right:8px;padding-bottom:32px;overscroll-behavior:contain;scrollbar-gutter:stable; }
+.page:has(.settings) .settings-tabs { position:sticky;z-index:3;top:0;flex:none;box-shadow:0 8px 18px var(--bg); }
+
 /* Voyage — pale paper, botanical ink and original watercolor clouds. */
 [data-theme=voyage] {
-  font-family:Inter,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  font-family:var(--app-font);
   --bg:#f1f8ed;--surface:rgba(255,255,252,.91);--surface-hover:#e5efe0;
   --text:#17271c;--secondary:#566557;--muted:#819083;--border:#cbd9c8;
   --accent:#173f38;--accent-soft:#dcebd5;--radius-lg:18px;color-scheme:light;
 }
 [data-theme=voyage] body {
   background-color:var(--bg);
-  background-image:linear-gradient(rgba(241,248,237,.5),rgba(241,248,237,.5)),url('/assets/voyage-watercolor.png');
-  background-position:center,center;background-repeat:no-repeat;background-size:cover;background-attachment:fixed;
+  background-image:linear-gradient(rgba(241,248,237,.56),rgba(241,248,237,.56)),url('/assets/voyage-watercolor.png');
+  background-position:top center,top center;background-repeat:no-repeat;background-size:100% min(920px,100vh);background-attachment:scroll;
 }
 [data-theme=voyage] .sidebar { background:rgba(245,250,241,.9);border-right-color:rgba(125,151,120,.34);box-shadow:12px 0 36px rgba(23,63,56,.05);backdrop-filter:blur(18px) saturate(110%); }
-[data-theme=voyage] .brand { color:#153f39;font-family:Georgia,"Songti SC",serif;letter-spacing:-.015em; }
+[data-theme=voyage] .brand { color:#153f39;font-family:var(--app-font);letter-spacing:-.015em; }
 [data-theme=voyage] .brand__mark { background:#123e39;border-radius:50%;box-shadow:0 5px 14px rgba(18,62,57,.2); }
 [data-theme=voyage] .quick-search { background:rgba(255,255,252,.82);border-color:var(--border); }
 [data-theme=voyage] .nav button.active,[data-theme=voyage] .sidebar__footer button.active { background:#dfead9;color:#173f38; }
-[data-theme=voyage] .page-header h1,[data-theme=voyage] .panel h2,[data-theme=voyage] .settings-card h2,[data-theme=voyage] .book-card h3 { font-family:Georgia,"Noto Serif CJK SC","Songti SC",serif;font-weight:600;letter-spacing:-.025em; }
+[data-theme=voyage] .page-header h1,[data-theme=voyage] .panel h2,[data-theme=voyage] .settings-card h2,[data-theme=voyage] .book-card h3 { font-family:var(--app-font);font-weight:600;letter-spacing:-.025em; }
 [data-theme=voyage] .page-header h1 { color:#102f29;font-size:32px; }
 [data-theme=voyage] .stat-card,[data-theme=voyage] .panel,[data-theme=voyage] .book-card,[data-theme=voyage] .note-card,[data-theme=voyage] .settings-card { border-color:rgba(156,176,151,.48);background:rgba(255,255,252,.88);box-shadow:0 1px 0 rgba(255,255,255,.95) inset,0 12px 34px rgba(29,65,43,.06);backdrop-filter:blur(10px) saturate(105%); }
 [data-theme=voyage] .focus-panel { background:linear-gradient(135deg,rgba(255,255,252,.94),rgba(226,239,218,.9)); }

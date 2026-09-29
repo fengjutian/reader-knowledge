@@ -403,9 +403,12 @@ pub fn delete_local_embedding(app: AppHandle) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub async fn build_semantic_relations(db: State<'_, Database>) -> Result<Vec<SemanticRelation>, AppError> {
-    let settings = embedding_settings(&db)?;
-    let provider = ai_provider_for_name(&db, &settings.provider)?;
+pub async fn build_semantic_relations(app: AppHandle, db: State<'_, Database>) -> Result<Vec<SemanticRelation>, AppError> {
+    let local_path = local_model_dir(&app)?;
+    let use_local = directory_size(&local_path) > 10_000_000;
+    let settings = if use_local { None } else { Some(embedding_settings(&db)?) };
+    let provider = settings.as_ref().map(|value| ai_provider_for_name(&db, &value.provider)).transpose()?;
+    let model_name = settings.as_ref().map(|value| value.model.as_str()).unwrap_or("local:bge-small-zh-v1.5");
     let notes = {
         let c = db.connect()?;
         let mut query = c.prepare("SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,'' FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND b.is_deleted=0 UNION ALL SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,'' FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND b.is_deleted=0")?;
@@ -419,18 +422,21 @@ pub async fn build_semantic_relations(db: State<'_, Database>) -> Result<Vec<Sem
         let c = db.connect()?;
         for note in &notes {
             let text = format!("书名：{}\n章节：{}\n{}", note.book_title, note.chapter, note.content.chars().take(1600).collect::<String>());
-            let hash = format!("{:x}", md5::compute(format!("{}|{}", settings.model, text).as_bytes()));
-            let cached: Option<String> = c.query_row("SELECT vector_json FROM note_embeddings WHERE note_id=?1 AND content_hash=?2 AND model=?3", rusqlite::params![note.id,hash,settings.model], |row| row.get(0)).optional()?;
+            let hash = format!("{:x}", md5::compute(format!("{}|{}", model_name, text).as_bytes()));
+            let cached: Option<String> = c.query_row("SELECT vector_json FROM note_embeddings WHERE note_id=?1 AND content_hash=?2 AND model=?3", rusqlite::params![note.id,hash,model_name], |row| row.get(0)).optional()?;
             if let Some(json) = cached { vectors.insert(note.id.clone(), serde_json::from_str(&json)?); } else { missing.push((note.id.clone(), note.book_id.clone(), hash, text)); }
         }
     }
-    for batch in missing.chunks(32) {
-        let input = batch.iter().map(|item| item.3.clone()).collect::<Vec<_>>();
-        let embedded = provider.embed(&settings.endpoint, &settings.model, &input).await?;
+    let local_vectors = if use_local && !missing.is_empty() {
+        let input = missing.iter().map(|item| item.3.clone()).collect::<Vec<_>>(); let path = local_path.clone();
+        Some(tokio::task::spawn_blocking(move || { let mut model = fastembed::TextEmbedding::try_new(fastembed::TextInitOptions::new(fastembed::EmbeddingModel::BGESmallZHV15).with_cache_dir(path).with_show_download_progress(false)).map_err(|error| error.to_string())?; model.embed(input, Some(32)).map_err(|error| error.to_string()) }).await.map_err(|error| AppError::Message(error.to_string()))?.map_err(|error| AppError::Message(format!("本地 Embedding 失败：{error}")))?)
+    } else { None };
+    for (batch_index, batch) in missing.chunks(32).enumerate() {
+        let embedded = if let Some(values) = &local_vectors { values[batch_index * 32..(batch_index * 32 + batch.len())].to_vec() } else { let input = batch.iter().map(|item| item.3.clone()).collect::<Vec<_>>(); let settings = settings.as_ref().expect("remote settings"); provider.as_ref().expect("remote provider").embed(&settings.endpoint, &settings.model, &input).await? };
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
         let mut c = db.connect()?; let tx = c.transaction()?;
         for ((id, book_id, hash, _), vector) in batch.iter().zip(embedded) {
-            tx.execute("INSERT INTO note_embeddings(note_id,book_id,content_hash,model,vector_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(note_id) DO UPDATE SET book_id=excluded.book_id,content_hash=excluded.content_hash,model=excluded.model,vector_json=excluded.vector_json,updated_at=excluded.updated_at", rusqlite::params![id,book_id,hash,settings.model,serde_json::to_string(&vector)?,now])?;
+            tx.execute("INSERT INTO note_embeddings(note_id,book_id,content_hash,model,vector_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(note_id) DO UPDATE SET book_id=excluded.book_id,content_hash=excluded.content_hash,model=excluded.model,vector_json=excluded.vector_json,updated_at=excluded.updated_at", rusqlite::params![id,book_id,hash,model_name,serde_json::to_string(&vector)?,now])?;
             vectors.insert(id.clone(), vector);
         }
         tx.commit()?;
