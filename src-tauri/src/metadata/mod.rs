@@ -95,11 +95,14 @@ pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> R
     let client=reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("ReadFlow/0.1 personal metadata client").build()?;
     let google_key=keyring::Entry::new("ReadFlow","google_books").ok().and_then(|entry|entry.get_password().ok()).filter(|value|!value.trim().is_empty());
     let (actual_source,data) = match source {
-        "open_library" => ("open_library",fetch_open_library(&client,&title,&author).await?),
+        "open_library" => match fetch_open_library(&client,&title,&author).await? {
+            Some(value) => ("open_library",Some(value)),
+            None => ("google_books",fetch_google_books(&client,&title,&author,google_key.as_deref()).await?),
+        },
         "google_books" => ("google_books",fetch_google_books(&client,&title,&author,google_key.as_deref()).await?),
-        _ => match fetch_google_books(&client,&title,&author,google_key.as_deref()).await {
-            Ok(Some(value)) => ("google_books",Some(value)),
-            Ok(None) | Err(_) => ("open_library",fetch_open_library(&client,&title,&author).await?),
+        _ => match fetch_open_library(&client,&title,&author).await? {
+            Some(value) => ("open_library",Some(value)),
+            None => ("google_books",fetch_google_books(&client,&title,&author,google_key.as_deref()).await?),
         },
     };
     let Some(data)=data else { return Ok(MetadataFetchResult { book_id:book_id.into(),source:source.into(),status:"not_found".into(),message:"未找到可靠匹配".into() }) };
@@ -130,7 +133,7 @@ async fn fetch_google_books(client:&reqwest::Client,title:&str,author:&str,api_k
     let queries=[format!("intitle:{title} inauthor:{author}"),format!("intitle:{core}"),core];
     let mut found=None;
     for query in queries {
-        let mut request=client.get("https://www.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","5")]);
+        let mut request=client.get("https://books.googleapis.com/books/v1/volumes").query(&[("q",query.as_str()),("maxResults","5"),("printType","books")]);
         if let Some(key)=api_key { request=request.query(&[("key",key)]); }
         let response=request.send().await?;
         if response.status()==reqwest::StatusCode::TOO_MANY_REQUESTS { return Err(AppError::Message("Google Books 请求已限流，请在设置中配置 API Key 或稍后重试".into())); }

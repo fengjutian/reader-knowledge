@@ -7,12 +7,12 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { useAppStore } from "../stores/app";
 import type { BookMetadataRow, MetadataFetchResult } from "../types/domain";
 
-const labels:Record<string,string>={open_library:"Open Library",google_books:"Google Books",douban:"豆瓣",manual:"手动"};
+const labels:Record<string,string>={smart:"智能匹配",open_library:"Open Library",google_books:"Google Books",douban:"豆瓣",manual:"手动"};
 function readableError(error:unknown){const text=error instanceof Error?error.message:String(error);if(text.includes("429")||text.includes("Too Many Requests"))return "请求过于频繁，数据源已限流，请稍后再试。";if(text.includes("network error"))return "无法连接数据源，请检查网络后重试。";return text.length>180?`${text.slice(0,180)}…`:text;}
 
 export function BookMetadata(){
  const [items,setItems]=useState<BookMetadataRow[]>([]),[selected,setSelected]=useState<Set<string>>(new Set()),[busy,setBusy]=useState<Set<string>>(new Set());
- const [query,setQuery]=useState(""),[source,setSource]=useState("google_books"),[doubanUrl,setDoubanUrl]=useState(""),[message,setMessage]=useState<MessageValue>(),[loading,setLoading]=useState(true),[page,setPage]=useState(0); const pageSize=100;
+ const [query,setQuery]=useState(""),[source,setSource]=useState("open_library"),[doubanUrl,setDoubanUrl]=useState(""),[message,setMessage]=useState<MessageValue>(),[loading,setLoading]=useState(true),[page,setPage]=useState(0); const pageSize=100;
  const openBook=useAppStore(s=>s.openBook),closeMessage=useCallback(()=>setMessage(undefined),[]);
  const load=()=>api.bookMetadata().then(setItems).catch(e=>setMessage({kind:"error",text:readableError(e)})).finally(()=>setLoading(false)); useEffect(()=>{void load()},[]);
  const filtered=useMemo(()=>items.filter(x=>`${x.title} ${x.author} ${x.isbn} ${x.publisher}`.toLowerCase().includes(query.toLowerCase())),[items,query]);
