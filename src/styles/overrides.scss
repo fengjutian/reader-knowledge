@@ -2,12 +2,21 @@
   grid-template-columns: 1fr;
 }
 
-.reading-dashboard { margin-top:28px;padding-top:24px;border-top:1px solid var(--border); }
+.dashboard-tabs { display:flex;gap:4px;margin-bottom:18px;padding:4px;width:max-content;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--surface) 88%,transparent); }
+.dashboard-tabs button { display:flex;align-items:center;gap:7px;padding:8px 16px;border:0;border-radius:7px;background:transparent;color:var(--secondary);font-size:13px; }
+.dashboard-tabs button svg { width:16px;height:16px; }
+.dashboard-tabs button.active { background:var(--accent);color:white;box-shadow:0 3px 10px color-mix(in srgb,var(--accent) 22%,transparent); }
+.dashboard-module { min-height:340px; }
+.reading-dashboard { min-height:480px; }
 .reading-dashboard__header { display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px; }
 .reading-dashboard__header h2 { margin:5px 0 0;font-size:22px; }
 .period-tabs { display:flex;gap:3px;padding:4px;border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--surface) 88%,transparent); }
 .period-tabs button { padding:6px 13px;border:0;border-radius:6px;background:transparent;color:var(--secondary);font-size:12px; }
 .period-tabs button.active { background:var(--accent);color:white;box-shadow:0 3px 9px color-mix(in srgb,var(--accent) 24%,transparent); }
+.reading-module-tabs { display:flex;gap:24px;margin-bottom:14px;border-bottom:1px solid var(--border); }
+.reading-module-tabs button { position:relative;padding:8px 2px 11px;border:0;background:transparent;color:var(--muted);font-size:13px; }
+.reading-module-tabs button.active { color:var(--text);font-weight:650; }
+.reading-module-tabs button.active::after { content:"";position:absolute;right:0;bottom:-1px;left:0;height:2px;border-radius:2px;background:var(--accent); }
 .reading-kpis { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px; }
 .reading-kpis > div { display:grid;grid-template-columns:auto 1fr;gap:3px 9px;padding:15px 16px;border:1px solid var(--border);border-radius:var(--radius-lg);background:color-mix(in srgb,var(--surface) 90%,transparent); }
 .reading-kpis svg { grid-row:1/3;width:18px;color:var(--accent); }
@@ -15,6 +24,8 @@
 .reading-kpis strong { font-size:16px;font-weight:650; }
 .reading-kpis .is-down svg,.reading-kpis .is-down strong { color:#b4574e; }
 .reading-charts { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(310px,1fr);gap:10px; }
+.reading-module-content { display:flex;flex-direction:column;gap:10px; }
+.chart-card--wide .chart-body { height:310px; }
 .chart-card { min-width:0;padding:18px; }
 .chart-heading { display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px; }
 .chart-heading span,.chart-heading small { color:var(--muted);font-size:11px; }
@@ -28,7 +39,27 @@
 .calendar-body { height:190px; }
 .chart-tooltip { display:flex;min-width:120px;flex-direction:column;gap:3px;padding:8px 10px;background:var(--surface);color:var(--text); }
 .chart-tooltip span { color:var(--secondary);font-size:11px; }
+.ranking-layout { display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,.8fr);gap:10px; }
+.reading-ranking,.reading-summary,.read-method { padding:18px; }
+.reading-ranking ol { margin:4px 0 0;padding:0;list-style:none; }
+.reading-ranking li { display:grid;grid-template-columns:28px 34px minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px 2px;border-top:1px solid var(--border); }
+.reading-ranking li:first-child { border-top:0; }
+.ranking-number { color:var(--muted);font-size:12px;text-align:center; }
+.reading-ranking img,.ranking-cover { width:34px;height:46px;object-fit:cover;border-radius:3px;background:var(--accent-soft); }
+.ranking-cover { display:grid;place-items:center;color:var(--accent); }.ranking-cover svg { width:15px; }
+.reading-ranking li > div:nth-child(3) { display:flex;min-width:0;flex-direction:column;gap:3px; }
+.reading-ranking li strong,.reading-ranking li span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.reading-ranking li strong { font-size:13px; }.reading-ranking li div span { color:var(--muted);font-size:11px; }
+.reading-ranking li b { color:var(--secondary);font-size:12px;font-weight:600; }
+.ranking-side { display:flex;flex-direction:column;gap:10px; }
+.summary-grid { display:grid;grid-template-columns:repeat(2,1fr);gap:8px; }
+.summary-grid > div { display:flex;min-height:74px;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:var(--surface-hover); }
+.summary-grid strong { font-size:18px; }.summary-grid span { margin-top:4px;color:var(--muted);font-size:11px; }
+.chart-empty--small { height:150px; }
+.read-method { display:flex;align-items:center;gap:13px; }.read-method > svg { width:27px;color:var(--accent); }
+.read-method > div { display:flex;flex-direction:column;gap:3px; }.read-method span,.read-method small { color:var(--muted);font-size:11px; }.read-method strong { font-size:20px; }
 @media(max-width:1100px) { .reading-charts { grid-template-columns:1fr; }.reading-kpis { grid-template-columns:repeat(2,1fr); } }
+@media(max-width:1100px) { .ranking-layout { grid-template-columns:1fr; } }
 
 .page--module[hidden] { display:none; }
 
@@ -498,6 +529,7 @@
 
 /* Fixed application viewport: each page owns its scroll area. */
 html,body,#root { height:100%;overflow:hidden; }
+body { background-color:var(--bg); }
 .app-shell { height:100vh;min-height:0;overflow:hidden; }
 .main-content { height:100vh;overflow:hidden; }
 .page { height:100vh;overflow-y:auto;overscroll-behavior:contain; }
@@ -515,8 +547,8 @@ html,body,#root { height:100%;overflow:hidden; }
 }
 [data-theme=voyage] body {
   background-color:var(--bg);
-  background-image:linear-gradient(rgba(241,248,237,.56),rgba(241,248,237,.56)),url('/assets/voyage-watercolor.png');
-  background-position:top center,top center;background-repeat:no-repeat;background-size:100% min(920px,100vh);background-attachment:scroll;
+  background-image:linear-gradient(rgba(241,248,237,.28),rgba(241,248,237,.28)),url('/assets/voyage-watercolor.png');
+  background-position:top center,top center;background-repeat:no-repeat,no-repeat;background-size:100% min(920px,100vh),cover;background-attachment:scroll,scroll;
 }
 [data-theme=voyage] .sidebar { background:rgba(245,250,241,.9);border-right-color:rgba(125,151,120,.34);box-shadow:12px 0 36px rgba(23,63,56,.05);backdrop-filter:blur(18px) saturate(110%); }
 [data-theme=voyage] .brand { color:#153f39;font-family:var(--app-font);letter-spacing:-.015em; }

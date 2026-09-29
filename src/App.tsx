@@ -17,7 +17,12 @@ export default function App(){
   const visitedPages=useRef(new Set<Page>()).current;
   const scrollPositions=useRef<Partial<Record<Page,number>>>({});
   visitedPages.add(page);
-  useEffect(()=>{document.documentElement.dataset.theme=theme},[theme]);
+  useLayoutEffect(()=>{
+    document.documentElement.dataset.theme=theme;
+    // This attribute is only needed before React mounts. If it survives, its
+    // inline selector overrides the background of the newly selected theme.
+    delete document.documentElement.dataset.bootTheme;
+  },[theme]);
   useEffect(()=>{document.documentElement.dataset.font=fontFamily},[fontFamily]);
   useLayoutEffect(()=>{
     const frame=requestAnimationFrame(()=>window.scrollTo({top:scrollPositions.current[page]??0}));

@@ -33,13 +33,20 @@ export interface DashboardStats {
   lastSyncedAt?: string;
 }
 
-export type ReadingPeriod = "weekly" | "monthly" | "annually";
+export type ReadingPeriod = "weekly" | "monthly" | "annually" | "overall";
 export interface ReadingCategory {
   categoryTitle: string;
   readingTime: number;
   readingCount: number;
   val: number;
 }
+export interface ReadingLongestItem {
+  book?: { bookId: string; title: string; author?: string; cover?: string };
+  albumInfo?: { albumId?: string; title?: string; author?: string; cover?: string };
+  readTime: number;
+  tags?: string[];
+}
+export interface ReadingStatItem { stat: string; counts: string; scheme?: string }
 export interface ReadingStats {
   baseTime?: number;
   readTimes?: Record<string, number>;
@@ -50,6 +57,13 @@ export interface ReadingStats {
   compare?: number;
   preferCategory?: ReadingCategory[];
   preferCategoryWord?: string;
+  preferTime?: number[];
+  preferTimeWord?: string;
+  readLongest?: ReadingLongestItem[];
+  readStat?: ReadingStatItem[];
+  readRate?: number;
+  wrReadTime?: number;
+  wrListenTime?: number;
 }
 
 export interface SearchResult extends Note { score: number }
