@@ -44,13 +44,7 @@ export function Books() {
   const filtered = useMemo(() => items
     .filter(book => `${book.title}${book.author}`.toLowerCase().includes(q.toLowerCase()))
     .filter(book => category === "all" || book.category === category)
-    .filter(book => {
-      const progress = Number(book.progress) || 0;
-      if (readingStatus === "unread") return progress <= 0;
-      if (readingStatus === "reading") return progress > 0 && progress < 100;
-      if (readingStatus === "finished") return progress >= 100;
-      return true;
-    })
+    .filter(book => readingStatus === "all" || book.readingStatus === readingStatus)
     .filter(book => {
       if (!withHighlights && !withThoughts) return true;
       return (withHighlights && book.highlightCount > 0) || (withThoughts && book.thoughtCount > 0);

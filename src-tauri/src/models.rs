@@ -35,6 +35,7 @@ pub struct Book {
     pub thought_count: i64,
     pub progress: i64,
     pub updated_at: String,
+    pub reading_status: String,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

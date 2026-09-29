@@ -10,6 +10,7 @@ export interface Book {
   thoughtCount: number;
   progress: number;
   updatedAt: string;
+  readingStatus: "unread" | "reading" | "finished";
 }
 export interface BookDetail extends Book {
   deepLink?: string;
