@@ -77,8 +77,23 @@ fn parse_douban_html(html: &str, source_id: &str, source_url: &str) -> Result<Va
     let isbn=json_ld.as_ref().and_then(|v|v.get("isbn")).and_then(Value::as_str).map(|v|vec![v.to_owned()]).unwrap_or_default();
     let image=json_ld.as_ref().and_then(|v|v.get("image")).and_then(Value::as_str).map(str::to_owned).or_else(||meta("og:image"));
     let description=json_ld.as_ref().and_then(|v|v.get("description")).and_then(Value::as_str).map(str::to_owned).or_else(||meta("og:description"));
-    Ok(json!({"source_id":source_id,"source_url":source_url,"title":title,"authors":authors,"isbn":isbn,"cover_url":image,"description":description,"subjects":[],"raw":json_ld.unwrap_or_else(||json!({"title":title}))}))
+    let info=html_section(html,"<div id=\"info\">","</div>").unwrap_or_default();
+    let publisher=info_field(info,"出版社:");
+    let published_date=info_field(info,"出版年:");
+    let page_count=info_field(info,"页数:").and_then(|v|v.chars().filter(|c|c.is_ascii_digit()).collect::<String>().parse::<i64>().ok());
+    let page_isbn=info_field(info,"ISBN:");
+    let isbn=if isbn.is_empty(){page_isbn.into_iter().collect()}else{isbn};
+    let rating=property_text(html,"v:average").and_then(|v|v.parse::<f64>().ok());
+    let rating_count=property_text(html,"v:votes").and_then(|v|v.parse::<i64>().ok());
+    let subjects=douban_tags(html);
+    Ok(json!({"source_id":source_id,"source_url":source_url,"title":title,"authors":authors,"isbn":isbn,"publisher":publisher,"published_date":published_date,"page_count":page_count,"cover_url":image,"description":description,"rating":rating,"rating_count":rating_count,"subjects":subjects,"raw":json_ld.unwrap_or_else(||json!({"title":title}))}))
 }
+
+fn html_section<'a>(html:&'a str,start_marker:&str,end_marker:&str)->Option<&'a str>{let start=html.find(start_marker)?+start_marker.len();let end=html[start..].find(end_marker)?+start;Some(&html[start..end])}
+fn strip_html(value:&str)->String{let mut result=String::new();let mut inside=false;for ch in value.chars(){match ch{'<'=>inside=true,'>'=>inside=false,_ if !inside=>result.push(ch),_=>{}}}result.replace("&nbsp;"," ").replace("&amp;","&").split_whitespace().collect::<Vec<_>>().join(" ")}
+fn info_field(info:&str,label:&str)->Option<String>{let marker=format!(">{label}</span>");let start=info.find(&marker)?+marker.len();let end=info[start..].find("<br").unwrap_or(info.len()-start)+start;let value=strip_html(&info[start..end]);(!value.is_empty()).then_some(value)}
+fn property_text(html:&str,property:&str)->Option<String>{let marker=format!("property=\"{property}\"");let start=html.find(&marker)?+marker.len();let content=&html[start..];let gt=content.find('>')?+1;let end=content[gt..].find('<')?+gt;Some(strip_html(&content[gt..end]))}
+fn douban_tags(html:&str)->Vec<String>{let mut tags=Vec::new();let mut rest=html;while let Some(pos)=rest.find("https://book.douban.com/tag/"){rest=&rest[pos..];let Some(gt)=rest.find('>')else{break};let body=&rest[gt+1..];let Some(end)=body.find("</a>")else{break};let tag=strip_html(&body[..end]);if !tag.is_empty()&&!tags.contains(&tag){tags.push(tag)}rest=&body[end+4..];if tags.len()>=12{break}}tags}
 
 pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
     let c = db.connect()?;
