@@ -6,8 +6,11 @@
 .dashboard-tabs button { display:flex;align-items:center;gap:7px;padding:8px 16px;border:0;border-radius:7px;background:transparent;color:var(--secondary);font-size:13px; }
 .dashboard-tabs button svg { width:16px;height:16px; }
 .dashboard-tabs button.active { background:var(--accent);color:white;box-shadow:0 3px 10px color-mix(in srgb,var(--accent) 22%,transparent); }
-.dashboard-module { min-height:340px; }
-.reading-dashboard { min-height:480px; }
+.page--dashboard { display:flex;height:100vh;min-height:0;flex-direction:column;overflow:hidden;padding-bottom:0; }
+.page--dashboard > .page-header,.page--dashboard > .dashboard-tabs { flex:none; }
+.dashboard-module,.reading-dashboard { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:36px;scrollbar-gutter:stable; }
+.dashboard-module { min-height:0; }
+.reading-dashboard { min-height:0; }
 .reading-dashboard__header { display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px; }
 .reading-dashboard__header h2 { margin:5px 0 0;font-size:22px; }
 .period-tabs { display:flex;gap:3px;padding:4px;border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--surface) 88%,transparent); }
@@ -462,6 +465,9 @@
 .page--books { height:100vh;padding-bottom:0;display:flex;flex-direction:column;overflow:hidden; }
 .page--books .page-header,.page--books .books-toolbar { flex:none; }
 .page--books .books-scroll { min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:0 8px 28px 0;scrollbar-gutter:stable; }
+.page--books .books-toolbar { flex-wrap:wrap; }
+.page--books .books-toolbar .field--search { min-width:320px; }
+.book-filter-select select { max-width:130px;border:0;outline:0;background:transparent; }
 .knowledge-graph-page { height:100%;display:flex;flex-direction:column; }
 .knowledge-graph-page .page-header { flex:none;margin-bottom:10px; }
 .graph-toolbar { display:flex;align-items:center;gap:7px;margin-bottom:12px; }

@@ -9,12 +9,15 @@ import type { Book } from "../types/domain";
 
 let booksCache: Book[] | null = null;
 type SortBy = "recent" | "highlights" | "thoughts" | "title";
+type ReadingStatus = "all" | "unread" | "reading" | "finished";
 
 export function Books() {
   const [items, setItems] = useState<Book[]>(() => booksCache ?? []);
   const [q, setQ] = useState("");
   const [withHighlights, setWithHighlights] = useState(true);
   const [withThoughts, setWithThoughts] = useState(true);
+  const [category, setCategory] = useState("all");
+  const [readingStatus, setReadingStatus] = useState<ReadingStatus>("all");
   const [sortBy, setSortBy] = useState<SortBy>("recent");
   const [loading, setLoading] = useState(() => booksCache === null);
   const [error, setError] = useState("");
@@ -37,8 +40,17 @@ export function Books() {
     return () => window.clearTimeout(timer);
   }, [syncStatus]);
 
+  const categories = useMemo(() => [...new Set(items.map(book => book.category.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN")), [items]);
   const filtered = useMemo(() => items
     .filter(book => `${book.title}${book.author}`.toLowerCase().includes(q.toLowerCase()))
+    .filter(book => category === "all" || book.category === category)
+    .filter(book => {
+      const progress = Number(book.progress) || 0;
+      if (readingStatus === "unread") return progress <= 0;
+      if (readingStatus === "reading") return progress > 0 && progress < 100;
+      if (readingStatus === "finished") return progress >= 100;
+      return true;
+    })
     .filter(book => {
       if (!withHighlights && !withThoughts) return true;
       return (withHighlights && book.highlightCount > 0) || (withThoughts && book.thoughtCount > 0);
@@ -48,12 +60,12 @@ export function Books() {
       if (sortBy === "thoughts") return b.thoughtCount - a.thoughtCount || b.updatedAt.localeCompare(a.updatedAt);
       if (sortBy === "title") return a.title.localeCompare(b.title, "zh-CN");
       return b.updatedAt.localeCompare(a.updatedAt) || b.highlightCount - a.highlightCount;
-    }), [items, q, withHighlights, withThoughts, sortBy]);
+    }), [items, q, category, readingStatus, withHighlights, withThoughts, sortBy]);
   const visible = filtered.slice(0, visibleCount);
-  useEffect(() => setVisibleCount(80), [q, withHighlights, withThoughts, sortBy]);
+  useEffect(() => setVisibleCount(80), [q, category, readingStatus, withHighlights, withThoughts, sortBy]);
   return <>
     <PageHeader title="书籍" subtitle={`${items.length} 本书，承载你的阅读轨迹。`} />
-    <div className="toolbar books-toolbar"><label className="field field--search"><Search size={16} /><input value={q} onChange={event => setQ(event.target.value)} placeholder="搜索书名或作者" /></label><div className="book-note-filters" aria-label="笔记类型筛选"><button type="button" className={withHighlights ? "active" : ""} aria-pressed={withHighlights} onClick={() => setWithHighlights(value => !value)}><Highlighter size={14} />有划线{withHighlights && <Check size={12} />}</button><button type="button" className={withThoughts ? "active" : ""} aria-pressed={withThoughts} onClick={() => setWithThoughts(value => !value)}><Lightbulb size={14} />有想法{withThoughts && <Check size={12} />}</button></div><label className="filter-button book-sort"><SlidersHorizontal size={16} /><select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)} aria-label="书籍排序"><option value="recent">最近阅读</option><option value="highlights">划线最多</option><option value="thoughts">想法最多</option><option value="title">书名排序</option></select></label></div>
+    <div className="toolbar books-toolbar"><label className="field field--search"><Search size={16} /><input value={q} onChange={event => setQ(event.target.value)} placeholder="搜索书名或作者" /></label><div className="book-note-filters" aria-label="笔记类型筛选"><button type="button" className={withHighlights ? "active" : ""} aria-pressed={withHighlights} onClick={() => setWithHighlights(value => !value)}><Highlighter size={14} />有划线{withHighlights && <Check size={12} />}</button><button type="button" className={withThoughts ? "active" : ""} aria-pressed={withThoughts} onClick={() => setWithThoughts(value => !value)}><Lightbulb size={14} />有想法{withThoughts && <Check size={12} />}</button></div><label className="filter-button book-filter-select"><select value={category} onChange={event => setCategory(event.target.value)} aria-label="按分类筛选"><option value="all">全部分类</option>{categories.map(value => <option value={value} key={value}>{value}</option>)}</select></label><label className="filter-button book-filter-select"><select value={readingStatus} onChange={event => setReadingStatus(event.target.value as ReadingStatus)} aria-label="按阅读状态筛选"><option value="all">全部状态</option><option value="unread">未开始</option><option value="reading">阅读中</option><option value="finished">已读完</option></select></label><label className="filter-button book-sort"><SlidersHorizontal size={16} /><select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)} aria-label="书籍排序"><option value="recent">最近阅读</option><option value="highlights">划线最多</option><option value="thoughts">想法最多</option><option value="title">书名排序</option></select></label></div>
     <div className="books-scroll">
       {loading && <div className="notes-loading">正在打开书架…</div>}
       {!loading && error && <div className="notes-loading">读取书架失败：{error}</div>}

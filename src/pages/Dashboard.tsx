@@ -14,6 +14,11 @@ type DashboardModule = "knowledge" | "reading";
 type ReadingModule = "trend" | "preference" | "ranking";
 const periods: { value: ReadingPeriod; label: string }[] = [{ value: "weekly", label: "本周" }, { value: "monthly", label: "本月" }, { value: "annually", label: "本年" }, { value: "overall", label: "历年" }];
 const readingModules: { value: ReadingModule; label: string }[] = [{ value: "trend", label: "阅读趋势" }, { value: "preference", label: "阅读偏好" }, { value: "ranking", label: "阅读排行" }];
+const readingHeadings: Record<ReadingModule, { eyebrow: string; title: string }> = {
+  trend: { eyebrow: "阅读趋势", title: "你的阅读节奏" },
+  preference: { eyebrow: "阅读偏好", title: "你的阅读习惯" },
+  ranking: { eyebrow: "阅读排行", title: "你的阅读足迹" },
+};
 
 function duration(seconds = 0) {
   const minutes = Math.round(seconds / 60);
@@ -62,6 +67,7 @@ export function Dashboard() {
   const calendar = useMemo(() => Object.entries(reading?.dailyReadTimes ?? {}).map(([time, seconds]) => ({ day: isoDate(time), value: Math.round(seconds / 60) })), [reading]);
   const calendarYear = new Date((reading?.baseTime || Math.floor(Date.now() / 1000)) * 1000).getFullYear();
   const compare = reading?.compare;
+  const readingHeading = readingHeadings[readingModule];
 
   return <>
     <PageHeader title="我的阅读" subtitle="把读过的内容，变成可以继续生长的知识。" actions={<Button icon={<RefreshCw size={16} className={syncing ? "spin" : ""}/>} onClick={sync.run} disabled={syncing}>同步微信读书</Button>}/>
@@ -73,7 +79,7 @@ export function Dashboard() {
     </motion.div>}
 
     {module === "reading" && <motion.section className="reading-dashboard" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
-      <div className="reading-dashboard__header"><div><span className="eyebrow">阅读统计</span><h2>你的阅读节奏</h2></div><div className="period-tabs">{periods.map(item => <button key={item.value} className={period === item.value ? "active" : ""} onClick={() => setPeriod(item.value)}>{item.label}</button>)}</div></div>
+      <div className="reading-dashboard__header"><motion.div key={readingModule} initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .16 }}><span className="eyebrow">{readingHeading.eyebrow}</span><h2>{readingHeading.title}</h2></motion.div><div className="period-tabs">{periods.map(item => <button key={item.value} className={period === item.value ? "active" : ""} onClick={() => setPeriod(item.value)}>{item.label}</button>)}</div></div>
       <nav className="reading-module-tabs">{readingModules.map(item => <button key={item.value} className={readingModule === item.value ? "active" : ""} onClick={() => setReadingModule(item.value)}>{item.label}</button>)}</nav>
       {readingState === "loading" && <div className="reading-state"><RefreshCw className="spin"/>正在读取阅读统计…</div>}
       {readingState === "error" && <div className="reading-state reading-state--error"><strong>阅读数据暂时无法获取</strong><span>{readingError}</span></div>}
