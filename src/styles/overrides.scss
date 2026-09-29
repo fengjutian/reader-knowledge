@@ -129,9 +129,9 @@
 .settings-tabs button { display:flex;align-items:center;gap:7px;padding:9px 14px;border:0;border-radius:7px;background:transparent;color:var(--secondary); }
 .settings-tabs button:hover { color:var(--text); }
 .settings-tabs button.active { background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0001; }
-.settings-card--appearance { align-items:start; }
+.settings-card--appearance { grid-template-columns:minmax(0,1fr);align-items:start; }
 .appearance-settings { display:flex;flex-direction:column;gap:10px; }
-.theme-options { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;width:100%; }
+.theme-options { display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;width:100%; }
 .theme-option { position:relative;display:flex;min-width:0;flex-direction:column;gap:10px;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
 .theme-option:hover { border-color:var(--accent);transform:translateY(-1px); }
 .theme-option.active { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft); }
@@ -157,7 +157,7 @@
 .theme-option__copy strong { font-size:13px; }
 .theme-option__copy small { overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
 .theme-option__check { position:absolute;right:12px;bottom:29px;display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:var(--accent);color:white; }
-.font-options { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%; }
+.font-options { display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;width:100%; }
 .font-option { position:relative;display:flex;min-width:0;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
 .font-option:hover { border-color:var(--accent);transform:translateY(-1px); }
 .font-option.active { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft); }
@@ -228,7 +228,7 @@
 .stat-card { padding: 14px 16px; }
 .panel { padding: 18px; }
 .toolbar { margin-bottom: 16px; }
-.settings { gap: 10px; max-width: 920px; }
+.settings { gap: 10px; width:100%; max-width:none; }
 .settings-card { padding: 18px 20px; gap: 28px; }
 .settings-tabs { gap: 3px; padding: 4px; }
 .settings-tabs button { padding: 7px 11px; }
