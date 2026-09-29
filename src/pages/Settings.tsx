@@ -56,6 +56,7 @@ const themes: { id: Theme; name: string; description: string }[] = [
   { id: "light", name: "纸张", description: "温暖柔和，适合长时间阅读" },
   { id: "dark", name: "深色", description: "低亮度界面，适合夜间阅读" },
   { id: "voyage", name: "航行", description: "冷白、蓝紫与柔焦光晕" },
+  { id: "minimax", name: "MiniMax", description: "珊瑚渐变、轻透卡片与鲜明能量" },
 ];
 
 const fonts: { id: FontFamily; name: string; description: string; sample: string }[] = [
