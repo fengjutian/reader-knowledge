@@ -2,7 +2,7 @@ use crate::ai::provider::AiProvider;
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
 use std::{collections::{HashMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
@@ -363,6 +363,43 @@ fn cosine(left: &[f32], right: &[f32]) -> f64 {
     let mut dot = 0.0f64; let mut a = 0.0f64; let mut b = 0.0f64;
     for (x, y) in left.iter().zip(right) { let x = *x as f64; let y = *y as f64; dot += x * y; a += x * x; b += y * y; }
     if a == 0.0 || b == 0.0 { 0.0 } else { dot / (a.sqrt() * b.sqrt()) }
+}
+
+fn local_model_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+    Ok(app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))?.join("models").join("bge-small-zh-v1.5"))
+}
+
+fn directory_size(path: &std::path::Path) -> u64 {
+    std::fs::read_dir(path).ok().into_iter().flatten().flatten().map(|entry| { let path = entry.path(); if path.is_dir() { directory_size(&path) } else { entry.metadata().map(|value| value.len()).unwrap_or(0) } }).sum()
+}
+
+#[tauri::command]
+pub fn local_embedding_status(app: AppHandle) -> Result<LocalModelStatus, AppError> {
+    let path = local_model_dir(&app)?; let size_bytes = directory_size(&path);
+    Ok(LocalModelStatus { installed: size_bytes > 10_000_000, size_bytes, model: "BAAI/bge-small-zh-v1.5".into() })
+}
+
+#[tauri::command]
+pub async fn download_local_embedding(app: AppHandle) -> Result<LocalModelStatus, AppError> {
+    let path = local_model_dir(&app)?; std::fs::create_dir_all(&path).map_err(|error| AppError::Message(error.to_string()))?;
+    app.emit("local-embedding-progress", serde_json::json!({"stage":"downloading","source":"国内镜像"})).ok();
+    let download_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        std::env::set_var("HF_ENDPOINT", "https://hf-mirror.com");
+        fastembed::TextEmbedding::try_new(fastembed::TextInitOptions::new(fastembed::EmbeddingModel::BGESmallZHV15).with_cache_dir(download_path.clone()).with_show_download_progress(false))
+            .or_else(|_| { std::env::remove_var("HF_ENDPOINT"); fastembed::TextEmbedding::try_new(fastembed::TextInitOptions::new(fastembed::EmbeddingModel::BGESmallZHV15).with_cache_dir(download_path).with_show_download_progress(false)) })
+            .map(|_| ()).map_err(|error| error.to_string())
+    }).await.map_err(|error| AppError::Message(error.to_string()))?;
+    result.map_err(|error| AppError::Message(format!("本地模型下载失败：{error}")))?;
+    app.emit("local-embedding-progress", serde_json::json!({"stage":"complete"})).ok();
+    local_embedding_status(app)
+}
+
+#[tauri::command]
+pub fn delete_local_embedding(app: AppHandle) -> Result<(), AppError> {
+    let path = local_model_dir(&app)?;
+    if path.exists() { std::fs::remove_dir_all(&path).map_err(|error| AppError::Message(format!("删除模型失败：{error}")))?; }
+    Ok(())
 }
 
 #[tauri::command]

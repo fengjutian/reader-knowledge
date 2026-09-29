@@ -61,6 +61,29 @@
 .settings-tabs button { display:flex;align-items:center;gap:7px;padding:9px 14px;border:0;border-radius:7px;background:transparent;color:var(--secondary); }
 .settings-tabs button:hover { color:var(--text); }
 .settings-tabs button.active { background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0001; }
+.settings-card--appearance { align-items:start; }
+.theme-options { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:100%; }
+.theme-option { position:relative;display:flex;min-width:0;flex-direction:column;gap:10px;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
+.theme-option:hover { border-color:var(--accent);transform:translateY(-1px); }
+.theme-option.active { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft); }
+.theme-option__preview { position:relative;height:72px;overflow:hidden;border:1px solid #ded5c7;border-radius:7px;background:#f5f1e8; }
+.theme-option__preview::before { content:"";position:absolute;inset:0 auto 0 0;width:25%;border-right:1px solid #ded5c7;background:#faf7f0; }
+.theme-option__preview i { position:absolute;left:33%;right:8%;height:9px;border-radius:3px;background:#fffdf8;border:1px solid #ded5c7; }
+.theme-option__preview i:nth-child(1) { top:13px;right:27%;background:#9d3f32;border:0; }
+.theme-option__preview i:nth-child(2) { top:31px; }
+.theme-option__preview i:nth-child(3) { top:49px; }
+.theme-option--dark .theme-option__preview { background:#201e1a;border-color:#443e34; }
+.theme-option--dark .theme-option__preview::before { background:#25221d;border-color:#443e34; }
+.theme-option--dark .theme-option__preview i { background:#292620;border-color:#443e34; }
+.theme-option--dark .theme-option__preview i:nth-child(1) { background:#d17b68;border:0; }
+.theme-option--voyage .theme-option__preview { background-color:#f1f8ed;background-image:url('/assets/voyage-watercolor.png');background-position:center;background-size:cover;border-color:#cbd9c8; }
+.theme-option--voyage .theme-option__preview::before { background:rgba(245,250,241,.88);border-color:#cbd9c8; }
+.theme-option--voyage .theme-option__preview i { background:rgba(255,255,252,.9);border-color:#cbd9c8; }
+.theme-option--voyage .theme-option__preview i:nth-child(1) { background:#173f38;border:0; }
+.theme-option__copy { display:flex;min-width:0;flex-direction:column;gap:3px;padding:0 2px 2px; }
+.theme-option__copy strong { font-size:13px; }
+.theme-option__copy small { overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
+.theme-option__check { position:absolute;right:12px;bottom:29px;display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:var(--accent);color:white; }
 .field-hint { color:var(--secondary);line-height:1.4; }
 .secret-saved { display:inline-flex;align-items:center;gap:3px;margin-left:8px;color:#27875a;font-weight:500; }
 
@@ -418,4 +441,40 @@
 .graph-analyzing { position:absolute;z-index:3;top:14px;left:50%;transform:translateX(-50%);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);color:var(--secondary);font-size:11px;box-shadow:0 3px 12px #0001; }
 .relation-evidence { display:block;width:100%;margin:7px 0;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-hover);color:var(--secondary);font-size:11px;line-height:1.55;text-align:left; }
 .relation-evidence:hover { border-color:var(--accent);color:var(--text); }
+
+/* Voyage — pale paper, botanical ink and original watercolor clouds. */
+[data-theme=voyage] {
+  font-family:Inter,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  --bg:#f1f8ed;--surface:rgba(255,255,252,.91);--surface-hover:#e5efe0;
+  --text:#17271c;--secondary:#566557;--muted:#819083;--border:#cbd9c8;
+  --accent:#173f38;--accent-soft:#dcebd5;--radius-lg:18px;color-scheme:light;
+}
+[data-theme=voyage] body {
+  background-color:var(--bg);
+  background-image:linear-gradient(rgba(241,248,237,.5),rgba(241,248,237,.5)),url('/assets/voyage-watercolor.png');
+  background-position:center,center;background-repeat:no-repeat;background-size:cover;background-attachment:fixed;
+}
+[data-theme=voyage] .sidebar { background:rgba(245,250,241,.9);border-right-color:rgba(125,151,120,.34);box-shadow:12px 0 36px rgba(23,63,56,.05);backdrop-filter:blur(18px) saturate(110%); }
+[data-theme=voyage] .brand { color:#153f39;font-family:Georgia,"Songti SC",serif;letter-spacing:-.015em; }
+[data-theme=voyage] .brand__mark { background:#123e39;border-radius:50%;box-shadow:0 5px 14px rgba(18,62,57,.2); }
+[data-theme=voyage] .quick-search { background:rgba(255,255,252,.82);border-color:var(--border); }
+[data-theme=voyage] .nav button.active,[data-theme=voyage] .sidebar__footer button.active { background:#dfead9;color:#173f38; }
+[data-theme=voyage] .page-header h1,[data-theme=voyage] .panel h2,[data-theme=voyage] .settings-card h2,[data-theme=voyage] .book-card h3 { font-family:Georgia,"Noto Serif CJK SC","Songti SC",serif;font-weight:600;letter-spacing:-.025em; }
+[data-theme=voyage] .page-header h1 { color:#102f29;font-size:32px; }
+[data-theme=voyage] .stat-card,[data-theme=voyage] .panel,[data-theme=voyage] .book-card,[data-theme=voyage] .note-card,[data-theme=voyage] .settings-card { border-color:rgba(156,176,151,.48);background:rgba(255,255,252,.88);box-shadow:0 1px 0 rgba(255,255,255,.95) inset,0 12px 34px rgba(29,65,43,.06);backdrop-filter:blur(10px) saturate(105%); }
+[data-theme=voyage] .focus-panel { background:linear-gradient(135deg,rgba(255,255,252,.94),rgba(226,239,218,.9)); }
+[data-theme=voyage] .button--primary,[data-theme=voyage] .ask-box button,[data-theme=voyage] .big-search button { background:#123e39;border-color:#123e39;box-shadow:0 5px 14px rgba(18,62,57,.16); }
+[data-theme=voyage] .button--primary:hover:not(:disabled) { background:#0b302c;box-shadow:0 7px 18px rgba(18,62,57,.22); }
+[data-theme=voyage] .button--secondary { background:rgba(255,255,252,.88);border-color:var(--border);color:var(--text); }
+[data-theme=voyage] .stat-card__icon { background:#e0ecd9;color:#496d31;border-radius:50%; }
+[data-theme=voyage] .settings-tabs,[data-theme=voyage] .ai-modes { background:rgba(220,234,213,.9); }
+[data-theme=voyage] .settings-tabs button.active,[data-theme=voyage] .ai-modes button.active { color:#173f38;background:#fffef8;box-shadow:0 3px 10px rgba(29,65,43,.09); }
+[data-theme=voyage] .progress div,[data-theme=voyage] .book-progress i { background:linear-gradient(90deg,#173f38,#87a63e); }
+[data-theme=voyage] .note-card { border-left-color:#b07a49; }
+[data-theme=voyage] .note-card--thought { border-left-color:#2e756e; }
+[data-theme=voyage] .graph-shell,[data-theme=voyage] .search-dialog,[data-theme=voyage] .ask-box { background:rgba(255,255,252,.92);backdrop-filter:blur(14px) saturate(110%); }
+@media (prefers-reduced-motion:no-preference) {
+  [data-theme=voyage] .brand__mark { animation:voyage-drift 6s ease-in-out infinite; }
+  @keyframes voyage-drift { 50% { transform:translateY(-2px);box-shadow:0 8px 20px rgba(18,62,57,.28); } }
+}
 .deep-relation { max-height:310px;margin:4px -4px 10px;padding:0 4px;overflow-y:auto; }.deep-relation > p { color:var(--text); }.deep-relation section { margin:10px 0;padding-top:10px;border-top:1px solid var(--border); }.deep-relation section strong { font-size:12px;color:var(--accent); }.deep-relation section p { margin:5px 0;color:var(--secondary);font-size:12px;line-height:1.55; }.relation-evidence i { display:block;margin-bottom:3px;color:var(--accent);font-size:10px;font-style:normal; }.relation-analysis-actions { display:flex;gap:6px;margin-top:10px; }.relation-analysis-actions button { display:flex;align-items:center;justify-content:center;gap:6px;flex:1;padding:8px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:white;font-size:12px; }.relation-analysis-actions button:disabled { cursor:not-allowed;border-color:var(--border);background:var(--surface-hover);color:var(--muted);opacity:1; }.relation-analysis-error { margin:8px 0!important;color:#b74335!important;font-size:11px!important; }.relation-analysis-notice { margin:8px 0!important;padding:7px 8px;border-radius:5px;background:var(--surface-hover);color:var(--secondary)!important;font-size:11px!important;line-height:1.5!important; }

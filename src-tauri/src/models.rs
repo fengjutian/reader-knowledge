@@ -102,6 +102,14 @@ pub struct SemanticEvidence {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelStatus {
+    pub installed: bool,
+    pub size_bytes: u64,
+    pub model: String,
+}
+
+#[derive(Serialize)]
 pub struct Citation {
     pub index: usize,
     pub note: Note,

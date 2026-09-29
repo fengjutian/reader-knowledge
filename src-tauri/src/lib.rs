@@ -40,6 +40,9 @@ pub fn run() {
             ,commands::save_embedding_settings
             ,commands::test_embedding
             ,commands::build_semantic_relations
+            ,commands::local_embedding_status
+            ,commands::download_local_embedding
+            ,commands::delete_local_embedding
         ])
         .run(tauri::generate_context!())
         .expect("error while running wereader")
