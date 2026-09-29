@@ -1,4 +1,5 @@
-import { ArrowUp, BookOpen, MessageSquare, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { ArrowUp, BookOpen, ChevronRight, MessageSquare, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -47,10 +48,14 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
 
 export function AI() {
   const initialDraft = useRef(useAppStore.getState().aiDraft).current;
+  const aiDraft = useAppStore(state => state.aiDraft);
   const [question, setQuestion] = useState(initialDraft?.question ?? "");
   const [mode, setMode] = useState<AiMode>(initialDraft?.mode ?? "ask");
   const [books, setBooks] = useState<Book[]>([]);
   const [bookIds, setBookIds] = useState<string[]>(initialDraft?.bookIds ?? []);
+  const [draftBookIds, setDraftBookIds] = useState<string[]>([]);
+  const [bookPickerOpen, setBookPickerOpen] = useState(false);
+  const [selectionError, setSelectionError] = useState("");
   const [bookQuery, setBookQuery] = useState("");
   const [turns, setTurns] = useState<AiTurn[]>([]);
   const [history, setHistory] = useState<AiConversation[]>(loadHistory);
@@ -60,7 +65,16 @@ export function AI() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const openBook = useAppStore(state => state.openBook);
-  useEffect(() => { if (initialDraft) useAppStore.getState().clearAiDraft(); }, [initialDraft]);
+  useEffect(() => {
+    if (!aiDraft) return;
+    setQuestion(aiDraft.question);
+    setMode(aiDraft.mode);
+    setBookIds(aiDraft.bookIds);
+    setTurns([]);
+    setActiveConversationId(undefined);
+    setError("");
+    useAppStore.getState().clearAiDraft();
+  }, [aiDraft]);
   useEffect(() => { localStorage.setItem(historyKey, JSON.stringify(history)); }, [history]);
   useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
   useEffect(() => {
@@ -94,14 +108,27 @@ export function AI() {
     setHistory(current => current.filter(item => item.id !== id));
     if (activeConversationId === id) newConversation();
   }
-  function toggleBook(id: string) {
-    setBookIds(current => {
+  function openBookPicker() {
+    setDraftBookIds(bookIds);
+    setBookQuery("");
+    setSelectionError("");
+    setBookPickerOpen(true);
+  }
+  function toggleDraftBook(id: string) {
+    setDraftBookIds(current => {
       if (mode === "summary") return [id];
       if (current.includes(id)) return current.filter(value => value !== id);
-      if (current.length >= 100) { setError("跨书分析最多选择 100 本书"); return current; }
-      setError("");
+      if (current.length >= 100) { setSelectionError("跨书分析最多选择 100 本书"); return current; }
+      setSelectionError("");
       return [...current, id];
     });
+  }
+  function confirmBookSelection() {
+    if (mode === "summary" && draftBookIds.length !== 1) { setSelectionError("请选择一本书"); return; }
+    if (mode === "compare" && draftBookIds.length < 2) { setSelectionError("请至少选择两本书"); return; }
+    setBookIds(draftBookIds);
+    setError("");
+    setBookPickerOpen(false);
   }
   async function ask(event: React.FormEvent) {
     event.preventDefault(); if (!question.trim()) return;
@@ -136,12 +163,10 @@ export function AI() {
       <div className="ai-wrap" ref={scrollRef}>
       <div className="ai-modes">{(Object.keys(modeLabels) as AiMode[]).map(value => <button key={value} className={mode === value ? "active" : ""} onClick={() => changeMode(value)}>{modeLabels[value]}</button>)}</div>
       {(mode === "summary" || mode === "compare") && <section className="ai-book-picker">
-        <div className="ai-book-picker__head"><div><strong>{mode === "summary" ? "选择一本书" : "选择 2–100 本书"}</strong><span>{mode === "summary" ? "仅显示有笔记的书" : "小范围深度比较，大范围确保每本书都参与分析"}</span></div><em>{bookIds.length} 本已选</em></div>
-        {selectedBooks.length > 0 && <div className="ai-book-picker__selected">{selectedBooks.map(book => <button key={book.id} onClick={() => toggleBook(book.id)} title="移除"><span>{book.title}</span><X size={13}/></button>)}</div>}
-        <label className="ai-book-search"><Search size={16}/><input value={bookQuery} onChange={event => setBookQuery(event.target.value)} placeholder="搜索书名或作者"/></label>
-        <div className="ai-book-options">{visibleBooks.map(book => <label key={book.id} className={bookIds.includes(book.id) ? "selected" : ""}><input type={mode === "summary" ? "radio" : "checkbox"} checked={bookIds.includes(book.id)} onChange={() => toggleBook(book.id)}/><span><strong>{book.title}</strong><small>{book.author || "未知作者"} · {book.highlightCount + book.thoughtCount} 条笔记</small></span></label>)}</div>
-        {visibleBooks.length === 0 && <p className="ai-book-picker__none">没有找到有笔记的书</p>}
+        <button type="button" className="ai-book-picker__trigger" onClick={openBookPicker}><div><strong>{mode === "summary" ? "选择一本书" : "选择分析书籍"}</strong><span>{bookIds.length ? `已选择 ${bookIds.length} 本` : mode === "summary" ? "从有笔记的书籍中选择" : "请选择 2–100 本书"}</span></div><ChevronRight size={18}/></button>
+        {selectedBooks.length > 0 && <div className="ai-book-picker__selected">{selectedBooks.map(book => <span key={book.id} title={book.title}>{book.title}</span>)}</div>}
       </section>}
+      <Dialog.Root open={bookPickerOpen} onOpenChange={setBookPickerOpen}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="book-picker-dialog"><div className="book-picker-dialog__head"><div><Dialog.Title>{mode === "summary" ? "选择一本书" : "选择分析书籍"}</Dialog.Title><Dialog.Description>{mode === "summary" ? "仅显示有笔记的书" : "选择 2–100 本书进行跨书分析"}</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭"><X size={19}/></Dialog.Close></div><label className="ai-book-search"><Search size={16}/><input autoFocus value={bookQuery} onChange={event => setBookQuery(event.target.value)} placeholder="搜索书名或作者"/></label><div className="ai-book-options">{visibleBooks.map(book => <label key={book.id} className={draftBookIds.includes(book.id) ? "selected" : ""}><input type={mode === "summary" ? "radio" : "checkbox"} checked={draftBookIds.includes(book.id)} onChange={() => toggleDraftBook(book.id)}/><span><strong>{book.title}</strong><small>{book.author || "未知作者"} · {book.highlightCount + book.thoughtCount} 条笔记</small></span></label>)}</div>{visibleBooks.length === 0 && <p className="ai-book-picker__none">没有找到有笔记的书</p>}<div className="book-picker-dialog__footer"><span className={selectionError ? "book-picker-dialog__error" : ""}>{selectionError || `已选择 ${draftBookIds.length} 本`}</span><div><Dialog.Close className="book-picker-dialog__cancel">取消</Dialog.Close><button type="button" className="book-picker-dialog__confirm" onClick={confirmBookSelection}>完成</button></div></div></Dialog.Content></Dialog.Portal></Dialog.Root>
       {turns.length === 0 && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
       {turns.length > 0 && <div className="ai-thread">{turns.map((turn, turnIndex) => <section className="answer" key={`${turn.question}-${turnIndex}`}><div className="answer__question">{turn.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={turn.answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {turn.answer.sourcesConsidered} 条 · 引用 {turn.answer.citations.length} 条</span></div>{turn.answer.citations.map(citation => <button className="citation" key={`${turnIndex}-${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>)}</div>}
