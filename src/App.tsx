@@ -23,6 +23,6 @@ export default function App(){
     const frame=requestAnimationFrame(()=>window.scrollTo({top:scrollPositions.current[page]??0}));
     return ()=>{cancelAnimationFrame(frame);scrollPositions.current[page]=window.scrollY};
   },[page]);
-  return <AppLayout>{(Object.entries(pages) as [Page,ReactNode][]).map(([id,content])=>visitedPages.has(id)&&<motion.div className="page page--module" key={id} hidden={page!==id} initial={{opacity:0,y:3}} animate={{opacity:1,y:0}} transition={{duration:.12}}>{content}</motion.div>)}<SearchDialog/>{selectedBookId&&<BookDetail/>}</AppLayout>
+  return <AppLayout>{(Object.entries(pages) as [Page,ReactNode][]).map(([id,content])=>visitedPages.has(id)&&<motion.div className={`page page--module page--${id}`} key={id} hidden={page!==id} initial={{opacity:0,y:3}} animate={{opacity:1,y:0}} transition={{duration:.12}}>{content}</motion.div>)}<SearchDialog/>{selectedBookId&&<BookDetail/>}</AppLayout>
 }
 
