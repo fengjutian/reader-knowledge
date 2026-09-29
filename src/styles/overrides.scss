@@ -8,7 +8,9 @@
 .dashboard-tabs button.active { background:var(--accent);color:white;box-shadow:0 3px 10px color-mix(in srgb,var(--accent) 22%,transparent); }
 .page--dashboard { display:flex;height:100vh;min-height:0;flex-direction:column;overflow:hidden;padding-bottom:0; }
 .page--dashboard > .page-header,.page--dashboard > .dashboard-tabs { flex:none; }
-.dashboard-module,.reading-dashboard { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:36px;scrollbar-gutter:stable; }
+.dashboard-module { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:36px;scrollbar-gutter:stable; }
+.reading-dashboard { display:flex;min-height:0;flex:1;flex-direction:column;overflow:hidden; }
+.reading-dashboard__scroll { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:36px;scrollbar-gutter:stable; }
 .dashboard-module { min-height:0; }
 .reading-dashboard { min-height:0; }
 .reading-dashboard__header { display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px; }

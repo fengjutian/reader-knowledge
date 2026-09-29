@@ -74,6 +74,7 @@ export function Dashboard() {
 
     {module === "reading" && <motion.section className="reading-dashboard" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
       <nav className="reading-module-tabs">{readingModules.map(item => <button key={item.value} className={readingModule === item.value ? "active" : ""} onClick={() => setReadingModule(item.value)}>{item.label}</button>)}<div className="period-tabs" aria-label="统计周期">{periods.map(item => <button key={item.value} className={period === item.value ? "active" : ""} onClick={() => setPeriod(item.value)}>{item.label}</button>)}</div></nav>
+      <div className="reading-dashboard__scroll">
       {readingState === "loading" && <div className="reading-state"><RefreshCw className="spin"/>正在读取阅读统计…</div>}
       {readingState === "error" && <div className="reading-state reading-state--error"><strong>阅读数据暂时无法获取</strong><span>{readingError}</span></div>}
       {readingState === "ready" && reading && <>
@@ -85,6 +86,7 @@ export function Dashboard() {
 
         {readingModule === "ranking" && <div className="ranking-layout"><article className="panel reading-ranking"><div className="chart-heading"><div><span>本周期</span><h3>读得最多的书</h3></div><small>阅读时长</small></div>{(reading.readLongest ?? []).length ? <ol>{reading.readLongest!.slice(0, 8).map((item, index) => { const content = item.book ?? item.albumInfo; return <li key={item.book?.bookId ?? item.albumInfo?.albumId ?? index}><span className="ranking-number">{index + 1}</span>{content?.cover ? <img src={content.cover} alt=""/> : <div className="ranking-cover"><BookOpen/></div>}<div><strong>{content?.title || "未知内容"}</strong><span>{content?.author || item.tags?.join(" · ") || "微信读书"}</span></div><b>{duration(item.readTime)}</b></li>; })}</ol> : <div className="chart-empty">本周期暂无阅读排行</div>}</article><aside className="ranking-side"><article className="panel reading-summary"><div className="chart-heading"><div><span>统计摘要</span><h3>阅读成果</h3></div></div>{(reading.readStat ?? []).length ? <div className="summary-grid">{reading.readStat!.map(item => <div key={item.stat}><strong>{item.counts}</strong><span>{item.stat}</span></div>)}</div> : <div className="chart-empty chart-empty--small">暂无摘要</div>}</article>{reading.readRate != null && <article className="panel read-method"><Headphones/><div><span>文字阅读占比</span><strong>{reading.readRate}%</strong><small>阅读 {duration(reading.wrReadTime)} · 听书 {duration(reading.wrListenTime)}</small></div></article>}</aside></div>}
       </>}
+      </div>
     </motion.section>}
   </>;
 }
