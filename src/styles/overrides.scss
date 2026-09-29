@@ -400,6 +400,9 @@
 
 /* Knowledge graph */
 .page--graph { padding-bottom:12px;overflow:hidden; }
+.page--books { height:100vh;padding-bottom:0;display:flex;flex-direction:column;overflow:hidden; }
+.page--books .page-header,.page--books .books-toolbar { flex:none; }
+.page--books .books-scroll { min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:0 8px 28px 0;scrollbar-gutter:stable; }
 .knowledge-graph-page { height:100%;display:flex;flex-direction:column; }
 .knowledge-graph-page .page-header { flex:none;margin-bottom:10px; }
 .graph-toolbar { display:flex;align-items:center;gap:7px;margin-bottom:12px; }

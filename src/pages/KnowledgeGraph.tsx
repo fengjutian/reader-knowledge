@@ -14,6 +14,7 @@ type Analysis = { nodes: Node[]; candidates: Edge[] };
 type Strength = "all" | "strong" | "balanced" | "broad";
 type RelationFilter = "all" | "content" | "author" | "analyzable";
 const W = 1000, H = 650;
+const SEMANTIC_RELATIONS_CACHE_KEY = "semantic-relations:v1";
 const short = (value: string, size: number) => value.length > size ? `${value.slice(0, size)}…` : value;
 const relationLabels: Record<RelationKind, string> = { same_concept: "同义概念", agreement: "观点一致", conflict: "观点冲突", complementary: "观点互补", causal: "因果关系", application: "理论与应用", uncertain: "证据不足" };
 
@@ -36,9 +37,9 @@ export function KnowledgeGraph() {
   const semanticEdgesRef = useRef<Edge[] | null>(null);
   const cacheKeyRef = useRef("");
   const pickerRef = useRef<HTMLDivElement>(null);
-  function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); api.semanticRelations().then(edges => { semanticEdgesRef.current = edges; setGraph(current => ({ ...current, edges })); setSemanticEnabled(true); }).catch(reason => { if (showError) setSemanticError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => setSemanticLoading(false)); }
-  useEffect(() => { Promise.all([api.books(), api.notes()]).then(([b, n]) => { setBooks(b); setNotes(n); refreshSemanticRelations(); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false)); }, []);
-  useEffect(() => { const ready = () => refreshSemanticRelations(); const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength }); }; window.addEventListener("local-embedding-ready", ready); window.addEventListener("local-embedding-removed", removed); return () => { window.removeEventListener("local-embedding-ready", ready); window.removeEventListener("local-embedding-removed", removed); }; }, [strength]);
+  function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); api.semanticRelations().then(edges => { semanticEdgesRef.current = edges; setGraph(current => ({ ...current, edges })); setSemanticEnabled(true); void writeGraphCache(SEMANTIC_RELATIONS_CACHE_KEY, edges); }).catch(reason => { if (showError) setSemanticError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => setSemanticLoading(false)); }
+  useEffect(() => { Promise.all([api.books(), api.notes(), readGraphCache<Edge[]>(SEMANTIC_RELATIONS_CACHE_KEY)]).then(([b, n, cachedEdges]) => { if (cachedEdges?.length) { semanticEdgesRef.current = cachedEdges; setSemanticEnabled(true); } setBooks(b); setNotes(n); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false)); }, []);
+  useEffect(() => { const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength }); }; window.addEventListener("local-embedding-removed", removed); return () => window.removeEventListener("local-embedding-removed", removed); }, [strength]);
   useEffect(() => {
     const worker = new Worker(new URL("../workers/knowledgeGraph.worker.ts", import.meta.url), { type: "module" });
     workerRef.current = worker;
