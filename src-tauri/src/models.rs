@@ -7,6 +7,22 @@ pub struct DashboardStats {
     pub thoughts: i64,
     pub last_synced_at: Option<String>,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseTableStat { pub name: String, pub label: String, pub rows: i64 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseCategoryStat { pub label: String, pub count: i64 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseOverview { pub size_bytes: u64, pub tables: Vec<DatabaseTableStat>, pub categories: Vec<DatabaseCategoryStat>, pub last_synced_at: Option<String> }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseRow { pub id: String, pub primary: String, pub secondary: String, pub detail: String, pub created_at: String }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseRows { pub total: i64, pub rows: Vec<DatabaseRow> }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Book {

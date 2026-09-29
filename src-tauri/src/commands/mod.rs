@@ -33,6 +33,40 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
 }
 
 #[tauri::command]
+pub fn get_database_overview(db: State<'_, Database>) -> Result<DatabaseOverview, AppError> {
+    let c = db.connect()?;
+    let table_specs = [("books", "书籍"), ("chapters", "章节"), ("highlights", "划线"), ("thoughts", "想法"), ("weread_raw", "原始数据"), ("sync_sessions", "同步记录"), ("note_embeddings", "向量索引"), ("relation_analysis_cache", "关系分析缓存")];
+    let mut tables = Vec::with_capacity(table_specs.len());
+    for (name, label) in table_specs {
+        let rows = c.query_row(&format!("SELECT count(*) FROM {name}"), [], |row| row.get(0))?;
+        tables.push(DatabaseTableStat { name: name.into(), label: label.into(), rows });
+    }
+    let mut query = c.prepare("SELECT CASE WHEN trim(coalesce(category,''))='' THEN '未分类' ELSE category END, count(*) FROM books WHERE is_deleted=0 GROUP BY 1 ORDER BY 2 DESC LIMIT 8")?;
+    let categories = query.query_map([], |row| Ok(DatabaseCategoryStat { label: row.get(0)?, count: row.get(1)? }))?.collect::<Result<Vec<_>, _>>()?;
+    let last_synced_at = c.query_row("SELECT datetime(last_synced_at,'unixepoch','localtime') FROM sync_state WHERE source='weread'", [], |row| row.get(0)).optional()?;
+    Ok(DatabaseOverview { size_bytes: db.size_bytes(), tables, categories, last_synced_at })
+}
+
+#[tauri::command]
+pub fn list_database_rows(db: State<'_, Database>, table: String, query: String, limit: i64, offset: i64) -> Result<DatabaseRows, AppError> {
+    let c = db.connect()?;
+    let pattern = format!("%{}%", query.trim());
+    let limit = limit.clamp(1, 100);
+    let offset = offset.max(0);
+    let (count_sql, rows_sql) = match table.as_str() {
+        "books" => ("SELECT count(*) FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1)", "SELECT book_id,title,coalesce(author,''),coalesce(category,''),coalesce(datetime(read_update_time,'unixepoch','localtime'),'') FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1) ORDER BY read_update_time DESC LIMIT ?2 OFFSET ?3"),
+        "highlights" => ("SELECT count(*) FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)", "SELECT h.bookmark_id,h.mark_text,coalesce(b.title,''),coalesce(h.chapter_title,''),coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY h.create_time DESC LIMIT ?2 OFFSET ?3"),
+        "thoughts" => ("SELECT count(*) FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)", "SELECT t.review_id,t.content,coalesce(b.title,''),coalesce(t.chapter_name,''),coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY t.create_time DESC LIMIT ?2 OFFSET ?3"),
+        "sync_sessions" => ("SELECT count(*) FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1", "SELECT id,status,source,printf('书籍 %d · 划线 %d · 想法 %d',books_fetched,highlights_fetched,thoughts_fetched),coalesce(datetime(started_at,'unixepoch','localtime'),'') FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3"),
+        _ => return Err(AppError::Message("不支持浏览该数据表".into())),
+    };
+    let total = c.query_row(count_sql, [&pattern], |row| row.get(0))?;
+    let mut statement = c.prepare(rows_sql)?;
+    let rows = statement.query_map(rusqlite::params![pattern, limit, offset], |row| Ok(DatabaseRow { id: row.get(0)?, primary: row.get(1)?, secondary: row.get(2)?, detail: row.get(3)?, created_at: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(DatabaseRows { total, rows })
+}
+
+#[tauri::command]
 pub async fn get_reading_stats(mode: String) -> Result<serde_json::Value, AppError> {
     if !matches!(mode.as_str(), "weekly" | "monthly" | "annually" | "overall") {
         return Err(AppError::Message("不支持的阅读统计周期".into()));

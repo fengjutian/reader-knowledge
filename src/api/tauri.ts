@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, EmbeddingSettings, LocalModelStatus, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, LocalModelStatus, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -9,6 +9,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   dashboard: () => call<DashboardStats>("get_dashboard"),
+  databaseOverview: () => call<DatabaseOverview>("get_database_overview"),
+  databaseRows: (table: string, query = "", limit = 40, offset = 0) => call<DatabaseRows>("list_database_rows", { table, query, limit, offset }),
   readingStats: (mode: ReadingPeriod) => call<ReadingStats>("get_reading_stats", { mode }),
   books: () => call<Book[]>("list_books"),
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),

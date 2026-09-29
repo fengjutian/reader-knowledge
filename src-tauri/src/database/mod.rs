@@ -21,4 +21,8 @@ impl Database {
         connection.execute_batch("PRAGMA foreign_keys=ON;")?;
         Ok(connection)
     }
+
+    pub fn size_bytes(&self) -> u64 {
+        fs::metadata(&self.path).map(|metadata| metadata.len()).unwrap_or(0)
+    }
 }
