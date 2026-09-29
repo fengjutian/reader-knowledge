@@ -1,4 +1,4 @@
-use crate::{database::Database, error::AppError, models::{BookMetadataRow, MetadataFetchResult}};
+use crate::{database::Database, error::AppError, models::{BookMetadataRow, BookMetadataSourceDetail, MetadataFetchResult}};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -107,6 +107,12 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
         })
     })?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+pub fn details(db:&Database,book_id:&str)->Result<Vec<BookMetadataSourceDetail>,AppError>{
+    let c=db.connect()?;
+    let mut q=c.prepare("SELECT source,source_id,source_url,coalesce(title,''),coalesce(authors_json,'[]'),coalesce(isbn13,isbn10,''),coalesce(publisher,''),coalesce(published_date,''),page_count,coalesce(subjects_json,'[]'),coalesce(cover_url,''),coalesce(description,''),rating,rating_count,datetime(fetched_at,'unixepoch','localtime') FROM book_metadata_sources WHERE book_id=?1 ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END")?;
+    Ok(q.query_map([book_id],|r|Ok(BookMetadataSourceDetail{source:r.get(0)?,source_id:r.get(1)?,source_url:r.get(2)?,title:r.get(3)?,authors:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),isbn:r.get(5)?,publisher:r.get(6)?,published_date:r.get(7)?,page_count:r.get(8)?,subjects:serde_json::from_str(&r.get::<_,String>(9)?).unwrap_or_default(),cover_url:r.get(10)?,description:r.get(11)?,rating:r.get(12)?,rating_count:r.get(13)?,fetched_at:r.get(14)?}))?.collect::<Result<Vec<_>,_>>()?)
 }
 
 pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> Result<MetadataFetchResult, AppError> {

@@ -24,6 +24,11 @@ export interface BookMetadataRow {
 export interface MetadataFetchResult {
   bookId: string; source: string; status: "updated" | "cached" | "not_found" | "failed"; message: string;
 }
+export interface BookMetadataSourceDetail {
+  source:string; sourceId:string; sourceUrl?:string; title:string; authors:string[]; isbn:string;
+  publisher:string; publishedDate:string; pageCount?:number; subjects:string[]; coverUrl:string;
+  description:string; rating?:number; ratingCount?:number; fetchedAt:string;
+}
 
 export interface Note {
   id: string;

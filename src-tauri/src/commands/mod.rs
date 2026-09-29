@@ -112,6 +112,11 @@ pub fn list_book_metadata(db: State<'_, Database>) -> Result<Vec<BookMetadataRow
 }
 
 #[tauri::command]
+pub fn get_book_metadata_details(db: State<'_, Database>, book_id: String) -> Result<Vec<BookMetadataSourceDetail>, AppError> {
+    crate::metadata::details(&db,&book_id)
+}
+
+#[tauri::command]
 pub async fn fetch_book_metadata(db: State<'_, Database>, book_id: String, source: String, force: bool) -> Result<MetadataFetchResult, AppError> {
     crate::metadata::fetch(&db, &book_id, &source, force).await
 }

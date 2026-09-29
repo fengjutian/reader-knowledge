@@ -70,6 +70,14 @@ pub struct MetadataFetchResult {
     pub status: String,
     pub message: String,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookMetadataSourceDetail {
+    pub source: String, pub source_id: String, pub source_url: Option<String>, pub title: String,
+    pub authors: Vec<String>, pub isbn: String, pub publisher: String, pub published_date: String,
+    pub page_count: Option<i64>, pub subjects: Vec<String>, pub cover_url: String,
+    pub description: String, pub rating: Option<f64>, pub rating_count: Option<i64>, pub fetched_at: String,
+}
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
