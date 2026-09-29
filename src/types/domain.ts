@@ -33,6 +33,25 @@ export interface DashboardStats {
   lastSyncedAt?: string;
 }
 
+export type ReadingPeriod = "weekly" | "monthly" | "annually";
+export interface ReadingCategory {
+  categoryTitle: string;
+  readingTime: number;
+  readingCount: number;
+  val: number;
+}
+export interface ReadingStats {
+  baseTime?: number;
+  readTimes?: Record<string, number>;
+  dailyReadTimes?: Record<string, number>;
+  readDays?: number;
+  totalReadTime?: number;
+  dayAverageReadTime?: number;
+  compare?: number;
+  preferCategory?: ReadingCategory[];
+  preferCategoryWord?: string;
+}
+
 export interface SearchResult extends Note { score: number }
 export interface Citation { index: number; note: Note }
 export interface AiAnswer { content: string; citations: Citation[]; sourcesConsidered: number }

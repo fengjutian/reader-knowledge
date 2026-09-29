@@ -20,6 +20,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
+            commands::get_reading_stats,
             commands::list_books,
             commands::get_book,
             commands::list_book_notes,
