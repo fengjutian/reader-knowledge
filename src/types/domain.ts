@@ -47,6 +47,8 @@ export interface ReadingLongestItem {
   tags?: string[];
 }
 export interface ReadingStatItem { stat: string; counts: string; scheme?: string }
+export interface ReadingAuthor { authorId?: string; name: string; count: number; readTime?: string }
+export interface ReadingPublisher { name: string; count: number }
 export interface ReadingStats {
   baseTime?: number;
   readTimes?: Record<string, number>;
@@ -59,6 +61,8 @@ export interface ReadingStats {
   preferCategoryWord?: string;
   preferTime?: number[];
   preferTimeWord?: string;
+  preferAuthor?: ReadingAuthor[];
+  preferPublisher?: ReadingPublisher[];
   readLongest?: ReadingLongestItem[];
   readStat?: ReadingStatItem[];
   readRate?: number;

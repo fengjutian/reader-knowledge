@@ -31,6 +31,7 @@
 .reading-kpis strong { font-size:16px;font-weight:650; }
 .reading-kpis .is-down svg,.reading-kpis .is-down strong { color:#b4574e; }
 .reading-charts { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(310px,1fr);gap:10px; }
+.reading-charts--single { grid-template-columns:1fr; }
 .reading-module-content { display:flex;flex-direction:column;gap:10px; }
 .chart-card--wide .chart-body { height:310px; }
 .chart-card { min-width:0;padding:18px; }
