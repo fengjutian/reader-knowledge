@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, Note, SearchResult, SyncProgress } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, Note, RelationAnalysis, SearchResult, SyncProgress } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return invoke<T>(command, args);
-  throw new Error("此功能仅在 wereader-knowledge 桌面应用中可用");
+  throw new Error("此功能仅在 wereader 桌面应用中可用");
 }
 
 export const api = {
@@ -19,6 +19,7 @@ export const api = {
   saveAiSettings: (settings: AiSettings, apiKey?: string) => call<void>("save_ai_settings", { settings, apiKey }),
   testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),
   ask: (request: AiRequest) => call<AiAnswer>("ask_ai", { request }),
+  analyzeRelation: (leftBookId: string, rightBookId: string, keywords: string[], refresh = false) => call<RelationAnalysis>("analyze_book_relation", { request: { leftBookId, rightBookId, keywords, refresh } }),
   sync: () => call<SyncProgress>("sync_weread"),
   saveSecret: (kind: string, value: string) => call<void>("save_secret", { kind, value }),
   hasSecret: (kind: string) => call<boolean>("has_secret", { kind }),

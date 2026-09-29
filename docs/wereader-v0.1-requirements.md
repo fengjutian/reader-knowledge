@@ -1,10 +1,10 @@
-# wereader-knowledge v0.1 MVP 产品需求
+# wereader v0.1 MVP 产品需求
 
 > 本文档由用户提供的需求定稿落库。项目定位：微信读书个人笔记知识库 + AI 阅读助手。
 
 ## 产品目标
 
-wereader-knowledge 不做新的阅读器。第一阶段不实现 PDF/EPUB 阅读、微信读书 WebView、在线阅读或移动端，而是打通：微信读书 → 本地知识库 → 搜索 → AI → 理解自己的阅读记录。
+wereader 不做新的阅读器。第一阶段不实现 PDF/EPUB 阅读、微信读书 WebView、在线阅读或移动端，而是打通：微信读书 → 本地知识库 → 搜索 → AI → 理解自己的阅读记录。
 
 ## MVP 范围
 

@@ -33,8 +33,9 @@ pub fn run() {
             commands::get_ai_settings,
             commands::save_ai_settings,
             commands::test_ai,
-            commands::ask_ai
+            commands::ask_ai,
+            commands::analyze_book_relation
         ])
         .run(tauri::generate_context!())
-        .expect("error while running wereader-knowledge")
+        .expect("error while running wereader")
 }

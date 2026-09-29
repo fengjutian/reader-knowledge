@@ -1,3 +1,3 @@
 fn main() {
-    wereader_knowledge_lib::run()
+    wereader_lib::run()
 }

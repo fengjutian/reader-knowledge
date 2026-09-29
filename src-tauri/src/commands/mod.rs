@@ -1,7 +1,7 @@
 use crate::ai::provider::AiProvider;
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::{HashMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -410,7 +410,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             content
         ));
     }
-    let system = "你是 wereader-knowledge 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
+    let system = "你是 wereader 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
         "compare" => "任务类型：跨书分析。明确列出各书的共识、分歧与可互相补充之处。",
@@ -445,6 +445,167 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         citations,
         sources_considered,
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRelationClaim {
+    relation: String,
+    summary: String,
+    confidence: f64,
+    evidence_ids: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawRelationAnalysis {
+    relation: String,
+    concepts: Vec<String>,
+    summary: String,
+    confidence: f64,
+    claims: Vec<RawRelationClaim>,
+}
+
+#[tauri::command]
+pub async fn analyze_book_relation(
+    db: State<'_, Database>,
+    request: RelationAnalysisRequest,
+) -> Result<RelationAnalysis, AppError> {
+    if request.left_book_id == request.right_book_id {
+        return Err(AppError::Message("请选择两本不同的书".into()));
+    }
+    let (left_title, right_title, mut notes) = relation_context(
+        &db,
+        &request.left_book_id,
+        &request.right_book_id,
+        &request.keywords,
+    )?;
+    if notes.iter().filter(|note| note.book_id == request.left_book_id).count() == 0
+        || notes.iter().filter(|note| note.book_id == request.right_book_id).count() == 0
+    {
+        return Err(AppError::Message("两本书都需要至少一条划线或想法才能深度分析".into()));
+    }
+
+    let provider = ai_provider(&db)?;
+    let pair_key = format!("{}:{}", request.left_book_id, request.right_book_id);
+    let signature_source = format!(
+        "v1|{}|{}|{}|{}",
+        provider.model,
+        pair_key,
+        request.keywords.join("|"),
+        notes.iter().map(|note| format!("{}:{}", note.id, note.content)).collect::<Vec<_>>().join("|")
+    );
+    let input_hash = format!("{:x}", md5::compute(signature_source.as_bytes()));
+    if !request.refresh {
+        let cached: Option<String> = db.connect()?.query_row(
+            "SELECT result_json FROM relation_analysis_cache WHERE pair_key=?1 AND input_hash=?2",
+            rusqlite::params![pair_key, input_hash],
+            |row| row.get(0),
+        ).optional()?;
+        if let Some(json) = cached {
+            let mut result: RelationAnalysis = serde_json::from_str(&json)?;
+            result.cached = true;
+            return Ok(result);
+        }
+    }
+
+    let mut labels = HashMap::<String, Note>::new();
+    let mut context = String::new();
+    for (index, note) in notes.drain(..).enumerate() {
+        let side = if note.book_id == request.left_book_id { "A" } else { "B" };
+        let label = format!("{}{}", side, index + 1);
+        let source = if note.note_type == "thought" { "读者想法" } else { "书籍原文划线" };
+        let content: String = note.content.chars().take(700).collect();
+        context.push_str(&format!("[{label}] {source}｜{}｜{}\n{}\n\n", note.book_title, note.chapter, content));
+        labels.insert(label, note);
+    }
+    let allowed = "same_concept, agreement, conflict, complementary, causal, application, uncertain";
+    let system = "你是严谨的跨书观点分析器。只能根据提供的笔记判断，不能依赖书名常识补充结论。必须区分书籍原文划线和读者想法；读者想法不能当作作者立场。只有两侧证据都存在时才能判断一致、冲突、因果或应用关系。输出纯 JSON，不要 Markdown。";
+    let prompt = format!(
+        "比较 A《{left_title}》与 B《{right_title}》。候选共同词：{}。\n\n笔记：\n{context}\n输出结构：{{\"relation\":\"类型\",\"concepts\":[\"规范化概念\"],\"summary\":\"一句话结论\",\"confidence\":0到1,\"claims\":[{{\"relation\":\"类型\",\"summary\":\"原子观点关系\",\"confidence\":0到1,\"evidenceIds\":[\"A编号\",\"B编号\"]}}]}}。类型只能是 {allowed}。concepts 最多5项，claims 最多3项；每个 claim 必须同时引用 A、B 证据，否则省略。证据不足时 relation=uncertain。",
+        request.keywords.iter().take(8).cloned().collect::<Vec<_>>().join("、")
+    );
+    let response = provider.chat(&[
+        ChatMessage { role: "system".into(), content: system.into() },
+        ChatMessage { role: "user".into(), content: prompt },
+    ]).await?;
+    let raw_json = json_object(&response).ok_or_else(|| AppError::Message("AI 未返回有效 JSON，请重试".into()))?;
+    let raw: RawRelationAnalysis = serde_json::from_str(raw_json)?;
+    let allowed: HashSet<&str> = allowed.split(", ").collect();
+    let mut claims = Vec::new();
+    for raw_claim in raw.claims.into_iter().take(3) {
+        if !allowed.contains(raw_claim.relation.as_str()) { continue; }
+        let mut evidence = Vec::new();
+        let mut sides = HashSet::new();
+        for id in raw_claim.evidence_ids.into_iter().take(4) {
+            if let Some(note) = labels.get(&id) {
+                sides.insert(if note.book_id == request.left_book_id { "A" } else { "B" });
+                evidence.push(RelationEvidence {
+                    book_id: note.book_id.clone(),
+                    note_id: note.id.clone(),
+                    note_type: note.note_type.clone(),
+                    text: note.content.chars().take(180).collect(),
+                });
+            }
+        }
+        if sides.len() == 2 {
+            claims.push(RelationClaim {
+                relation: raw_claim.relation,
+                summary: raw_claim.summary.chars().take(240).collect(),
+                confidence: raw_claim.confidence.clamp(0.0, 1.0),
+                evidence,
+            });
+        }
+    }
+    let relation = if allowed.contains(raw.relation.as_str()) && (!claims.is_empty() || raw.relation == "uncertain") { raw.relation } else { "uncertain".into() };
+    let result = RelationAnalysis {
+        relation,
+        concepts: raw.concepts.into_iter().filter(|value| !value.trim().is_empty()).take(5).map(|value| value.chars().take(30).collect()).collect(),
+        summary: raw.summary.chars().take(300).collect(),
+        confidence: raw.confidence.clamp(0.0, 1.0),
+        claims,
+        cached: false,
+    };
+    let result_json = serde_json::to_string(&result)?;
+    db.connect()?.execute(
+        "INSERT INTO relation_analysis_cache(pair_key,input_hash,result_json,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(pair_key) DO UPDATE SET input_hash=excluded.input_hash,result_json=excluded.result_json,updated_at=excluded.updated_at",
+        rusqlite::params![pair_key, input_hash, result_json, now_timestamp()],
+    )?;
+    Ok(result)
+}
+
+fn relation_context(db: &Database, left_id: &str, right_id: &str, keywords: &[String]) -> Result<(String, String, Vec<Note>), AppError> {
+    let connection = db.connect()?;
+    let title = |id: &str| -> Result<String, AppError> {
+        connection.query_row("SELECT title FROM books WHERE book_id=?1 AND is_deleted=0", [id], |row| row.get(0)).map_err(AppError::from)
+    };
+    let left_title = title(left_id)?;
+    let right_title = title(right_id)?;
+    let mut query = connection.prepare(
+        "SELECT h.bookmark_id,'highlight',h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h JOIN books b ON b.book_id=h.book_id WHERE h.book_id IN (?1,?2) AND h.is_deleted=0
+         UNION ALL SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t JOIN books b ON b.book_id=t.book_id WHERE t.book_id IN (?1,?2) AND t.is_deleted=0"
+    )?;
+    let all = query.query_map(rusqlite::params![left_id, right_id], |row| Ok(Note { id:row.get(0)?,note_type:row.get(1)?,book_id:row.get(2)?,book_title:row.get(3)?,chapter:row.get(4)?,content:row.get(5)?,created_at:row.get(6)? }))?.collect::<Result<Vec<_>, _>>()?;
+    let mut selected = Vec::new();
+    for id in [left_id, right_id] {
+        let mut book_notes: Vec<(usize, Note)> = all.iter().filter(|note| note.book_id == id).cloned().map(|note| {
+            let hits = keywords.iter().filter(|word| !word.is_empty() && (note.content.contains(word.as_str()) || note.chapter.contains(word.as_str()))).count();
+            let score = hits * 10 + usize::from(note.note_type == "thought");
+            (score, note)
+        }).collect();
+        book_notes.sort_by(|a, b| b.0.cmp(&a.0));
+        selected.extend(book_notes.into_iter().take(12).map(|(_, note)| note));
+    }
+    Ok((left_title, right_title, selected))
+}
+
+fn json_object(value: &str) -> Option<&str> {
+    let start = value.find('{')?;
+    let end = value.rfind('}')?;
+    (end >= start).then_some(&value[start..=end])
+}
+
+fn now_timestamp() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn ai_provider(db: &Database) -> Result<crate::ai::providers::OpenAiCompatibleProvider, AppError> {

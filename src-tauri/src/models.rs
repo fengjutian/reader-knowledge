@@ -104,3 +104,43 @@ pub struct AiRequest {
     #[serde(default)]
     pub history: Vec<AiTurn>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationAnalysisRequest {
+    pub left_book_id: String,
+    pub right_book_id: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationEvidence {
+    pub book_id: String,
+    pub note_id: String,
+    pub note_type: String,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationClaim {
+    pub relation: String,
+    pub summary: String,
+    pub confidence: f64,
+    pub evidence: Vec<RelationEvidence>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationAnalysis {
+    pub relation: String,
+    pub concepts: Vec<String>,
+    pub summary: String,
+    pub confidence: f64,
+    pub claims: Vec<RelationClaim>,
+    pub cached: bool,
+}

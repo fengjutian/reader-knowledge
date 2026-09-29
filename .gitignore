@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.cache/
+.catch/
 src-tauri/target/
 .env
 *.db

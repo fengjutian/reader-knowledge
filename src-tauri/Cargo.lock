@@ -4865,7 +4865,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wereader-knowledge"
+name = "wereader"
 version = "0.1.0"
 dependencies = [
  "keyring",

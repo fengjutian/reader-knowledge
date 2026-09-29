@@ -1,10 +1,10 @@
 [package]
-name = "wereader-knowledge"
+name = "wereader"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "wereader_knowledge_lib"
+name = "wereader_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

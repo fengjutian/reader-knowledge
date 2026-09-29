@@ -12,7 +12,7 @@ const items: { id: Page; label: string; icon: typeof Library }[] = [
 export function Sidebar() {
   const { page, setPage, theme, toggleTheme, setSearchOpen } = useAppStore();
   return <aside className="sidebar">
-    <div className="brand"><span className="brand__mark"><BookOpen size={18}/></span><span>wereader-knowledge</span></div>
+    <div className="brand"><span className="brand__mark"><BookOpen size={18}/></span><span>wereader</span></div>
     <button className="quick-search" onClick={() => setSearchOpen(true)}><Search size={15}/><span>搜索知识库</span><kbd>⌘ K</kbd></button>
     <nav className="nav">{items.map(item => <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => setPage(item.id)}><item.icon size={17}/>{item.label}</button>)}</nav>
     <div className="sidebar__footer">
