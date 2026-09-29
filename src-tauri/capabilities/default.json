@@ -1,1 +1,1 @@
-{"$schema":"../gen/schemas/desktop-schema.json","identifier":"default","description":"ReadFlow main window: core IPC only; network and URL opening stay in trusted Rust commands","windows":["main"],"permissions":["core:default"]}
+{"$schema":"../gen/schemas/desktop-schema.json","identifier":"default","description":"wereader-knowledge main window: core IPC only; network and URL opening stay in trusted Rust commands","windows":["main"],"permissions":["core:default"]}

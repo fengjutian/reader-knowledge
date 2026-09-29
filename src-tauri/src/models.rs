@@ -89,9 +89,18 @@ pub struct AiAnswer {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AiTurn {
+    pub question: String,
+    pub answer: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiRequest {
     pub question: String,
     pub mode: String,
     #[serde(default)]
     pub book_ids: Vec<String>,
+    #[serde(default)]
+    pub history: Vec<AiTurn>,
 }

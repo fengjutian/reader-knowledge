@@ -423,18 +423,13 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         question.trim()
     );
     let provider = ai_provider(&db)?;
-    let content = provider
-        .chat(&[
-            ChatMessage {
-                role: "system".into(),
-                content: system.into(),
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: prompt,
-            },
-        ])
-        .await?;
+    let mut messages = vec![ChatMessage { role: "system".into(), content: system.into() }];
+    for turn in request.history.iter().rev().take(8).rev() {
+        messages.push(ChatMessage { role: "user".into(), content: turn.question.chars().take(1200).collect() });
+        messages.push(ChatMessage { role: "assistant".into(), content: turn.answer.chars().take(5000).collect() });
+    }
+    messages.push(ChatMessage { role: "user".into(), content: prompt });
+    let content = provider.chat(&messages).await?;
     let sources_considered = results.len();
     let citations = results
         .into_iter()

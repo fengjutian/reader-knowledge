@@ -37,7 +37,8 @@ export interface SearchResult extends Note { score: number }
 export interface Citation { index: number; note: Note }
 export interface AiAnswer { content: string; citations: Citation[]; sourcesConsidered: number }
 export type AiMode = "ask" | "summary" | "compare";
-export interface AiRequest { question: string; mode: AiMode; bookIds: string[] }
+export interface AiTurn { question: string; answer: AiAnswer }
+export interface AiRequest { question: string; mode: AiMode; bookIds: string[]; history?: { question: string; answer: string }[] }
 export interface AiSettings { provider: string; endpoint: string; model: string }
 export interface SyncProgress {
   status: "idle" | "reading" | "processing" | "complete" | "failed";

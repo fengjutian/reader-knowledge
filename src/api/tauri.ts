@@ -4,7 +4,7 @@ import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats,
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return invoke<T>(command, args);
-  throw new Error("此功能仅在 ReadFlow 桌面应用中可用");
+  throw new Error("此功能仅在 wereader-knowledge 桌面应用中可用");
 }
 
 export const api = {

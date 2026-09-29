@@ -5,22 +5,25 @@ import remarkGfm from "remark-gfm";
 import { api } from "../api/tauri";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useAppStore } from "../stores/app";
-import type { AiAnswer, AiMode, Book } from "../types/domain";
+import type { AiAnswer, AiMode, AiTurn, Book } from "../types/domain";
 
 const modeLabels: Record<AiMode, string> = { ask: "全库提问", summary: "单书总结", compare: "跨书分析" };
-const historyKey = "readflow-ai-history";
+const historyKey = "wereader-knowledge-ai-history";
 
 interface AiConversation {
   id: string;
-  question: string;
-  answer: AiAnswer;
+  title: string;
+  turns: AiTurn[];
   mode: AiMode;
   bookIds: string[];
   createdAt: number;
 }
 
 function loadHistory(): AiConversation[] {
-  try { return JSON.parse(localStorage.getItem(historyKey) || "[]") as AiConversation[]; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(historyKey) || "[]") as (AiConversation & { question?: string; answer?: AiAnswer })[];
+    return saved.map(item => item.turns ? item : { id: item.id, title: item.question || "历史对话", turns: item.question && item.answer ? [{ question: item.question, answer: item.answer }] : [], mode: item.mode, bookIds: item.bookIds, createdAt: item.createdAt });
+  }
   catch { return []; }
 }
 
@@ -48,7 +51,7 @@ export function AI() {
   const [books, setBooks] = useState<Book[]>([]);
   const [bookIds, setBookIds] = useState<string[]>([]);
   const [bookQuery, setBookQuery] = useState("");
-  const [answer, setAnswer] = useState<AiAnswer>();
+  const [turns, setTurns] = useState<AiTurn[]>([]);
   const [history, setHistory] = useState<AiConversation[]>(loadHistory);
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -73,14 +76,14 @@ export function AI() {
       .slice(0, 100);
   }, [bookQuery, books]);
   function changeMode(next: AiMode) {
-    setMode(next); setAnswer(undefined); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
+    setMode(next); setTurns([]); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
     setQuestion(next === "summary" ? "请总结这本书的核心观点，并区分原文与我的想法。" : next === "compare" ? "请比较这些书对同一主题的观点、共识与分歧。" : "");
   }
   function newConversation() {
-    setQuestion(""); setAnswer(undefined); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
+    setQuestion(""); setTurns([]); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
   }
   function openConversation(conversation: AiConversation) {
-    setActiveConversationId(conversation.id); setQuestion(conversation.question); setAnswer(conversation.answer);
+    setActiveConversationId(conversation.id); setQuestion(""); setTurns(conversation.turns);
     setMode(conversation.mode); setBookIds(conversation.bookIds); setError("");
   }
   function deleteConversation(id: string) {
@@ -100,12 +103,15 @@ export function AI() {
     event.preventDefault(); if (!question.trim()) return;
     if (mode === "summary" && bookIds.length !== 1) { setError("请选择一本书进行总结"); return; }
     if (mode === "compare" && bookIds.length < 2) { setError("请至少选择两本书进行跨书分析"); return; }
-    setLoading(true); setError(""); setAnswer(undefined);
+    const submitted = question.trim();
+    setLoading(true); setError(""); setQuestion("");
     try {
-      const nextAnswer = await api.ask({ question, mode, bookIds });
-      const conversation: AiConversation = { id: crypto.randomUUID(), question: question.trim(), answer: nextAnswer, mode, bookIds: [...bookIds], createdAt: Date.now() };
-      setAnswer(nextAnswer); setActiveConversationId(conversation.id);
-      setHistory(current => [conversation, ...current].slice(0, 50));
+      const nextAnswer = await api.ask({ question: submitted, mode, bookIds, history: turns.map(turn => ({ question: turn.question, answer: turn.answer.content })) });
+      const nextTurns = [...turns, { question: submitted, answer: nextAnswer }].slice(-50);
+      const id = activeConversationId || crypto.randomUUID();
+      const conversation: AiConversation = { id, title: turns[0]?.question || submitted, turns: nextTurns, mode, bookIds: [...bookIds], createdAt: Date.now() };
+      setTurns(nextTurns); setActiveConversationId(id);
+      setHistory(current => [conversation, ...current.filter(item => item.id !== id)].slice(0, 30));
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoading(false); }
@@ -117,7 +123,7 @@ export function AI() {
         <div className="ai-history__title">最近对话</div>
         <div className="ai-history__list">
           {history.map(conversation => <div key={conversation.id} className={`ai-history__item ${activeConversationId === conversation.id ? "active" : ""}`}>
-            <button className="ai-history__open" onClick={() => openConversation(conversation)} title={conversation.question}><MessageSquare size={14}/><span>{conversation.question}</span></button>
+            <button className="ai-history__open" onClick={() => openConversation(conversation)} title={conversation.title}><MessageSquare size={14}/><span>{conversation.title}</span></button>
             <button className="ai-history__delete" onClick={() => deleteConversation(conversation.id)} aria-label="删除对话"><Trash2 size={14}/></button>
           </div>)}
           {history.length === 0 && <p className="ai-history__empty">提问后，对话会保存在这里</p>}
@@ -132,10 +138,10 @@ export function AI() {
         <div className="ai-book-options">{visibleBooks.map(book => <label key={book.id} className={bookIds.includes(book.id) ? "selected" : ""}><input type={mode === "summary" ? "radio" : "checkbox"} checked={bookIds.includes(book.id)} onChange={() => toggleBook(book.id)}/><span><strong>{book.title}</strong><small>{book.author || "未知作者"} · {book.highlightCount + book.thoughtCount} 条笔记</small></span></label>)}</div>
         {visibleBooks.length === 0 && <p className="ai-book-picker__none">没有找到有笔记的书</p>}
       </section>}
-      {!answer && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
-      {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
+      {turns.length === 0 && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
-      {answer && <section className="answer"><div className="answer__question">{question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {answer.sourcesConsidered} 条 · 引用 {answer.citations.length} 条</span></div>{answer.citations.map(citation => <button className="citation" key={`${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>}
+      {turns.length > 0 && <div className="ai-thread">{turns.map((turn, turnIndex) => <section className="answer" key={`${turn.question}-${turnIndex}`}><div className="answer__question">{turn.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={turn.answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {turn.answer.sourcesConsidered} 条 · 引用 {turn.answer.citations.length} 条</span></div>{turn.answer.citations.map(citation => <button className="citation" key={`${turnIndex}-${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>)}</div>}
+      {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       <form className="ask-box" onSubmit={ask}>
         <div className="ask-box__composer">
           <textarea ref={textareaRef} rows={1} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="问问你的阅读知识库…"/>
