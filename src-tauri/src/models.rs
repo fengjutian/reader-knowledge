@@ -45,6 +45,31 @@ pub struct BookDetail {
     pub deep_link: Option<String>,
     pub finished: bool,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookMetadataRow {
+    pub book_id: String,
+    pub title: String,
+    pub author: String,
+    pub cover: String,
+    pub isbn: String,
+    pub publisher: String,
+    pub published_date: String,
+    pub page_count: Option<i64>,
+    pub subjects: Vec<String>,
+    pub sources: Vec<String>,
+    pub last_fetched_at: Option<String>,
+    pub metadata_status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataFetchResult {
+    pub book_id: String,
+    pub source: String,
+    pub status: String,
+    pub message: String,
+}
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {

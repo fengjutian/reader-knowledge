@@ -107,6 +107,30 @@ pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
 }
 
 #[tauri::command]
+pub fn list_book_metadata(db: State<'_, Database>) -> Result<Vec<BookMetadataRow>, AppError> {
+    crate::metadata::list(&db)
+}
+
+#[tauri::command]
+pub async fn fetch_book_metadata(db: State<'_, Database>, book_id: String, source: String, force: bool) -> Result<MetadataFetchResult, AppError> {
+    crate::metadata::fetch(&db, &book_id, &source, force).await
+}
+
+#[tauri::command]
+pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>, source: String, force: bool) -> Result<Vec<MetadataFetchResult>, AppError> {
+    if book_ids.len() > 100 { return Err(AppError::Message("单次最多补全 100 本书".into())); }
+    let mut results=Vec::with_capacity(book_ids.len());
+    for (index,book_id) in book_ids.iter().enumerate() {
+        match crate::metadata::fetch(&db,book_id,&source,force).await {
+            Ok(value)=>results.push(value),
+            Err(error)=>results.push(MetadataFetchResult{book_id:book_id.clone(),source:source.clone(),status:"failed".into(),message:error.to_string()}),
+        }
+        if index+1<book_ids.len(){tokio::time::sleep(std::time::Duration::from_millis(1200)).await;}
+    }
+    Ok(results)
+}
+
+#[tauri::command]
 pub fn get_book(db: State<'_, Database>, book_id: String) -> Result<BookDetail, AppError> {
     let c = db.connect()?;
     c.query_row(

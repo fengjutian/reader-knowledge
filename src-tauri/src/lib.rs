@@ -3,6 +3,7 @@ mod commands;
 mod database;
 mod error;
 mod models;
+mod metadata;
 mod sync;
 mod weread;
 
@@ -24,6 +25,9 @@ pub fn run() {
             commands::list_database_rows,
             commands::get_reading_stats,
             commands::list_books,
+            commands::list_book_metadata,
+            commands::fetch_book_metadata,
+            commands::fetch_books_metadata,
             commands::get_book,
             commands::list_book_notes,
             commands::open_book,

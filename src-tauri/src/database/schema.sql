@@ -17,3 +17,26 @@ CREATE INDEX IF NOT EXISTS idx_highlights_book_active ON highlights(book_id,is_d
 CREATE INDEX IF NOT EXISTS idx_thoughts_book_active ON thoughts(book_id,is_deleted);
 CREATE INDEX IF NOT EXISTS idx_highlights_seen ON highlights(last_seen_sync_id);
 CREATE INDEX IF NOT EXISTS idx_thoughts_seen ON thoughts(last_seen_sync_id);
+CREATE TABLE IF NOT EXISTS book_metadata_sources (
+    book_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_url TEXT,
+    isbn10 TEXT,
+    isbn13 TEXT,
+    title TEXT,
+    authors_json TEXT,
+    publisher TEXT,
+    published_date TEXT,
+    page_count INTEGER,
+    subjects_json TEXT,
+    cover_url TEXT,
+    description TEXT,
+    rating REAL,
+    rating_count INTEGER,
+    raw_json TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (book_id, source),
+    FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_book_metadata_sources_source ON book_metadata_sources(source, fetched_at DESC);
