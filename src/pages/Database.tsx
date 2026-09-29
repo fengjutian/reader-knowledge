@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Database as DatabaseIcon, HardDrive, Highlighter, Lightbulb, RefreshCw, Search, TableProperties } from "lucide-react";
 import { api } from "../api/tauri";
 import { Button } from "../components/ui/Button";
-import { PageHeader } from "../components/ui/PageHeader";
 import type { DatabaseOverview, DatabaseRows } from "../types/domain";
 
 const browsable = [
@@ -44,11 +43,13 @@ export function DatabasePage() {
   };
 
   return <>
-    <PageHeader title="数据库" actions={<Button variant="secondary" icon={<RefreshCw size={15}/>} onClick={refresh} disabled={loading}>刷新</Button>}/>
-    <nav className="database-module-tabs" aria-label="数据库模块">
-      <button className={module === "overview" ? "active" : ""} onClick={() => setModule("overview")}><DatabaseIcon size={16}/>数据概览</button>
-      <button className={module === "browser" ? "active" : ""} onClick={() => setModule("browser")}><TableProperties size={16}/>记录浏览</button>
-    </nav>
+    <div className="database-topbar">
+      <nav className="database-module-tabs" aria-label="数据库模块">
+        <button className={module === "overview" ? "active" : ""} onClick={() => setModule("overview")}><DatabaseIcon size={16}/>数据概览</button>
+        <button className={module === "browser" ? "active" : ""} onClick={() => setModule("browser")}><TableProperties size={16}/>记录浏览</button>
+      </nav>
+      <Button variant="secondary" icon={<RefreshCw size={15}/>} onClick={refresh} disabled={loading}>刷新</Button>
+    </div>
     {error && <div className="database-error">读取数据库失败：{error}</div>}
     {module === "overview" && <div className="database-module">
     <section className="database-summary">

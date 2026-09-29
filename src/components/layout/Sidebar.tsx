@@ -1,10 +1,9 @@
-import { LayoutDashboard, Library, Highlighter, Lightbulb, Search, Sparkles, Settings, BookOpen, Share2, Database } from "lucide-react";
+import { LayoutDashboard, Library, NotebookText, Search, Sparkles, Settings, BookOpen, Share2, Database } from "lucide-react";
 import { useAppStore, type Page } from "../../stores/app";
 
 const items: { id: Page; label: string; icon: typeof Library }[] = [
   { id: "dashboard", label: "概览", icon: LayoutDashboard }, { id: "books", label: "书籍", icon: Library },
-  { id: "highlights", label: "划线", icon: Highlighter }, { id: "thoughts", label: "想法", icon: Lightbulb },
-  { id: "search", label: "搜索", icon: Search },
+  { id: "notes", label: "笔记", icon: NotebookText },
   { id: "ai", label: "AI 助手", icon: Sparkles },
   { id: "graph", label: "知识图谱", icon: Share2 },
   { id: "database", label: "数据库", icon: Database },

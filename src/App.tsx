@@ -7,12 +7,11 @@ import { Dashboard } from "./pages/Dashboard";
 import { Books } from "./pages/Books";
 import { BookDetail } from "./pages/BookDetail";
 import { Notes } from "./pages/Notes";
-import { SearchPage } from "./pages/Search";
 import { AI } from "./pages/AI";
 import { Settings } from "./pages/Settings";
 import { DatabasePage } from "./pages/Database";
 const KnowledgeGraph = lazy(() => import("./pages/KnowledgeGraph").then(module => ({ default: module.KnowledgeGraph })));
-const pages: Record<Page, ReactNode> = {dashboard:<Dashboard/>,books:<Books/>,highlights:<Notes type="highlight"/>,thoughts:<Notes type="thought"/>,search:<SearchPage/>,ai:<AI/>,graph:<Suspense fallback={<div className="notes-loading">正在打开图谱…</div>}><KnowledgeGraph/></Suspense>,database:<DatabasePage/>,settings:<Settings/>};
+const pages: Record<Page, ReactNode> = {dashboard:<Dashboard/>,books:<Books/>,notes:<Notes/>,ai:<AI/>,graph:<Suspense fallback={<div className="notes-loading">正在打开图谱…</div>}><KnowledgeGraph/></Suspense>,database:<DatabasePage/>,settings:<Settings/>};
 export default function App(){
   const {page,theme,fontFamily,selectedBookId}=useAppStore();
   const visitedPages=useRef(new Set<Page>()).current;
