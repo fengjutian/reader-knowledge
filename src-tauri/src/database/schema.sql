@@ -12,6 +12,55 @@ CREATE TABLE IF NOT EXISTS embedding_settings (id INTEGER PRIMARY KEY CHECK(id=1
 CREATE TABLE IF NOT EXISTS note_embeddings (note_id TEXT PRIMARY KEY,book_id TEXT NOT NULL,content_hash TEXT NOT NULL,model TEXT NOT NULL,vector_json TEXT NOT NULL,updated_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_note_embeddings_book ON note_embeddings(book_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(note_id UNINDEXED,note_type UNINDEXED,book_id UNINDEXED,title,chapter_title,content,tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS notes_fts_highlights_insert AFTER INSERT ON highlights
+WHEN NEW.is_deleted=0 AND EXISTS(SELECT 1 FROM books WHERE book_id=NEW.book_id AND is_deleted=0)
+BEGIN
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT NEW.bookmark_id,'highlight',NEW.book_id,title,coalesce(NEW.chapter_title,''),NEW.mark_text
+  FROM books WHERE book_id=NEW.book_id AND is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_highlights_update AFTER UPDATE OF book_id,chapter_title,mark_text,is_deleted ON highlights
+WHEN OLD.book_id IS NOT NEW.book_id OR OLD.chapter_title IS NOT NEW.chapter_title OR OLD.mark_text IS NOT NEW.mark_text OR OLD.is_deleted IS NOT NEW.is_deleted
+BEGIN
+  DELETE FROM notes_fts WHERE note_id=OLD.bookmark_id AND note_type='highlight';
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT NEW.bookmark_id,'highlight',NEW.book_id,title,coalesce(NEW.chapter_title,''),NEW.mark_text
+  FROM books WHERE book_id=NEW.book_id AND NEW.is_deleted=0 AND is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_highlights_delete AFTER DELETE ON highlights
+BEGIN
+  DELETE FROM notes_fts WHERE note_id=OLD.bookmark_id AND note_type='highlight';
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_thoughts_insert AFTER INSERT ON thoughts
+WHEN NEW.is_deleted=0 AND EXISTS(SELECT 1 FROM books WHERE book_id=NEW.book_id AND is_deleted=0)
+BEGIN
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT NEW.review_id,'thought',NEW.book_id,title,coalesce(NEW.chapter_name,''),NEW.content
+  FROM books WHERE book_id=NEW.book_id AND is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_thoughts_update AFTER UPDATE OF book_id,chapter_name,content,is_deleted ON thoughts
+WHEN OLD.book_id IS NOT NEW.book_id OR OLD.chapter_name IS NOT NEW.chapter_name OR OLD.content IS NOT NEW.content OR OLD.is_deleted IS NOT NEW.is_deleted
+BEGIN
+  DELETE FROM notes_fts WHERE note_id=OLD.review_id AND note_type='thought';
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT NEW.review_id,'thought',NEW.book_id,title,coalesce(NEW.chapter_name,''),NEW.content
+  FROM books WHERE book_id=NEW.book_id AND NEW.is_deleted=0 AND is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_thoughts_delete AFTER DELETE ON thoughts
+BEGIN
+  DELETE FROM notes_fts WHERE note_id=OLD.review_id AND note_type='thought';
+END;
+CREATE TRIGGER IF NOT EXISTS notes_fts_books_update AFTER UPDATE OF title,is_deleted ON books
+WHEN OLD.title IS NOT NEW.title OR OLD.is_deleted IS NOT NEW.is_deleted
+BEGIN
+  DELETE FROM notes_fts WHERE book_id=OLD.book_id;
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT bookmark_id,'highlight',NEW.book_id,NEW.title,coalesce(chapter_title,''),mark_text
+  FROM highlights WHERE book_id=NEW.book_id AND is_deleted=0 AND NEW.is_deleted=0;
+  INSERT INTO notes_fts(note_id,note_type,book_id,title,chapter_title,content)
+  SELECT review_id,'thought',NEW.book_id,NEW.title,coalesce(chapter_name,''),content
+  FROM thoughts WHERE book_id=NEW.book_id AND is_deleted=0 AND NEW.is_deleted=0;
+END;
 CREATE INDEX IF NOT EXISTS idx_books_active_updated ON books(is_deleted,read_update_time DESC);
 CREATE INDEX IF NOT EXISTS idx_highlights_book_active ON highlights(book_id,is_deleted);
 CREATE INDEX IF NOT EXISTS idx_thoughts_book_active ON thoughts(book_id,is_deleted);

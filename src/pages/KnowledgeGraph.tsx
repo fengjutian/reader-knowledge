@@ -39,6 +39,9 @@ export function KnowledgeGraph() {
   const pickerRef = useRef<HTMLDivElement>(null);
   function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); api.semanticRelations().then(edges => { semanticEdgesRef.current = edges; setGraph(current => ({ ...current, edges })); setSemanticEnabled(true); void writeGraphCache(SEMANTIC_RELATIONS_CACHE_KEY, edges); }).catch(reason => { if (showError) setSemanticError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => setSemanticLoading(false)); }
   useEffect(() => { Promise.all([api.books(), api.notes(), readGraphCache<Edge[]>(SEMANTIC_RELATIONS_CACHE_KEY)]).then(([b, n, cachedEdges]) => { if (cachedEdges?.length) { semanticEdgesRef.current = cachedEdges; setSemanticEnabled(true); } setBooks(b); setNotes(n); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+    if (books.length) setFocusId(current => current ?? books[0].id);
+  }, [books]);
   useEffect(() => { const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength }); }; window.addEventListener("local-embedding-removed", removed); return () => window.removeEventListener("local-embedding-removed", removed); }, [strength]);
   useEffect(() => {
     const worker = new Worker(new URL("../workers/knowledgeGraph.worker.ts", import.meta.url), { type: "module" });

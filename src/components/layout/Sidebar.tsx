@@ -3,6 +3,7 @@ import { useAppStore, type Page } from "../../stores/app";
 
 const items: { id: Page; label: string; icon: typeof Library }[] = [
   { id: "dashboard", label: "概览", icon: LayoutDashboard }, { id: "books", label: "书籍", icon: Library },
+  { id: "metadata", label: "书籍元数据", icon: Database },
   { id: "notes", label: "笔记", icon: NotebookText },
   { id: "ai", label: "AI 助手", icon: Sparkles },
   { id: "graph", label: "知识图谱", icon: Share2 },

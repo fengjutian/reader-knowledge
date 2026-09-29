@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, LocalModelStatus, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -13,6 +13,9 @@ export const api = {
   databaseRows: (table: string, query = "", limit = 40, offset = 0) => call<DatabaseRows>("list_database_rows", { table, query, limit, offset }),
   readingStats: (mode: ReadingPeriod) => call<ReadingStats>("get_reading_stats", { mode }),
   books: () => call<Book[]>("list_books"),
+  bookMetadata: () => call<BookMetadataRow[]>("list_book_metadata"),
+  fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),
+  fetchBooksMetadata: (bookIds: string[], source: string, force = false) => call<MetadataFetchResult[]>("fetch_books_metadata", { bookIds, source, force }),
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),
   bookNotes: (bookId: string) => call<Note[]>("list_book_notes", { bookId }),
   openBook: (bookId: string) => call<void>("open_book", { bookId }),

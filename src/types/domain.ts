@@ -16,6 +16,14 @@ export interface BookDetail extends Book {
   deepLink?: string;
   finished: boolean;
 }
+export interface BookMetadataRow {
+  bookId: string; title: string; author: string; cover: string; isbn: string;
+  publisher: string; publishedDate: string; pageCount?: number; subjects: string[];
+  sources: string[]; lastFetchedAt?: string; metadataStatus: "missing" | "ready";
+}
+export interface MetadataFetchResult {
+  bookId: string; source: string; status: "updated" | "cached" | "not_found" | "failed"; message: string;
+}
 
 export interface Note {
   id: string;
