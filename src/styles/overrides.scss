@@ -343,6 +343,7 @@
 .graph-toolbar > button { height:36px;display:flex;align-items:center;gap:6px;padding:0 11px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--secondary); }
 .graph-toolbar > button.active { border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:var(--accent-soft);color:var(--accent); }
 .graph-toolbar > span { margin-left:auto;color:var(--muted);font-size:12px; }
+.graph-nav { display:flex;gap:3px;margin-left:auto; }.graph-nav button { display:grid;width:32px;height:32px;place-items:center;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--secondary); }.graph-nav button:hover:not(:disabled) { border-color:var(--accent);color:var(--accent); }.graph-nav button:disabled { color:var(--muted);cursor:not-allowed;opacity:.45; }.graph-nav + span { margin-left:5px!important; }
 .graph-search { width:240px;height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--muted); }
 .graph-search-wrap { position:relative; }
 .graph-search > button { display:grid;place-items:center;padding:3px;border:0;background:transparent;color:var(--muted); }
@@ -357,7 +358,7 @@
 .graph-reset { color:var(--accent)!important; }
 .graph-shell { position:relative;flex:1;min-height:450px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:radial-gradient(circle at center,color-mix(in srgb,var(--accent-soft) 35%,var(--surface)) 0,var(--surface) 62%);box-shadow:0 7px 28px #66523d0b; }
 .knowledge-graph { display:block;width:100%;height:100%;min-height:450px; }
-.sigma-graph { position:absolute;inset:0;min-height:450px;cursor:grab; }.sigma-graph:active { cursor:grabbing; }
+.sigma-graph { position:absolute;inset:0;min-height:450px;cursor:grab;transition:right .22s ease; }.sigma-graph:active { cursor:grabbing; }.sigma-graph.is-edge-hovered { cursor:pointer; }.graph-shell.has-detail .sigma-graph { right:334px; }
 .graph-edges line { stroke:color-mix(in srgb,var(--secondary) 28%,transparent);stroke-width:1.2; }
 .graph-relation { cursor:pointer;transition:opacity .18s ease; }.graph-relation:hover line:not(.graph-relation__hit),.graph-relation.selected line:not(.graph-relation__hit) { stroke:var(--accent); }.graph-relation__hit { stroke:transparent!important;stroke-width:14!important; }.graph-relation.dimmed { opacity:.08; }
 .graph-node { cursor:pointer;outline:none;transition:opacity .18s ease; }
@@ -372,7 +373,7 @@
 .graph-node--thought svg { color:white; }
 .graph-node:hover circle,.graph-node.selected circle { stroke:var(--text);stroke-width:3; }
 .graph-node.dimmed { opacity:.16; }
-.graph-detail { position:absolute;right:14px;top:14px;width:280px;padding:20px;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 14px 38px #3e312520;backdrop-filter:blur(10px); }
+.graph-detail { position:absolute;z-index:5;right:0;top:0;bottom:0;width:334px;padding:22px 20px;overflow-y:auto;border:0;border-left:1px solid var(--border);background:color-mix(in srgb,var(--surface) 97%,transparent);box-shadow:-10px 0 30px #3e312512;backdrop-filter:blur(10px); }
 .graph-detail__close { position:absolute;right:10px;top:10px;padding:5px;border:0;background:transparent;color:var(--muted); }
 .graph-kind { display:inline-flex;padding:4px 7px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-size:11px; }
 .graph-kind--highlight { background:#f4e8bf;color:#806319; }
@@ -384,7 +385,7 @@
 .graph-detail__actions button { display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:12px; }
 .graph-detail__actions button:last-child { background:var(--accent);border-color:var(--accent);color:white; }
 .relation-keywords { display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 15px; }.relation-keywords span { padding:5px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px; }.graph-relation-detail h2 { font-size:15px;line-height:1.8; }
-.graph-legend { position:absolute;left:16px;bottom:14px;display:flex;gap:14px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--secondary);font-size:11px; }
+.graph-legend { position:absolute;z-index:4;left:16px;bottom:14px;display:flex;gap:14px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--secondary);font-size:11px; }
 .graph-legend span { display:flex;align-items:center;gap:5px; }
 .graph-legend i { width:8px;height:8px;border-radius:50%;background:var(--accent); }
 .graph-legend i.highlight { background:#d2a73d; }.graph-legend i.thought { background:#6f789f; }
@@ -394,4 +395,4 @@
 .graph-analyzing { position:absolute;z-index:3;top:14px;left:50%;transform:translateX(-50%);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);color:var(--secondary);font-size:11px;box-shadow:0 3px 12px #0001; }
 .relation-evidence { display:block;width:100%;margin:7px 0;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-hover);color:var(--secondary);font-size:11px;line-height:1.55;text-align:left; }
 .relation-evidence:hover { border-color:var(--accent);color:var(--text); }
-.deep-relation { max-height:310px;margin:4px -4px 10px;padding:0 4px;overflow-y:auto; }.deep-relation > p { color:var(--text); }.deep-relation section { margin:10px 0;padding-top:10px;border-top:1px solid var(--border); }.deep-relation section strong { font-size:12px;color:var(--accent); }.deep-relation section p { margin:5px 0;color:var(--secondary);font-size:12px;line-height:1.55; }.relation-evidence i { display:block;margin-bottom:3px;color:var(--accent);font-size:10px;font-style:normal; }.relation-analysis-actions { margin-top:10px; }.relation-analysis-actions button { display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:8px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:white;font-size:12px; }.relation-analysis-actions button:disabled { cursor:wait;opacity:.65; }.relation-analysis-error { margin:8px 0!important;color:#b74335!important;font-size:11px!important; }
+.deep-relation { max-height:310px;margin:4px -4px 10px;padding:0 4px;overflow-y:auto; }.deep-relation > p { color:var(--text); }.deep-relation section { margin:10px 0;padding-top:10px;border-top:1px solid var(--border); }.deep-relation section strong { font-size:12px;color:var(--accent); }.deep-relation section p { margin:5px 0;color:var(--secondary);font-size:12px;line-height:1.55; }.relation-evidence i { display:block;margin-bottom:3px;color:var(--accent);font-size:10px;font-style:normal; }.relation-analysis-actions { margin-top:10px; }.relation-analysis-actions button { display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:8px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:white;font-size:12px; }.relation-analysis-actions button:disabled { cursor:not-allowed;border-color:var(--border);background:var(--surface-hover);color:var(--muted);opacity:1; }.relation-analysis-error { margin:8px 0!important;color:#b74335!important;font-size:11px!important; }.relation-analysis-notice { margin:8px 0!important;padding:7px 8px;border-radius:5px;background:var(--surface-hover);color:var(--secondary)!important;font-size:11px!important;line-height:1.5!important; }

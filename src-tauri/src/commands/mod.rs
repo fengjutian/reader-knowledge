@@ -479,10 +479,12 @@ pub async fn analyze_book_relation(
         &request.right_book_id,
         &request.keywords,
     )?;
-    if notes.iter().filter(|note| note.book_id == request.left_book_id).count() == 0
-        || notes.iter().filter(|note| note.book_id == request.right_book_id).count() == 0
-    {
-        return Err(AppError::Message("两本书都需要至少一条划线或想法才能深度分析".into()));
+    let missing: Vec<&str> = [(&request.left_book_id, left_title.as_str()), (&request.right_book_id, right_title.as_str())]
+        .into_iter()
+        .filter_map(|(id, title)| (!notes.iter().any(|note| note.book_id == *id)).then_some(title))
+        .collect();
+    if !missing.is_empty() {
+        return Err(AppError::Message(format!("《{}》暂无划线或想法，不能进行有证据的观点分析", missing.join("》《"))));
     }
 
     let provider = ai_provider(&db)?;
