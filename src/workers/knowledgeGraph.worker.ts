@@ -6,7 +6,11 @@ type Evidence = { bookId: string; text: string; noteId: string };
 type Edge = { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: Evidence[] };
 type Analysis = { nodes: Node[]; candidates: Edge[] };
 const LIMITS = { all: { books: Infinity, edges: Infinity, neighbors: 12 }, strong: { books: Infinity, edges: Infinity, neighbors: 5 }, balanced: { books: Infinity, edges: Infinity, neighbors: 10 }, broad: { books: Infinity, edges: Infinity, neighbors: 20 } };
-const STOP = new Set(["我们","你们","他们","这个","那个","一个","什么","就是","因为","所以","但是","如果","可以","没有","不是","已经","自己","这种","这样","以及","对于","进行","需要","可能","时候","这里","其中","那些","这些","问题","认为","关系","之后","之前","只是","还是","很多","一些","一种","如何","为什么","其实","非常","现在","发现","开始","能够","通过","方式"]);
+const STOP = new Set([
+  "我们","你们","他们","这个","那个","一个","什么","就是","因为","所以","但是","如果","可以","没有","不是","已经","自己","这种","这样","以及","对于","进行","需要","可能","时候","这里","其中","那些","这些","问题","认为","关系","之后","之前","只是","还是","很多","一些","一种","如何","为什么","其实","非常","现在","发现","开始","能够","通过","方式",
+  "部分","一部","根据","有关","相关","方面","一定","不同","而且","并且","或者","应该","虽然","由于","因此","比如","例如","说明","表示","事实","情况","内容","作者","本书","书中","来说","关于","之间","主要","基本","一般","整个","所有","其他","同时","甚至","仍然","如此","当时","后来","最后","第一","第二",
+]);
+const MIN_CONTENT_SCORE = .06;
 let analysis: Analysis = { nodes: [], candidates: [] };
 
 function words(text: string) {
@@ -54,9 +58,10 @@ function analyze(booksInput: Book[], notes: Note[]) {
   postings.forEach((items, word) => { if (items.length > 50) return; for (let a = 0; a < items.length; a += 1) for (let b = a + 1; b < items.length; b += 1) { const key = `${items[a].index}:${items[b].index}`, pair = pairs.get(key) ?? { dot: 0, shared: [] }, weight = items[a].value * items[b].value; pair.dot += weight; pair.shared.push({ word, weight }); pairs.set(key, pair); } });
   const candidates: Edge[] = [];
   pairs.forEach((pair, key) => {
-    const [a, b] = key.split(":").map(Number), score = pair.dot / (lengths[a] * lengths[b]); if (score <= .015 || pair.shared.length < 2 || sameWork(books[a], books[b])) return;
+    const [a, b] = key.split(":").map(Number), score = pair.dot / (lengths[a] * lengths[b]); if (score < MIN_CONTENT_SCORE || pair.shared.length < 2 || sameWork(books[a], books[b])) return;
     const keywords = pair.shared.sort((x, y) => y.weight - x.weight).slice(0, 5).map(item => item.word);
     const evidence = [a, b].flatMap(index => { const note = (notesByBook.get(books[index].id) ?? []).find(item => keywords.some(word => item.content.includes(word))); return note ? [{ bookId: books[index].id, noteId: note.id, text: note.content.slice(0, 150) }] : []; });
+    if (evidence.length < 2) return;
     const relation = books[a].author && books[a].author === books[b].author ? "同一作者" : score >= .28 ? "高度主题相似" : score >= .12 ? "主题相近" : "潜在关联";
     candidates.push({ id: `${books[a].id}:${books[b].id}`, from: books[a].id, to: books[b].id, score, keywords, relation, evidence });
   });

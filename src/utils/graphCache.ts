@@ -36,5 +36,5 @@ export function graphCacheKey(books: { id: string; updatedAt: string; highlightC
   let hash = 2166136261;
   const signature = `${noteCount}|${books.map(book => `${book.id}:${book.updatedAt}:${book.highlightCount}:${book.thoughtCount}`).join("|")}`;
   for (let index = 0; index < signature.length; index += 1) hash = Math.imul(hash ^ signature.charCodeAt(index), 16777619);
-  return `v4:${books.length}:${noteCount}:${(hash >>> 0).toString(36)}`;
+  return `v5:${books.length}:${noteCount}:${(hash >>> 0).toString(36)}`;
 }
