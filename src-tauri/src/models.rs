@@ -77,6 +77,8 @@ pub struct BookMetadataSourceDetail {
     pub authors: Vec<String>, pub isbn: String, pub publisher: String, pub published_date: String,
     pub page_count: Option<i64>, pub subjects: Vec<String>, pub cover_url: String,
     pub description: String, pub rating: Option<f64>, pub rating_count: Option<i64>, pub fetched_at: String,
+    pub author_name: String, pub author_avatar: String, pub author_url: String,
+    pub author_bio: String, pub table_of_contents: String,
 }
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

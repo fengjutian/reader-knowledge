@@ -89,3 +89,14 @@ CREATE TABLE IF NOT EXISTS book_metadata_sources (
     FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_book_metadata_sources_source ON book_metadata_sources(source, fetched_at DESC);
+CREATE TABLE IF NOT EXISTS book_metadata_extras (
+    book_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    author_name TEXT,
+    author_avatar TEXT,
+    author_url TEXT,
+    author_bio TEXT,
+    table_of_contents TEXT,
+    PRIMARY KEY(book_id,source),
+    FOREIGN KEY(book_id,source) REFERENCES book_metadata_sources(book_id,source) ON DELETE CASCADE
+);

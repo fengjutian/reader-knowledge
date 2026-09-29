@@ -86,7 +86,14 @@ fn parse_douban_html(html: &str, source_id: &str, source_url: &str) -> Result<Va
     let rating=property_text(html,"v:average").and_then(|v|v.parse::<f64>().ok());
     let rating_count=property_text(html,"v:votes").and_then(|v|v.parse::<i64>().ok());
     let subjects=douban_tags(html);
-    Ok(json!({"source_id":source_id,"source_url":source_url,"title":title,"authors":authors,"isbn":isbn,"publisher":publisher,"published_date":published_date,"page_count":page_count,"cover_url":image,"description":description,"rating":rating,"rating_count":rating_count,"subjects":subjects,"raw":json_ld.unwrap_or_else(||json!({"title":title}))}))
+    let author_block=html_section(html,"<div id=\"authors\"","</ul>").unwrap_or_default();
+    let author_url=attribute_after(author_block,"<a href=\"","\"");
+    let author_avatar=attribute_after(author_block,"<img src=\"","\"");
+    let author_name=attribute_after(author_block,"title=\"","\"").or_else(||authors.first().cloned());
+    let author_bio=section_after_heading(html,"作者简介").map(strip_html_with_breaks);
+    let toc_marker=format!("id=\"dir_{source_id}_full\"");
+    let table_of_contents=html.find(&toc_marker).and_then(|start|{let rest=&html[start..];let body=rest.find('>')?+1;let end=rest[body..].find("</div>")?+body;Some(strip_html_with_breaks(&rest[body..end]))});
+    Ok(json!({"source_id":source_id,"source_url":source_url,"title":title,"authors":authors,"isbn":isbn,"publisher":publisher,"published_date":published_date,"page_count":page_count,"cover_url":image,"description":description,"rating":rating,"rating_count":rating_count,"subjects":subjects,"author_name":author_name,"author_avatar":author_avatar,"author_url":author_url,"author_bio":author_bio,"table_of_contents":table_of_contents,"raw":json_ld.unwrap_or_else(||json!({"title":title}))}))
 }
 
 fn html_section<'a>(html:&'a str,start_marker:&str,end_marker:&str)->Option<&'a str>{let start=html.find(start_marker)?+start_marker.len();let end=html[start..].find(end_marker)?+start;Some(&html[start..end])}
@@ -94,6 +101,9 @@ fn strip_html(value:&str)->String{let mut result=String::new();let mut inside=fa
 fn info_field(info:&str,label:&str)->Option<String>{let marker=format!(">{label}</span>");let start=info.find(&marker)?+marker.len();let end=info[start..].find("<br").unwrap_or(info.len()-start)+start;let value=strip_html(&info[start..end]);(!value.is_empty()).then_some(value)}
 fn property_text(html:&str,property:&str)->Option<String>{let marker=format!("property=\"{property}\"");let start=html.find(&marker)?+marker.len();let content=&html[start..];let gt=content.find('>')?+1;let end=content[gt..].find('<')?+gt;Some(strip_html(&content[gt..end]))}
 fn douban_tags(html:&str)->Vec<String>{let mut tags=Vec::new();let mut rest=html;while let Some(pos)=rest.find("https://book.douban.com/tag/"){rest=&rest[pos..];let Some(gt)=rest.find('>')else{break};let body=&rest[gt+1..];let Some(end)=body.find("</a>")else{break};let tag=strip_html(&body[..end]);if !tag.is_empty()&&!tags.contains(&tag){tags.push(tag)}rest=&body[end+4..];if tags.len()>=12{break}}tags}
+fn attribute_after(html:&str,marker:&str,end_marker:&str)->Option<String>{let start=html.find(marker)?+marker.len();let end=html[start..].find(end_marker)?+start;Some(html[start..end].to_owned())}
+fn section_after_heading<'a>(html:&'a str,heading:&str)->Option<&'a str>{let start=html.find(&format!("<span>{heading}</span>"))?;let rest=&html[start..];let intro=rest.find("<div class=\"intro\">")?+"<div class=\"intro\">".len();let end=rest[intro..].find("</div>")?+intro;Some(&rest[intro..end])}
+fn strip_html_with_breaks(value:&str)->String{strip_html(&value.replace("<br/>","\n").replace("<br>","\n").replace("</p>","\n"))}
 
 pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
     let c = db.connect()?;
@@ -126,8 +136,8 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
 
 pub fn details(db:&Database,book_id:&str)->Result<Vec<BookMetadataSourceDetail>,AppError>{
     let c=db.connect()?;
-    let mut q=c.prepare("SELECT source,source_id,source_url,coalesce(title,''),coalesce(authors_json,'[]'),coalesce(isbn13,isbn10,''),coalesce(publisher,''),coalesce(published_date,''),page_count,coalesce(subjects_json,'[]'),coalesce(cover_url,''),coalesce(description,''),rating,rating_count,datetime(fetched_at,'unixepoch','localtime') FROM book_metadata_sources WHERE book_id=?1 ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END")?;
-    let rows=q.query_map([book_id],|r|Ok(BookMetadataSourceDetail{source:r.get(0)?,source_id:r.get(1)?,source_url:r.get(2)?,title:r.get(3)?,authors:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),isbn:r.get(5)?,publisher:r.get(6)?,published_date:r.get(7)?,page_count:r.get(8)?,subjects:serde_json::from_str(&r.get::<_,String>(9)?).unwrap_or_default(),cover_url:r.get(10)?,description:r.get(11)?,rating:r.get(12)?,rating_count:r.get(13)?,fetched_at:r.get(14)?}))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q=c.prepare("SELECT s.source,s.source_id,s.source_url,coalesce(s.title,''),coalesce(s.authors_json,'[]'),coalesce(s.isbn13,s.isbn10,''),coalesce(s.publisher,''),coalesce(s.published_date,''),s.page_count,coalesce(s.subjects_json,'[]'),coalesce(s.cover_url,''),coalesce(s.description,''),s.rating,s.rating_count,datetime(s.fetched_at,'unixepoch','localtime'),coalesce(e.author_name,''),coalesce(e.author_avatar,''),coalesce(e.author_url,''),coalesce(e.author_bio,''),coalesce(e.table_of_contents,'') FROM book_metadata_sources s LEFT JOIN book_metadata_extras e ON e.book_id=s.book_id AND e.source=s.source WHERE s.book_id=?1 ORDER BY CASE s.source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END")?;
+    let rows=q.query_map([book_id],|r|Ok(BookMetadataSourceDetail{source:r.get(0)?,source_id:r.get(1)?,source_url:r.get(2)?,title:r.get(3)?,authors:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),isbn:r.get(5)?,publisher:r.get(6)?,published_date:r.get(7)?,page_count:r.get(8)?,subjects:serde_json::from_str(&r.get::<_,String>(9)?).unwrap_or_default(),cover_url:r.get(10)?,description:r.get(11)?,rating:r.get(12)?,rating_count:r.get(13)?,fetched_at:r.get(14)?,author_name:r.get(15)?,author_avatar:r.get(16)?,author_url:r.get(17)?,author_bio:r.get(18)?,table_of_contents:r.get(19)?}))?.collect::<Result<Vec<_>,_>>()?;
     Ok(rows)
 }
 
@@ -221,7 +231,9 @@ fn save(db:&Database,book_id:&str,source:&str,d:&Value)->Result<(),AppError>{
     let isbns=strings("isbn");
     let isbn10=isbns.iter().find(|v|v.len()==10).cloned(); let isbn13=isbns.iter().find(|v|v.len()==13).cloned();
     let text=|key:&str| d.get(key).and_then(|v| if v.is_string(){v.as_str().map(str::to_owned)}else if v.is_number(){Some(v.to_string())}else{None});
-    db.connect()?.execute("INSERT INTO book_metadata_sources(book_id,source,source_id,source_url,isbn10,isbn13,title,authors_json,publisher,published_date,page_count,subjects_json,cover_url,description,rating,rating_count,raw_json,fetched_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) ON CONFLICT(book_id,source) DO UPDATE SET source_id=excluded.source_id,source_url=excluded.source_url,isbn10=excluded.isbn10,isbn13=excluded.isbn13,title=excluded.title,authors_json=excluded.authors_json,publisher=excluded.publisher,published_date=excluded.published_date,page_count=excluded.page_count,subjects_json=excluded.subjects_json,cover_url=excluded.cover_url,description=excluded.description,rating=excluded.rating,rating_count=excluded.rating_count,raw_json=excluded.raw_json,fetched_at=excluded.fetched_at",
+    let c=db.connect()?;
+    c.execute("INSERT INTO book_metadata_sources(book_id,source,source_id,source_url,isbn10,isbn13,title,authors_json,publisher,published_date,page_count,subjects_json,cover_url,description,rating,rating_count,raw_json,fetched_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) ON CONFLICT(book_id,source) DO UPDATE SET source_id=excluded.source_id,source_url=excluded.source_url,isbn10=excluded.isbn10,isbn13=excluded.isbn13,title=excluded.title,authors_json=excluded.authors_json,publisher=excluded.publisher,published_date=excluded.published_date,page_count=excluded.page_count,subjects_json=excluded.subjects_json,cover_url=excluded.cover_url,description=excluded.description,rating=excluded.rating,rating_count=excluded.rating_count,raw_json=excluded.raw_json,fetched_at=excluded.fetched_at",
         params![book_id,source,text("source_id").unwrap_or_default(),text("source_url"),isbn10,isbn13,text("title"),serde_json::to_string(&strings("authors"))?,text("publisher"),text("published_date"),d.get("page_count").and_then(Value::as_i64),serde_json::to_string(&strings("subjects"))?,text("cover_url"),text("description"),d.get("rating").and_then(Value::as_f64),d.get("rating_count").and_then(Value::as_i64),serde_json::to_string(&d["raw"])?,now()])?;
+    c.execute("INSERT INTO book_metadata_extras(book_id,source,author_name,author_avatar,author_url,author_bio,table_of_contents) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(book_id,source) DO UPDATE SET author_name=excluded.author_name,author_avatar=excluded.author_avatar,author_url=excluded.author_url,author_bio=excluded.author_bio,table_of_contents=excluded.table_of_contents",params![book_id,source,text("author_name"),text("author_avatar"),text("author_url"),text("author_bio"),text("table_of_contents")])?;
     Ok(())
 }

@@ -28,6 +28,7 @@ export interface BookMetadataSourceDetail {
   source:string; sourceId:string; sourceUrl?:string; title:string; authors:string[]; isbn:string;
   publisher:string; publishedDate:string; pageCount?:number; subjects:string[]; coverUrl:string;
   description:string; rating?:number; ratingCount?:number; fetchedAt:string;
+  authorName:string; authorAvatar:string; authorUrl:string; authorBio:string; tableOfContents:string;
 }
 
 export interface Note {
