@@ -10,7 +10,7 @@
 .page--dashboard > .page-header,.page--dashboard > .dashboard-tabs { flex:none; }
 .dashboard-module { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:36px;scrollbar-gutter:stable; }
 .reading-dashboard { display:flex;min-height:0;flex:1;flex-direction:column;overflow:hidden; }
-.reading-dashboard__scroll { display:flex;min-height:0;flex:1;flex-direction:column;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:20px;scrollbar-gutter:stable; }
+.reading-dashboard__scroll { display:flex;min-height:0;flex:1;flex-direction:column;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding-right:8px;padding-bottom:0;scrollbar-gutter:stable; }
 .dashboard-module { min-height:0; }
 .reading-dashboard { min-height:0; }
 .reading-dashboard__header { display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px; }
@@ -220,6 +220,8 @@
   margin: 0;
   padding: 28px 20px 48px 32px;
 }
+
+.page.page--dashboard { padding-bottom:32px; }
 
 .page-header { margin-bottom: 22px; }
 .page-header h1 { font-size: 26px; margin-bottom: 4px; }

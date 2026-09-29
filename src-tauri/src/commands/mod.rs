@@ -237,7 +237,7 @@ pub fn list_notes(
          SELECT t.review_id,'thought',t.book_id,b.title,coalesce(t.chapter_name,''),t.content,coalesce(datetime(t.create_time,'unixepoch','localtime'),'')
          FROM thoughts t JOIN books b ON b.book_id=t.book_id
          WHERE t.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR ?1='thought')
-         ORDER BY 7 DESC LIMIT 500",
+         ORDER BY 7 DESC",
     )?;
     let notes = query.query_map([note_type], |r| {
         Ok(Note { id:r.get(0)?,note_type:r.get(1)?,book_id:r.get(2)?,book_title:r.get(3)?,chapter:r.get(4)?,content:r.get(5)?,created_at:r.get(6)? })
@@ -736,8 +736,28 @@ pub async fn analyze_book_relation(
         ChatMessage { role: "system".into(), content: system.into() },
         ChatMessage { role: "user".into(), content: prompt },
     ]).await?;
-    let raw_json = json_object(&response).ok_or_else(|| AppError::Message("AI 未返回有效 JSON，请重试".into()))?;
-    let raw: RawRelationAnalysis = serde_json::from_str(raw_json)?;
+    let raw = match parse_relation_analysis(&response) {
+        Ok(raw) => raw,
+        Err(_) => {
+            // Models occasionally wrap JSON in prose or emit a nearly-correct object. Give the
+            // model one cheap opportunity to normalize its own output instead of exposing a
+            // serde parser error to the user.
+            let repair_prompt = format!(
+                "请把下面内容修正为严格有效的 JSON。不要增删事实，不要输出 Markdown 或解释，只返回 JSON 对象：\n\n{}",
+                response.chars().take(4_000).collect::<String>()
+            );
+            let repaired = provider.chat(&[
+                ChatMessage {
+                    role: "system".into(),
+                    content: "你是 JSON 格式修复器。输出必须是可被标准 JSON 解析器直接解析的单个对象。".into(),
+                },
+                ChatMessage { role: "user".into(), content: repair_prompt },
+            ]).await?;
+            parse_relation_analysis(&repaired).map_err(|_| {
+                AppError::Message("AI 返回的数据格式不完整，请点击“重新分析”再试一次".into())
+            })?
+        }
+    };
     let allowed: HashSet<&str> = allowed.split(", ").collect();
     let mut claims = Vec::new();
     for raw_claim in raw.claims.into_iter().take(3) {
@@ -815,6 +835,14 @@ fn json_object(value: &str) -> Option<&str> {
     let start = value.find('{')?;
     let end = value.rfind('}')?;
     (end >= start).then_some(&value[start..=end])
+}
+
+fn parse_relation_analysis(value: &str) -> Result<RawRelationAnalysis, serde_json::Error> {
+    // Accept a plain object as well as the common ```json ... ``` response shape.
+    // The returned error is deliberately handled at the command boundary so raw parser details
+    // never become the user-facing error message.
+    let candidate = json_object(value).unwrap_or(value.trim());
+    serde_json::from_str(candidate)
 }
 
 fn now_timestamp() -> u64 {
@@ -1055,7 +1083,23 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fts_query, search_terms, weread_reader_id};
+    use super::{fts_query, parse_relation_analysis, search_terms, weread_reader_id};
+
+    #[test]
+    fn parses_relation_json_wrapped_in_markdown() {
+        let response = r#"```json
+{"relation":"agreement","concepts":["制度"],"summary":"观点一致","confidence":0.8,"claims":[]}
+```"#;
+        let parsed = parse_relation_analysis(response).unwrap();
+        assert_eq!(parsed.relation, "agreement");
+        assert_eq!(parsed.concepts, ["制度"]);
+    }
+
+    #[test]
+    fn rejects_malformed_relation_json_before_retrying() {
+        let response = r#"{"relation":"agreement" "concepts":[]}"#;
+        assert!(parse_relation_analysis(response).is_err());
+    }
 
     #[test]
     fn builds_the_real_web_reader_id_for_a_numeric_book_id() {
