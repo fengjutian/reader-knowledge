@@ -8,7 +8,12 @@ fn now() -> i64 {
 }
 
 pub async fn fetch_douban_url(db: &Database, book_id: &str, input_url: &str) -> Result<MetadataFetchResult, AppError> {
-    let url = reqwest::Url::parse(input_url.trim()).map_err(|_| AppError::Message("请输入有效的豆瓣图书链接".into()))?;
+    let input=input_url.trim();
+    let url = if input.starts_with("https://book.douban.com/subject/") {
+        reqwest::Url::parse(input).map_err(|_| AppError::Message("请输入有效的豆瓣图书链接".into()))?
+    } else {
+        find_douban_book(db,book_id,input).await?
+    };
     if url.scheme() != "https" || url.host_str() != Some("book.douban.com") || !url.path().starts_with("/subject/") {
         return Err(AppError::Message("仅支持 https://book.douban.com/subject/... 链接".into()));
     }
@@ -26,6 +31,31 @@ pub async fn fetch_douban_url(db: &Database, book_id: &str, input_url: &str) -> 
     let data = parse_douban_html(&html, &source_id, url.as_str())?;
     save(db, book_id, "douban", &data)?;
     Ok(MetadataFetchResult { book_id:book_id.into(), source:"douban".into(), status:"updated".into(), message:"豆瓣公开条目信息已保存到本地".into() })
+}
+
+async fn find_douban_book(db:&Database,book_id:&str,query:&str)->Result<reqwest::Url,AppError>{
+    let (title,author):(String,String)=db.connect()?.query_row("SELECT title,coalesce(author,'') FROM books WHERE book_id=?1 AND is_deleted=0",[book_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let search=if query.is_empty(){core_title(&title)}else{core_title(query)};
+    let client=reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("Mozilla/5.0 (compatible; ReadFlow/0.1; personal metadata lookup)").build()?;
+    let response=client.get("https://search.douban.com/book/subject_search").query(&[("search_text",search.as_str()),("cat","1001")]).send().await?.error_for_status()?;
+    let html=response.text().await?;
+    let marker="window.__DATA__ = ";
+    let start=html.find(marker).ok_or_else(||AppError::Message("豆瓣搜索页未返回可识别结果".into()))?+marker.len();
+    let end=html[start..].find(";</script>").or_else(||html[start..].find(";\n")).ok_or_else(||AppError::Message("豆瓣搜索结果格式已变化".into()))?+start;
+    let value:Value=serde_json::from_str(html[start..end].trim())?;
+    let items=value.get("items").and_then(Value::as_array).ok_or_else(||AppError::Message("豆瓣没有找到这本书".into()))?;
+    let target=normalized(&core_title(&title)); let author_key=normalized(&author);
+    let best=items.iter().max_by_key(|item|{
+        let candidate=normalized(&core_title(item.get("title").and_then(Value::as_str).unwrap_or("")));
+        let mut score=if candidate==target{100}else if candidate.contains(&target)||target.contains(&candidate){60}else{0};
+        let abstract_text=normalized(item.get("abstract").and_then(Value::as_str).unwrap_or(""));
+        if !author_key.is_empty()&&abstract_text.contains(&author_key){score+=30;} score
+    }).filter(|item|{
+        let candidate=normalized(&core_title(item.get("title").and_then(Value::as_str).unwrap_or("")));
+        candidate==target||candidate.contains(&target)||target.contains(&candidate)
+    }).ok_or_else(||AppError::Message("豆瓣没有找到可靠匹配".into()))?;
+    let url=best.get("url").and_then(Value::as_str).ok_or_else(||AppError::Message("豆瓣搜索结果缺少条目链接".into()))?;
+    reqwest::Url::parse(url).map_err(|_|AppError::Message("豆瓣返回了无效条目链接".into()))
 }
 
 fn parse_douban_html(html: &str, source_id: &str, source_url: &str) -> Result<Value, AppError> {
