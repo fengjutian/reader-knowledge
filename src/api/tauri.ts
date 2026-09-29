@@ -20,6 +20,7 @@ export const api = {
   testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),
   ask: (request: AiRequest) => call<AiAnswer>("ask_ai", { request }),
   analyzeRelation: (leftBookId: string, rightBookId: string, keywords: string[], refresh = false) => call<RelationAnalysis>("analyze_book_relation", { request: { leftBookId, rightBookId, keywords, refresh } }),
+  cachedRelation: (leftBookId: string, rightBookId: string, keywords: string[]) => call<RelationAnalysis | null>("get_cached_relation_analysis", { request: { leftBookId, rightBookId, keywords, refresh: false } }),
   sync: () => call<SyncProgress>("sync_weread"),
   saveSecret: (kind: string, value: string) => call<void>("save_secret", { kind, value }),
   hasSecret: (kind: string) => call<boolean>("has_secret", { kind }),

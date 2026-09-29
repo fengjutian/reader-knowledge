@@ -46,10 +46,11 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
 }
 
 export function AI() {
-  const [question, setQuestion] = useState("");
-  const [mode, setMode] = useState<AiMode>("ask");
+  const initialDraft = useRef(useAppStore.getState().aiDraft).current;
+  const [question, setQuestion] = useState(initialDraft?.question ?? "");
+  const [mode, setMode] = useState<AiMode>(initialDraft?.mode ?? "ask");
   const [books, setBooks] = useState<Book[]>([]);
-  const [bookIds, setBookIds] = useState<string[]>([]);
+  const [bookIds, setBookIds] = useState<string[]>(initialDraft?.bookIds ?? []);
   const [bookQuery, setBookQuery] = useState("");
   const [turns, setTurns] = useState<AiTurn[]>([]);
   const [history, setHistory] = useState<AiConversation[]>(loadHistory);
@@ -59,6 +60,7 @@ export function AI() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const openBook = useAppStore(state => state.openBook);
+  useEffect(() => { if (initialDraft) useAppStore.getState().clearAiDraft(); }, [initialDraft]);
   useEffect(() => { localStorage.setItem(historyKey, JSON.stringify(history)); }, [history]);
   useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
   useEffect(() => {

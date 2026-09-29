@@ -466,6 +466,28 @@ struct RawRelationAnalysis {
 }
 
 #[tauri::command]
+pub fn get_cached_relation_analysis(
+    db: State<'_, Database>,
+    request: RelationAnalysisRequest,
+) -> Result<Option<RelationAnalysis>, AppError> {
+    let model: Option<String> = db.connect()?.query_row("SELECT model FROM ai_settings WHERE id=1", [], |row| row.get(0)).optional()?;
+    let Some(model) = model else { return Ok(None); };
+    let (_, _, notes) = relation_context(&db, &request.left_book_id, &request.right_book_id, &request.keywords)?;
+    let pair_key = format!("{}:{}", request.left_book_id, request.right_book_id);
+    let input_hash = relation_signature(&model, &pair_key, &request.keywords, &notes);
+    let cached: Option<String> = db.connect()?.query_row(
+        "SELECT result_json FROM relation_analysis_cache WHERE pair_key=?1 AND input_hash=?2",
+        rusqlite::params![pair_key, input_hash],
+        |row| row.get(0),
+    ).optional()?;
+    cached.map(|json| {
+        let mut result: RelationAnalysis = serde_json::from_str(&json)?;
+        result.cached = true;
+        Ok(result)
+    }).transpose()
+}
+
+#[tauri::command]
 pub async fn analyze_book_relation(
     db: State<'_, Database>,
     request: RelationAnalysisRequest,
@@ -489,14 +511,7 @@ pub async fn analyze_book_relation(
 
     let provider = ai_provider(&db)?;
     let pair_key = format!("{}:{}", request.left_book_id, request.right_book_id);
-    let signature_source = format!(
-        "v1|{}|{}|{}|{}",
-        provider.model,
-        pair_key,
-        request.keywords.join("|"),
-        notes.iter().map(|note| format!("{}:{}", note.id, note.content)).collect::<Vec<_>>().join("|")
-    );
-    let input_hash = format!("{:x}", md5::compute(signature_source.as_bytes()));
+    let input_hash = relation_signature(&provider.model, &pair_key, &request.keywords, &notes);
     if !request.refresh {
         let cached: Option<String> = db.connect()?.query_row(
             "SELECT result_json FROM relation_analysis_cache WHERE pair_key=?1 AND input_hash=?2",
@@ -598,6 +613,11 @@ fn relation_context(db: &Database, left_id: &str, right_id: &str, keywords: &[St
         selected.extend(book_notes.into_iter().take(12).map(|(_, note)| note));
     }
     Ok((left_title, right_title, selected))
+}
+
+fn relation_signature(model: &str, pair_key: &str, keywords: &[String], notes: &[Note]) -> String {
+    let source = format!("v1|{}|{}|{}|{}", model, pair_key, keywords.join("|"), notes.iter().map(|note| format!("{}:{}", note.id, note.content)).collect::<Vec<_>>().join("|"));
+    format!("{:x}", md5::compute(source.as_bytes()))
 }
 
 fn json_object(value: &str) -> Option<&str> {

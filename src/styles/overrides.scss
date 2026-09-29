@@ -359,6 +359,7 @@
 .graph-shell { position:relative;flex:1;min-height:450px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:radial-gradient(circle at center,color-mix(in srgb,var(--accent-soft) 35%,var(--surface)) 0,var(--surface) 62%);box-shadow:0 7px 28px #66523d0b; }
 .knowledge-graph { display:block;width:100%;height:100%;min-height:450px; }
 .sigma-graph { position:absolute;inset:0;min-height:450px;cursor:grab;transition:right .22s ease; }.sigma-graph:active { cursor:grabbing; }.sigma-graph.is-edge-hovered { cursor:pointer; }.graph-shell.has-detail .sigma-graph { right:334px; }
+.graph-edge-tooltip { position:absolute;z-index:6;top:0;left:0;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);box-shadow:0 5px 16px #0002;color:var(--text);font-size:11px;opacity:0;pointer-events:none;transition:opacity .12s ease; }.graph-edge-tooltip.visible { opacity:1; }
 .graph-edges line { stroke:color-mix(in srgb,var(--secondary) 28%,transparent);stroke-width:1.2; }
 .graph-relation { cursor:pointer;transition:opacity .18s ease; }.graph-relation:hover line:not(.graph-relation__hit),.graph-relation.selected line:not(.graph-relation__hit) { stroke:var(--accent); }.graph-relation__hit { stroke:transparent!important;stroke-width:14!important; }.graph-relation.dimmed { opacity:.08; }
 .graph-node { cursor:pointer;outline:none;transition:opacity .18s ease; }
@@ -384,12 +385,15 @@
 .graph-detail__actions { display:flex;gap:7px;margin-top:16px; }
 .graph-detail__actions button { display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:12px; }
 .graph-detail__actions button:last-child { background:var(--accent);border-color:var(--accent);color:white; }
+.graph-compare-toggle { display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:13px;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--secondary);font-size:12px; }.graph-compare-toggle.selected { border-color:var(--accent);background:var(--accent-soft);color:var(--accent); }.graph-compare-toggle:disabled { cursor:not-allowed;opacity:.45; }
 .relation-keywords { display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 15px; }.relation-keywords span { padding:5px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px; }.graph-relation-detail h2 { font-size:15px;line-height:1.8; }
 .graph-legend { position:absolute;z-index:4;left:16px;bottom:14px;display:flex;gap:14px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--secondary);font-size:11px; }
 .graph-legend span { display:flex;align-items:center;gap:5px; }
 .graph-legend i { width:8px;height:8px;border-radius:50%;background:var(--accent); }
 .graph-legend i.highlight { background:#d2a73d; }.graph-legend i.thought { background:#6f789f; }
 .graph-legend i.relation { width:15px;height:2px;border-radius:0;background:var(--secondary); }
+.graph-legend i.relation--strong { background:var(--accent); }.graph-legend i.relation--author { background:#71808d; }
+.graph-compare-tray { position:absolute;z-index:5;right:14px;bottom:14px;left:auto;display:flex;max-width:560px;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px #0002; }.graph-shell.has-detail .graph-compare-tray { right:348px; }.graph-compare-tray > div { display:flex;min-width:0;align-items:center;gap:6px; }.graph-compare-tray strong { flex:none;font-size:11px; }.graph-compare-tray span { overflow:hidden;color:var(--muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap; }.graph-compare-tray button { flex:none;padding:7px 9px;border:0;border-radius:5px;background:var(--accent);color:white;font-size:11px; }.graph-compare-tray button.clear { display:grid;padding:6px;place-items:center;background:transparent;color:var(--muted); }.graph-compare-tray button:disabled { cursor:not-allowed;opacity:.45; }
 .graph-state { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--muted); }
 .graph-state svg { width:34px;height:34px;color:var(--accent); }.graph-state strong { color:var(--text);font-size:17px; }.graph-state span { font-size:13px; }
 .graph-analyzing { position:absolute;z-index:3;top:14px;left:50%;transform:translateX(-50%);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);color:var(--secondary);font-size:11px;box-shadow:0 3px 12px #0001; }
