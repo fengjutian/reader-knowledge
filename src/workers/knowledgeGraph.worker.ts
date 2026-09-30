@@ -54,7 +54,8 @@ function position(books: Book[]) {
 function analyze(booksInput: Book[], notes: Note[]) {
   const books = [...booksInput].sort((a, b) => b.highlightCount + b.thoughtCount - a.highlightCount - a.thoughtCount);
   const notesByBook = new Map<string, Note[]>();
-  notes.forEach(note => { const list = notesByBook.get(note.bookId) ?? []; if (list.length < 250) list.push(note); notesByBook.set(note.bookId, list); });
+  notes.forEach(note => { const list = notesByBook.get(note.bookId) ?? []; list.push(note); notesByBook.set(note.bookId, list); });
+  notesByBook.forEach((items, bookId) => notesByBook.set(bookId, items.sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 250)));
   const counts = books.map(book => {
     const map = new Map<string, number>(); addTerms(map, book.title, 1.2); addTerms(map, book.author, 2.5); addTerms(map, book.category, 4);
     for (const note of notesByBook.get(book.id) ?? []) { addTerms(map, note.chapter, 1.5); addTerms(map, note.content.slice(0, 800), note.type === "thought" ? 2.2 : 1); }
@@ -99,7 +100,7 @@ function analyze(booksInput: Book[], notes: Note[]) {
 
 function filter(strength: Strength) {
   const limit = LIMITS[strength], nodes = Number.isFinite(limit.books) ? analysis.nodes.slice(0, limit.books) : analysis.nodes, ids = new Set(nodes.map(node => node.id)), degree = new Map<string, number>();
-  const selected = analysis.candidates.filter(edge => ids.has(edge.from) && ids.has(edge.to)).filter(edge => { if ((degree.get(edge.from) ?? 0) >= limit.neighbors && (degree.get(edge.to) ?? 0) >= limit.neighbors) return false; degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1); degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1); return true; });
+  const selected = analysis.candidates.filter(edge => ids.has(edge.from) && ids.has(edge.to)).filter(edge => { if ((degree.get(edge.from) ?? 0) >= limit.neighbors || (degree.get(edge.to) ?? 0) >= limit.neighbors) return false; degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1); degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1); return true; });
   return { nodes, edges: Number.isFinite(limit.edges) ? selected.slice(0, limit.edges) : selected };
 }
 

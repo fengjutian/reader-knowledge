@@ -34,7 +34,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const panRef = useRef<[number, number]>([0, 0]);
-  const dragRef = useRef<{ pointerId: number; x: number; y: number; target: HTMLElement } | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number; target: HTMLElement; moved: boolean } | null>(null);
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
@@ -178,7 +178,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         top: "10%",
         right: "10%",
         bottom: "10%",
-        roam: true,
+        roam: false,
         draggable: false,
         label: {
           show: true,
@@ -227,7 +227,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         top: "7%",
         right: "7%",
         bottom: "7%",
-        roam: true,
+        roam: false,
         focusNodeAdjacency: false,
         label: { show: false },
         forceAtlas2: {
@@ -257,6 +257,9 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
 
   useEffect(() => {
     if (fitRequest <= 0) return;
+    zoomRef.current = 1;
+    panRef.current = [0, 0];
+    setZoom(1);
     chartRef.current?.dispatchAction({ type: "restore" });
   }, [fitRequest]);
 
@@ -280,9 +283,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
     const start = (event: PointerEvent) => {
       if (event.button !== 0) return;
       const target = event.target instanceof HTMLElement ? event.target : host;
-      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, target };
-      target.setPointerCapture(event.pointerId);
-      host.classList.add("is-panning");
+      dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, target, moved: false };
     };
     const move = (event: PointerEvent) => {
       const drag = dragRef.current;
@@ -290,6 +291,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
       if (!drag || drag.pointerId !== event.pointerId || !chart) return;
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!dx && !dy) return;
+      if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        drag.target.setPointerCapture(event.pointerId);
+        host.classList.add("is-panning");
+      }
       drag.x = event.clientX; drag.y = event.clientY;
       event.preventDefault();
       if (selectedId) {
