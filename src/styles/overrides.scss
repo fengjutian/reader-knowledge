@@ -48,6 +48,10 @@
 .calendar-body { height:190px; }
 .chart-tooltip { display:flex;min-width:120px;flex-direction:column;gap:3px;padding:8px 10px;background:var(--surface);color:var(--text); }
 .chart-tooltip span { color:var(--secondary);font-size:11px; }
+.chart-tooltip--trend { min-width:156px; }
+.chart-tooltip--trend span { display:flex;align-items:center;gap:7px;white-space:nowrap; }
+.chart-tooltip--trend i { width:9px;height:9px;flex:none;border-radius:2px; }
+.chart-tooltip--trend b { margin-left:auto;color:var(--text);font-weight:600; }
 .ranking-layout { display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,.8fr);gap:10px; }
 .reading-ranking,.reading-summary,.read-method { padding:18px; }
 .reading-ranking ol { margin:4px 0 0;padding:0;list-style:none; }
