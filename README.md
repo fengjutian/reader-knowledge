@@ -6,6 +6,20 @@
 
 它不是另一个阅读器，而是阅读之后的工作台。
 
+## 产品截图
+
+### 阅读统计
+
+![阅读统计](public/assets/reading-stats.png)
+
+### 书籍管理
+
+![书籍管理](public/assets/bookshelf.png)
+
+### 知识图谱
+
+![知识图谱](public/assets/knowledge-graph.png)
+
 ## 主要功能
 
 ### 阅读资料库
