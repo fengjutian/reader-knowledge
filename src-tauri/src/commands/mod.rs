@@ -1372,7 +1372,18 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fts_query, parse_relation_analysis, search_terms, weread_reader_id};
+    use super::{fts_query, parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id};
+
+    #[test]
+    fn restricts_credential_names_to_known_namespaces() {
+        assert!(validate_secret_kind("weread").is_ok());
+        assert!(validate_secret_kind("google_books").is_ok());
+        assert!(validate_secret_kind("ai:deepseek").is_ok());
+        assert!(validate_secret_kind("embedding:openai-compatible").is_ok());
+        assert!(validate_secret_kind("arbitrary-secret").is_err());
+        assert!(validate_secret_kind("ai:").is_err());
+        assert!(validate_secret_kind("ai:../other").is_err());
+    }
 
     #[test]
     fn parses_relation_json_wrapped_in_markdown() {

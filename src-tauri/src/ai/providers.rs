@@ -17,7 +17,7 @@ impl AiProvider for OpenAiCompatibleProvider {
                 let response = self.http.post(&self.endpoint).bearer_auth(&self.api_key).json(&body).send().await?;
                 let status = response.status();
                 if status.is_success() {
-                    value = Some(limited_json(response, MAX_API_RESPONSE_BYTES, "AI").await?);
+                    value = Some(limited_json::<serde_json::Value>(response, MAX_API_RESPONSE_BYTES, "AI").await?);
                     break;
                 }
                 last_status = Some(status);
