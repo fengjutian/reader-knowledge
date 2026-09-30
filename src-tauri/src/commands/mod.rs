@@ -192,7 +192,8 @@ pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>
 pub fn list_glossary_terms(db:State<'_,Database>,query:Option<String>)->Result<Vec<GlossaryTerm>,AppError>{
     let pattern=format!("%{}%",query.unwrap_or_default()); let c=db.connect()?;
     let mut q=c.prepare("SELECT id,term,canonical_name,aliases_json,definition,source,coalesce(source_title,''),coalesce(source_url,''),coalesce(wikipedia_snapshot,''),status,updated_at FROM glossary_terms WHERE term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1 ORDER BY updated_at DESC")?;
-    Ok(q.query_map([pattern],|r|Ok(GlossaryTerm{id:r.get(0)?,term:r.get(1)?,canonical_name:r.get(2)?,aliases:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or_default(),definition:r.get(4)?,source:r.get(5)?,source_title:r.get(6)?,source_url:r.get(7)?,wikipedia_snapshot:r.get(8)?,status:r.get(9)?,updated_at:r.get(10)?}))?.collect::<Result<Vec<_>,_>>()?)
+    let rows=q.query_map([pattern],|r|Ok(GlossaryTerm{id:r.get(0)?,term:r.get(1)?,canonical_name:r.get(2)?,aliases:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or_default(),definition:r.get(4)?,source:r.get(5)?,source_title:r.get(6)?,source_url:r.get(7)?,wikipedia_snapshot:r.get(8)?,status:r.get(9)?,updated_at:r.get(10)?}))?.collect::<Result<Vec<_>,_>>()?;
+    Ok(rows)
 }
 
 #[tauri::command]
