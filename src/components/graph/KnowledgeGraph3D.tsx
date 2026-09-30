@@ -33,9 +33,14 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
     const degree = new Map<string, number>();
+    const adjacentIds = new Set<string>();
     edges.forEach(edge => {
       degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
       degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+      if (selectedId && (edge.from === selectedId || edge.to === selectedId)) {
+        adjacentIds.add(edge.from);
+        adjacentIds.add(edge.to);
+      }
     });
     const isolatedCount = nodes.reduce((sum, node) => sum + (degree.has(node.id) ? 0 : 1), 0);
     let isolatedIndex = 0;
@@ -65,16 +70,29 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           value: relationCount,
           x,
           y,
-          symbolSize: relationCount ? 4 : 2,
+          symbolSize: node.id === selectedId ? 9 : selectedId && adjacentIds.has(node.id) ? 5 : relationCount ? 4 : 2,
           itemStyle: {
             color: node.id === focusId ? "#ef493c" : node.id === selectedId ? "#27231f" : relationCount ? colors[hash(node.category || node.author || node.title) % colors.length] : "#d9d5ce",
-            opacity: relationCount ? .94 : .2,
+            opacity: selectedId ? (node.id === selectedId || adjacentIds.has(node.id) ? 1 : .055) : relationCount ? .94 : .2,
           },
+          label: node.id === selectedId ? { show: true, color: "#302a26", fontSize: 12 } : undefined,
           book: node,
           relationCount,
         };
       }),
-      edges: edges.map(edge => ({ id: edge.id, source: edge.from, target: edge.to, value: Math.max(.25, edge.score), relation: edge.relation })),
+      edges: edges.map(edge => {
+        const adjacent = !!selectedId && (edge.from === selectedId || edge.to === selectedId);
+        return {
+          id: edge.id,
+          source: edge.from,
+          target: edge.to,
+          value: Math.max(.25, edge.score),
+          relation: edge.relation,
+          lineStyle: selectedId
+            ? { color: adjacent ? "#9b5044" : "#d8d5cf", width: adjacent ? 1.6 : .35, opacity: adjacent ? .9 : .025 }
+            : { color: "#c9c6c0", width: .7, opacity: .32 },
+        };
+      }),
     };
   }, [nodes, edges, focusId, selectedId]);
 
