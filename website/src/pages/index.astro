@@ -1,0 +1,90 @@
+---
+import "../styles/global.css";
+
+const features = [
+  ["01", "完整同步", "同步微信读书书架、划线、想法与阅读统计，让散落的阅读记录重新归位。"],
+  ["02", "精准检索", "SQLite FTS5 与语义检索并行，按书名、作者或笔记内容快速找到原始证据。"],
+  ["03", "AI 阅读助手", "面向全库提问、单书总结与跨书分析；每个结论都保留可点击的引用来源。"],
+  ["04", "知识图谱", "从共同作者、主题与笔记语义中发现书籍之间的一致、冲突、互补和因果关系。"],
+  ["05", "名词库", "为人物、地点、事件和概念维护稳定解释，并作为 AI 回答的背景上下文。"],
+  ["06", "本地优先", "阅读数据与索引默认留在本机；密钥交给系统凭据库，掌控权始终属于你。"],
+];
+
+const faqs = [
+  ["它会替代微信读书吗？", "不会。阅读者是阅读之后的工作台：它同步并整理你的阅读材料，让检索、关联和再思考更顺畅。"],
+  ["AI 会读取我的全部书库吗？", "不会。远程 AI 请求只包含当前问题与检索出的必要上下文；完整数据库不会被上传。"],
+  ["数据保存在哪里？", "书籍、笔记、元数据、向量索引与分析缓存保存在本地 SQLite 数据库中。"],
+  ["支持哪些 AI 服务？", "可连接 DeepSeek、MiniMax 和 OpenAI-compatible 服务；也可以只使用本地检索能力。"],
+];
+---
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="阅读者是一款本地优先的个人阅读知识库，把微信读书中的书籍、划线与想法整理为可搜索、可关联、可追溯的知识。" />
+    <meta name="theme-color" content="#f3efe7" />
+    <link rel="icon" href="/favicon.svg" />
+    <title>阅读者 · 整理你的个人思想</title>
+    <script is:inline>try{const t=localStorage.getItem('wereader-site-theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到正文</a>
+    <header class="nav" data-nav>
+      <a class="brand" href="#top" aria-label="阅读者首页"><span class="brand-mark">阅</span><span>阅读者<i>·</i></span></a>
+      <nav aria-label="主导航"><a href="#story">理念</a><a href="#features">功能</a><a href="#privacy">隐私</a><a href="#faq">问答</a></nav>
+      <div class="nav-actions"><button class="theme-toggle" type="button" aria-label="切换明暗主题">◐</button><a class="button small secondary" href="https://github.com/fengjutian/wxreader-knowledge" target="_blank" rel="noreferrer">GitHub ↗</a></div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="glow"></div>
+        <div class="hero-copy reveal">
+          <div class="eyebrow"><span></span>本地优先 · 为深度阅读而生</div>
+          <h1>读过的每一本书，<br/><em>都成为你的思想。</em></h1>
+          <p>把微信读书里的书籍、划线与想法带回本地。让散落的阅读记录变得可搜索、可关联、可追溯。</p>
+          <div class="hero-actions"><a class="button" href="#features">看看它能做什么 <b>↓</b></a><a class="button secondary" href="#privacy">了解本地优先 →</a></div>
+          <small>开放源代码 · 数据自主 · 不制造信息噪音</small>
+        </div>
+
+        <figure class="app-preview reveal">
+          <div class="window-bar"><span></span><span></span><span></span><b>阅读者 / 今日概览</b></div>
+          <div class="app-shell">
+            <aside><div class="mini-brand">阅</div><i class="active"></i><i></i><i></i><i></i><i></i><i class="bottom"></i></aside>
+            <div class="dashboard">
+              <div class="dash-head"><div><small>你的阅读宇宙</small><h3>晚上好，继续思考。</h3></div><button>同步书架</button></div>
+              <div class="stats"><article><small>书架</small><strong>128</strong><span>本书</span></article><article><small>笔记</small><strong>2,460</strong><span>条记录</span></article><article><small>知识连接</small><strong>386</strong><span>条关系</span></article></div>
+              <div class="dash-grid"><article class="reading"><small>正在阅读</small><div class="book"><div class="cover">思考，<br/>快与慢</div><div><b>丹尼尔·卡尼曼</b><p>我们对世界的理解，往往比世界本身更连贯。</p><div class="progress"><i></i></div><span>68%</span></div></div></article><article class="graph"><small>最近形成的连接</small><div class="nodes"><i></i><i></i><i></i><i></i><i></i><svg viewBox="0 0 200 110"><path d="M28 64 94 30l76 30M94 30l14 68M28 64l80 34 62-38"/></svg></div></article></div>
+            </div>
+          </div>
+          <figcaption><span></span>一个安静、可靠、属于你的阅读工作台。</figcaption>
+        </figure>
+      </section>
+
+      <section class="manifesto" id="story"><div class="section-label">01 / 为什么是阅读者</div><h2>收藏不是知识。<br/>只有被再次找到、重新连接、<br/><em>转化成判断</em>的内容才是。</h2><p>阅读者不试图让你读得更多。它把注意力留给真正重要的部分：理解、连接，以及形成自己的观点。</p></section>
+
+      <section class="highlights">
+        <article><div><span class="kicker">从记录到脉络</span><h2>不只保存划线，<br/>也看见书与书之间的关系。</h2><p>从任意一本书出发，沿着主题、概念与观点进入另一段思考。3D 知识图谱让隐含的连接浮现出来。</p></div><div class="visual graph-visual"><div class="orbit one"></div><div class="orbit two"></div><span class="node n1">思考</span><span class="node n2">决策</span><span class="node n3">心理学</span><span class="node n4">行为经济</span><span class="node n5">认知偏差</span></div></article>
+        <article class="reversed"><div><span class="kicker">答案需要证据</span><h2>和你的书库对话，<br/>每个回答都有来处。</h2><p>AI 先检索，再作答。引用精确回到书籍、章节和笔记，让总结不是凭空生成，而是你阅读积累的延伸。</p></div><div class="visual answer-card"><div class="question">“我读过的书如何解释损失厌恶？”</div><p><b>阅读助手</b>　损失带来的心理影响，通常大于同等收益带来的满足感。这也解释了为什么人在不确定情境中会偏向维持现状。</p><div class="source"><span>01</span><div><b>《思考，快与慢》</b><small>第四部分 · 选择与风险</small></div></div><div class="source"><span>02</span><div><b>《助推》</b><small>第二章 · 偏见与谬误</small></div></div></div>
+        </article>
+      </section>
+
+      <section class="features" id="features"><div class="section-label">02 / 工具箱</div><div class="section-head"><h2>阅读之后，需要的一切。<br/>除此之外，没有多余。</h2><p>围绕个人知识库构建的一组克制工具。每项能力都服务于找回信息、建立连接和形成观点。</p></div><div class="feature-grid">{features.map(([num,title,desc]) => <article><span>{num}</span><h3>{title}</h3><p>{desc}</p><b>↗</b></article>)}</div></section>
+
+      <section class="privacy" id="privacy"><div class="privacy-copy"><span class="kicker">你的阅读，只属于你</span><h2>本地保存。<br/>按需连接。<br/><em>始终由你掌控。</em></h2><p>书籍、笔记、索引和分析缓存默认留在本机。即使启用远程 AI，也只发送回答当前问题所必需的少量上下文。</p><ul><li><span>✓</span> SQLite 本地数据库</li><li><span>✓</span> 系统凭据库保存密钥</li><li><span>✓</span> 同步失败不删除本地数据</li></ul></div><div class="privacy-seal"><div><span>LOCAL</span><b>你的数据<br/>你的设备</b><span>FIRST</span></div></div></section>
+
+      <section class="faq" id="faq"><div><div class="section-label">03 / 常见问题</div><h2>开始之前，<br/>你可能想知道。</h2></div><div>{faqs.map(([q,a]) => <details><summary>{q}<span>＋</span></summary><p>{a}</p></details>)}</div></section>
+
+      <section class="cta"><div class="brand-mark large">阅</div><h2>把读过的，<br/>真正变成自己的。</h2><p>从同步第一本书开始，建立一个不会遗忘、可以生长的个人知识库。</p><a class="button light" href="#top">回到开始 ↑</a></section>
+    </main>
+    <footer><a class="brand" href="#top"><span class="brand-mark">阅</span><span>阅读者<i>·</i></span></a><span>本地优先的个人阅读知识库</span><span>© {new Date().getFullYear()} 阅读者</span></footer>
+    <script>
+      const toggle = document.querySelector('.theme-toggle');
+      toggle?.addEventListener('click', () => { const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = next; localStorage.setItem('wereader-site-theme', next); });
+      const nav = document.querySelector('[data-nav]');
+      addEventListener('scroll', () => nav?.classList.toggle('scrolled', scrollY > 20), { passive: true });
+      const observer = new IntersectionObserver(entries => entries.forEach(entry => entry.isIntersecting && entry.target.classList.add('visible')), { threshold: .12 });
+      document.querySelectorAll('section, .reveal').forEach(el => observer.observe(el));
+    </script>
+  </body>
+</html>

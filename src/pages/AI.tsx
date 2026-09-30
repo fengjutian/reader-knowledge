@@ -55,18 +55,19 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
 
 export function AI() {
   const initialDraft = useRef(useAppStore.getState().aiDraft).current;
+  const [history, setHistory] = useState<AiConversation[]>(loadHistory);
+  const initialConversation = initialDraft ? undefined : history[0];
   const aiDraft = useAppStore(state => state.aiDraft);
   const [question, setQuestion] = useState(initialDraft?.question ?? "");
-  const [mode, setMode] = useState<AiMode>(initialDraft?.mode ?? "ask");
+  const [mode, setMode] = useState<AiMode>(initialDraft?.mode ?? initialConversation?.mode ?? "ask");
   const [books, setBooks] = useState<Book[]>([]);
-  const [bookIds, setBookIds] = useState<string[]>(initialDraft?.bookIds ?? []);
+  const [bookIds, setBookIds] = useState<string[]>(initialDraft?.bookIds ?? initialConversation?.bookIds ?? []);
   const [draftBookIds, setDraftBookIds] = useState<string[]>([]);
   const [bookPickerOpen, setBookPickerOpen] = useState(false);
   const [selectionError, setSelectionError] = useState("");
   const [bookQuery, setBookQuery] = useState("");
-  const [turns, setTurns] = useState<AiTurn[]>([]);
-  const [history, setHistory] = useState<AiConversation[]>(loadHistory);
-  const [activeConversationId, setActiveConversationId] = useState<string>();
+  const [turns, setTurns] = useState<AiTurn[]>(initialConversation?.turns ?? []);
+  const [activeConversationId, setActiveConversationId] = useState<string | undefined>(initialConversation?.id);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -113,8 +114,13 @@ export function AI() {
     setMode(conversation.mode); setBookIds(conversation.bookIds); setError("");
   }
   function deleteConversation(id: string) {
-    setHistory(current => current.filter(item => item.id !== id));
-    if (activeConversationId === id) newConversation();
+    const remaining = history.filter(item => item.id !== id);
+    setHistory(remaining);
+    if (activeConversationId === id) {
+      const nextConversation = remaining[0];
+      if (nextConversation) openConversation(nextConversation);
+      else newConversation();
+    }
   }
   function openBookPicker() {
     setDraftBookIds(bookIds);

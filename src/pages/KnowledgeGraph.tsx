@@ -140,7 +140,12 @@ export function KnowledgeGraph() {
   }, [edgeId, selectedEdge, relationAnalyses]);
   function navigateToBook(id: string) {
     if (focusId && focusId !== id) setBackStack(stack => [...stack, focusId]);
+    const title = books.find(book => book.id === id)?.title ?? "";
+    if (strength === "all") {
+      setStrength("balanced");
+    }
     setForwardStack([]); setFocusId(id); setSelectedId(id); setEdgeId(undefined); setFitRequest(value => value + 1);
+    window.setTimeout(() => setQuery(title), 0);
   }
   function goBack() {
     const target = backStack.at(-1); if (!target) return;
