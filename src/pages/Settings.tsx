@@ -57,6 +57,7 @@ const themes: { id: Theme; name: string; description: string }[] = [
   { id: "dark", name: "深色", description: "低亮度界面，适合夜间阅读" },
   { id: "voyage", name: "航行", description: "冷白、蓝紫与柔焦光晕" },
   { id: "minimax", name: "MiniMax", description: "珊瑚渐变、轻透卡片与鲜明能量" },
+  { id: "landpack", name: "Landpack", description: "深夜黑、珊瑚光晕与编辑感衬线" },
 ];
 
 const fonts: { id: FontFamily; name: string; description: string; sample: string }[] = [

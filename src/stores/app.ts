@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type Page = "dashboard" | "books" | "discover" | "metadata" | "notes" | "ai" | "graph" | "glossary" | "database" | "settings";
-export type Theme = "light" | "dark" | "voyage" | "minimax";
+export type Theme = "light" | "dark" | "voyage" | "minimax" | "landpack";
 export type FontFamily = "system" | "source-han-sans" | "source-han-serif" | "lxgw-wenkai";
 interface AppState {
   page: Page;
@@ -26,7 +26,7 @@ export const useAppStore = create<AppState>((set) => ({
   page: "dashboard",
   theme: (() => {
     const saved = localStorage.getItem("readflow-theme");
-    return saved === "dark" || saved === "voyage" || saved === "minimax" ? saved : "light";
+    return saved === "dark" || saved === "voyage" || saved === "minimax" || saved === "landpack" ? saved : "light";
   })(),
   fontFamily: (() => {
     const saved = localStorage.getItem("wereader-font-family");

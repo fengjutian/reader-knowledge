@@ -153,6 +153,10 @@
 .theme-option--minimax .theme-option__preview::before { background:rgba(255,75,94,.72);border-color:rgba(255,255,255,.42); }
 .theme-option--minimax .theme-option__preview i { background:rgba(255,255,255,.88);border-color:rgba(255,255,255,.72); }
 .theme-option--minimax .theme-option__preview i:nth-child(1) { background:#24232b;border:0; }
+.theme-option--landpack .theme-option__preview { background:radial-gradient(circle at 62% 48%,rgba(237,124,112,.28),transparent 43%),#19191b;border-color:#413638; }
+.theme-option--landpack .theme-option__preview::before { background:#151517;border-color:#3b3032; }
+.theme-option--landpack .theme-option__preview i { background:#242124;border-color:#4a3b3d; }
+.theme-option--landpack .theme-option__preview i:nth-child(1) { right:22%;background:#ed7c70;border:0; }
 .theme-option__copy { display:flex;min-width:0;flex-direction:column;gap:3px;padding:0 2px 2px; }
 .theme-option__copy strong { font-size:13px; }
 .theme-option__copy small { overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
@@ -682,6 +686,52 @@ body { background-color:var(--bg); }
   [data-theme=minimax] .main-content::before { animation:minimax-glow 12s ease-in-out infinite alternate; }
   @keyframes minimax-pulse { 50% { transform:scale(1.05);box-shadow:0 10px 30px rgba(105,20,50,.32); } }
   @keyframes minimax-glow { 50% { opacity:.78;filter:hue-rotate(-8deg); } 100% { opacity:1;filter:hue-rotate(8deg); } }
+}
+
+/* Landpack — cinematic black, editorial type and a restrained coral halo. */
+[data-theme=landpack] {
+  --bg:#171719;--surface:rgba(35,32,34,.9);--surface-hover:#302a2c;
+  --text:#f6f1ee;--secondary:#c3b7b4;--muted:#8e8280;--border:#493c3e;
+  --accent:#ed7c70;--accent-soft:#442d2e;--radius-md:10px;--radius-lg:14px;color-scheme:dark;
+}
+[data-theme=landpack] body { background:#171719; }
+[data-theme=landpack] .main-content { position:relative;isolation:isolate;background:#19191b; }
+[data-theme=landpack] .main-content::before {
+  content:"";position:absolute;z-index:0;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 66% 72% at 51% 44%,rgba(221,112,101,.2),transparent 70%),radial-gradient(circle at 92% 7%,rgba(132,58,62,.09),transparent 26%);
+}
+[data-theme=landpack] .main-content>.page { position:relative;z-index:1; }
+[data-theme=landpack] .sidebar { background:rgba(20,20,22,.96);border-right-color:#392f31;box-shadow:14px 0 42px rgba(0,0,0,.2); }
+[data-theme=landpack] .brand { color:#f8f3f0;letter-spacing:-.025em; }
+[data-theme=landpack] .brand__mark { color:#171719;background:#ed7c70;border-radius:9px;box-shadow:0 0 0 1px rgba(255,173,162,.18),0 8px 24px rgba(222,96,84,.18); }
+[data-theme=landpack] .quick-search { color:#c5bab7;background:#211f21;border-color:#403638; }
+[data-theme=landpack] .quick-search kbd { color:#b9aaa7;background:#302a2c;border-color:#4b3d3f; }
+[data-theme=landpack] .nav button,[data-theme=landpack] .sidebar__footer button { color:#9f9492; }
+[data-theme=landpack] .nav button:hover,[data-theme=landpack] .sidebar__footer button:hover { color:#f6f1ee;background:#282426; }
+[data-theme=landpack] .nav button.active,[data-theme=landpack] .sidebar__footer button.active { color:#f38b7f;background:#35292b;box-shadow:inset 2px 0 #ed7c70; }
+[data-theme=landpack] .sidebar__footer { border-top-color:#392f31; }
+[data-theme=landpack] .page-header h1 { font-family:Georgia,"Songti SC","Noto Serif CJK SC",serif;font-size:34px;font-weight:500;letter-spacing:-.035em; }
+[data-theme=landpack] .page-header p { color:#9f9492; }
+[data-theme=landpack] .panel h2,[data-theme=landpack] .settings-card h2,[data-theme=landpack] .book-card h3,[data-theme=landpack] .chart-heading h3 { font-family:Georgia,"Songti SC","Noto Serif CJK SC",serif;font-weight:500; }
+[data-theme=landpack] .stat-card,[data-theme=landpack] .panel,[data-theme=landpack] .book-card,[data-theme=landpack] .note-card,[data-theme=landpack] .settings-card,[data-theme=landpack] .database-summary article,[data-theme=landpack] .database-panel,[data-theme=landpack] .database-browser,[data-theme=landpack] .recommend-card,[data-theme=landpack] .discover-state {
+  background:rgba(34,31,33,.88);border-color:#45383a;box-shadow:0 16px 44px rgba(0,0,0,.16),inset 0 1px rgba(255,255,255,.025);backdrop-filter:blur(14px);
+}
+[data-theme=landpack] .focus-panel { background:linear-gradient(135deg,rgba(47,39,41,.96),rgba(75,43,44,.78)); }
+[data-theme=landpack] .stat-card__icon,[data-theme=landpack] .ai-empty>span { color:#f18a7e;background:#3c2a2c;border:1px solid #533a3c;border-radius:50%; }
+[data-theme=landpack] .button--primary,[data-theme=landpack] .ask-box button,[data-theme=landpack] .big-search button,[data-theme=landpack] .database-module-tabs button.active,[data-theme=landpack] .relation-analysis-actions button,[data-theme=landpack] .graph-compare-tray button { color:#211b1c;background:#ed7c70;border-color:#ed7c70;box-shadow:0 7px 20px rgba(210,94,83,.2); }
+[data-theme=landpack] .button--primary:hover:not(:disabled) { background:#f58d81;border-color:#f58d81;box-shadow:0 9px 25px rgba(210,94,83,.28); }
+[data-theme=landpack] .button--secondary { color:#eee7e3;background:#242123;border-color:#4b3e40; }
+[data-theme=landpack] .settings-tabs,[data-theme=landpack] .ai-modes { background:#211f21;border:1px solid #3e3436; }
+[data-theme=landpack] .settings-tabs button.active,[data-theme=landpack] .ai-modes button.active { color:#f6f1ee;background:#352e30;box-shadow:0 5px 16px rgba(0,0,0,.16); }
+[data-theme=landpack] .progress div,[data-theme=landpack] .book-progress i,[data-theme=landpack] .database-bars b { background:linear-gradient(90deg,#ed7c70,#a94f55); }
+[data-theme=landpack] .note-card { border-left-color:#ed7c70; }
+[data-theme=landpack] .note-card--thought { border-left-color:#b95c65; }
+[data-theme=landpack] .graph-shell,[data-theme=landpack] .search-dialog,[data-theme=landpack] .ask-box,[data-theme=landpack] .recommend-drawer { background:rgba(27,26,28,.96);border-color:#46393b;box-shadow:0 22px 60px rgba(0,0,0,.34);backdrop-filter:blur(18px); }
+[data-theme=landpack] input,[data-theme=landpack] textarea,[data-theme=landpack] select { color:var(--text); }
+[data-theme=landpack] ::selection { color:#1c1819;background:#ed7c70; }
+@media (prefers-reduced-motion:no-preference) {
+  [data-theme=landpack] .main-content::before { animation:landpack-halo 11s ease-in-out infinite alternate; }
+  @keyframes landpack-halo { to { opacity:.72;transform:scale(1.04) translate3d(1.5%,-1%,0); } }
 }
 
 /* Keep the content inset consistent across every route and viewport. */
