@@ -25,6 +25,7 @@
     "motion": "^12.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-force-graph-3d": "^1.29.2",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "sigma": "^3.0.3",

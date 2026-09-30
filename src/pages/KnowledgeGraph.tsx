@@ -98,21 +98,24 @@ export function KnowledgeGraph() {
   const viewGraph = useMemo(() => {
     if (!focusId) return { nodes: [], edges: [] as Edge[] };
     const bookById = new Map(graph.nodes.map(node => [node.id, node]));
-    const edges = graph.edges.filter(edge => edge.from === focusId || edge.to === focusId).filter(edge => {
+    const filteredEdges = graph.edges.filter(edge => {
       if (relationFilter === "author") return edge.relation.includes("作者");
       if (relationFilter === "content") return !edge.relation.includes("作者");
       if (relationFilter === "analyzable") return [edge.from, edge.to].every(id => { const book = bookById.get(id); return !!book && book.highlightCount + book.thoughtCount > 0; });
       return true;
-    }).sort((a, b) => b.score - a.score).slice(0, 20);
-    const ids = new Set([focusId, ...edges.flatMap(edge => [edge.from, edge.to])]);
+    }).sort((a, b) => b.score - a.score);
+    if (strength === "all") return { nodes: graph.nodes, edges: filteredEdges };
+    const edges = filteredEdges.filter(edge => edge.from === focusId || edge.to === focusId);
+    const visibleEdges = edges.slice(0, strength === "strong" ? 5 : strength === "balanced" ? 10 : 20);
+    const ids = new Set([focusId, ...visibleEdges.flatMap(edge => [edge.from, edge.to])]);
     const source = graph.nodes.filter(node => ids.has(node.id));
     const nodes = source.map(node => {
       if (node.id === focusId) return { ...node, x: W / 2, y: H / 2 };
       const index = source.filter(item => item.id !== focusId).findIndex(item => item.id === node.id), count = Math.max(1, source.length - 1), ring = count > 12 && index >= 10 ? 245 : 175, ringIndex = count > 12 && index >= 10 ? index - 10 : index, ringCount = count > 12 && index >= 10 ? count - 10 : Math.min(count, 10), angle = Math.PI * 2 * ringIndex / ringCount - Math.PI / 2;
       return { ...node, x: W / 2 + Math.cos(angle) * ring * 1.12, y: H / 2 + Math.sin(angle) * ring };
     });
-    return { nodes, edges };
-  }, [focusId, graph, relationFilter]);
+    return { nodes, edges: visibleEdges };
+  }, [focusId, graph, relationFilter, strength]);
   const renderedEdges = useMemo(() => viewGraph.edges.map(edge => ({ ...edge, semanticRelation: relationAnalyses[edge.id]?.relation })), [viewGraph.edges, relationAnalyses]);
   const selected = graph.nodes.find(node => node.id === selectedId), selectedEdge = graph.edges.find(edge => edge.id === edgeId);
   useEffect(() => {
