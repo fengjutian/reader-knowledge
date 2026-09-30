@@ -186,6 +186,9 @@
 .field-hint { color:var(--secondary);line-height:1.4; }
 .local-model-status { display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px; }.local-model-status > span { padding:4px 8px;border-radius:999px;background:var(--surface-hover); }.local-model-status > span.installed { color:#27875a;background:color-mix(in srgb,#27875a 12%,transparent); }
 .secret-saved { display:inline-flex;align-items:center;gap:3px;margin-left:8px;color:#27875a;font-weight:500; }
+.weread-skill-link { display:inline-flex;align-items:center;gap:5px;margin-top:10px;color:var(--accent);font-size:12px;font-weight:600;text-decoration:none; }
+.weread-skill-link:hover { text-decoration:underline;text-underline-offset:3px; }
+.weread-skill-link:focus-visible { outline:2px solid var(--accent);outline-offset:3px;border-radius:2px; }
 
 /* Compact desktop layout */
 :root {

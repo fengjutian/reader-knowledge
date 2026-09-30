@@ -79,12 +79,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       nodes: nodes.map(node => {
         const relationCount = degree.get(node.id) ?? 0;
         if (!relationCount) {
-          const shell = spherePoint(isolatedIndex++, isolatedTotal, 620 + seededUnit(node.id, 17) * 24);
+          const shell = spherePoint(isolatedIndex++, isolatedTotal, 760 + seededUnit(node.id, 17) * 34);
           return { ...node, id: node.id, relationCount, ...shell, fx: shell.x, fy: shell.y, fz: shell.z };
         }
         const y = seededUnit(node.id, 31) * 2 - 1;
         const angle = seededUnit(node.id, 73) * Math.PI * 2;
-        const radius = 70 + seededUnit(node.id, 109) * 150;
+        const radius = 95 + seededUnit(node.id, 109) * 245;
         const ring = Math.sqrt(Math.max(0, 1 - y * y));
         return { ...node, id: node.id, relationCount, x: Math.cos(angle) * ring * radius, y: y * radius, z: Math.sin(angle) * ring * radius };
       }),
@@ -133,10 +133,10 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       warmupTicks={120}
       cooldownTime={30000}
       nodeLabel={node => `<div class="graph-3d-tooltip"><strong>${node.title}</strong>${node.author ? `<span>${node.author}</span>` : ""}<small>${node.category || "未分类"} · ${node.relationCount} 个关系</small></div>`}
-      nodeVal={.12}
-      nodeColor={node => node.id === focusId ? "#ff493d" : node.id === selectedId ? "#28231f" : node.relationCount ? categoryColor(node) : "#bdb6aa"}
-      nodeOpacity={.86}
-      nodeResolution={7}
+      nodeVal={.028}
+      nodeColor={node => node.id === focusId ? "#ff493d" : node.id === selectedId ? "#28231f" : node.relationCount ? categoryColor(node) : "#ddd9d2"}
+      nodeOpacity={.78}
+      nodeResolution={6}
       linkColor={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
@@ -145,9 +145,9 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       linkWidth={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
-        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.1 : .11;
+        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.15 : .2;
       }}
-      linkOpacity={.18}
+      linkOpacity={.38}
       linkResolution={2}
       linkDirectionalParticles={link => {
         const source = endpointId(link.source);
