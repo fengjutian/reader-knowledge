@@ -59,7 +59,7 @@ export function AI() {
   const [turns, setTurns] = useState<AiTurn[]>([]);
   const [history, setHistory] = useState<AiConversation[]>(loadHistory);
   const [activeConversationId, setActiveConversationId] = useState<string>();
-  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);

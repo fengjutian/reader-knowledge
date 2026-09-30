@@ -446,12 +446,14 @@
   position:relative;
   bottom:auto;
   flex:none;
-  width: min(860px, calc(100% - 32px));
+  width: min(920px, calc(100% - 32px));
   margin-top:10px;
+  margin-bottom:18px;
   margin-right: auto;
   margin-left: auto;
-  padding: 10px 12px 10px 14px;
-  border-color:color-mix(in srgb,var(--border) 82%,var(--text));
+  padding: 11px 12px 11px 16px;
+  background:var(--surface);
+  border:1px solid color-mix(in srgb,var(--border) 82%,var(--text));
   border-radius: 14px;
   box-shadow:0 8px 24px #2f241714;
 }
