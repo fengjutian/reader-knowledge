@@ -798,6 +798,61 @@ body { background-color:var(--bg); }
   @keyframes parley-sunset { to { filter:saturate(1.06) brightness(1.025);transform:scale(1.015); } }
 }
 
+/* Lagoon — deep teal water, translucent navigation and refracted daylight. */
+[data-theme=lagoon] {
+  --bg:#063c46;--surface:rgba(10,70,80,.78);--surface-hover:rgba(42,126,139,.32);
+  --text:#f4fbfa;--secondary:#c3dada;--muted:#8eb4b8;--border:rgba(184,229,230,.24);
+  --accent:#45b1c2;--accent-soft:rgba(54,164,180,.22);--radius-md:14px;--radius-lg:24px;color-scheme:dark;
+}
+[data-theme=lagoon] body { background:#063c46; }
+[data-theme=lagoon] .main-content { position:relative;isolation:isolate;background:#073e48; }
+[data-theme=lagoon] .main-content::before {
+  content:"";position:absolute;z-index:0;inset:0;pointer-events:none;
+  background:
+    linear-gradient(rgba(159,218,220,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(159,218,220,.055) 1px,transparent 1px),
+    radial-gradient(ellipse 52% 78% at 94% 31%,rgba(205,225,189,.26),transparent 61%),
+    radial-gradient(ellipse 62% 68% at 64% 48%,rgba(25,151,171,.34),transparent 69%),
+    linear-gradient(128deg,#06363f 0%,#07505c 51%,#3f8d99 78%,#a2a572 100%);
+  background-size:72px 72px,72px 72px,auto,auto,auto;
+}
+[data-theme=lagoon] .main-content::after {
+  content:"";position:absolute;z-index:0;inset:0;pointer-events:none;opacity:.38;
+  background:radial-gradient(circle at 82% 16%,rgba(255,255,255,.38) 0 2px,transparent 3px),radial-gradient(circle at 88% 31%,rgba(255,255,255,.22) 0 3px,transparent 5px),radial-gradient(circle at 72% 64%,rgba(204,243,244,.2) 0 2px,transparent 4px);background-size:91px 83px,137px 119px,173px 151px;
+}
+[data-theme=lagoon] .main-content>.page { position:relative;z-index:1; }
+[data-theme=lagoon] .sidebar { background:rgba(4,47,56,.72);border-right-color:rgba(187,229,230,.22);box-shadow:16px 0 46px rgba(0,28,34,.24);backdrop-filter:blur(22px) saturate(118%); }
+[data-theme=lagoon] .brand { color:#f7fcfb;font-weight:750;letter-spacing:-.035em; }
+[data-theme=lagoon] .brand__mark { color:#dff7f5;background:#158497;border-radius:50%;box-shadow:0 0 0 1px rgba(206,244,243,.28),0 10px 28px rgba(0,30,38,.25); }
+[data-theme=lagoon] .quick-search { color:#d3e9e8;background:rgba(140,207,211,.13);border-color:rgba(198,235,235,.3);backdrop-filter:blur(14px); }
+[data-theme=lagoon] .quick-search kbd { color:#e7f6f5;background:rgba(4,48,57,.35);border-color:rgba(207,239,239,.25); }
+[data-theme=lagoon] .nav button,[data-theme=lagoon] .sidebar__footer button { color:#a9c9ca; }
+[data-theme=lagoon] .nav button:hover,[data-theme=lagoon] .sidebar__footer button:hover,[data-theme=lagoon] .nav button.active,[data-theme=lagoon] .sidebar__footer button.active { color:#fff;background:rgba(115,195,202,.18); }
+[data-theme=lagoon] .nav button.active,[data-theme=lagoon] .sidebar__footer button.active { box-shadow:inset 2px 0 #55bccb; }
+[data-theme=lagoon] .sidebar__footer { border-top-color:rgba(185,226,227,.2); }
+[data-theme=lagoon] .page-header h1 { font-size:34px;font-weight:780;letter-spacing:-.045em; }
+[data-theme=lagoon] .stat-card,[data-theme=lagoon] .panel,[data-theme=lagoon] .book-card,[data-theme=lagoon] .note-card,[data-theme=lagoon] .settings-card,[data-theme=lagoon] .database-summary article,[data-theme=lagoon] .database-panel,[data-theme=lagoon] .database-browser,[data-theme=lagoon] .recommend-card,[data-theme=lagoon] .discover-state {
+  background:rgba(7,62,72,.68);border-color:rgba(185,228,229,.22);box-shadow:0 18px 46px rgba(0,29,35,.18),inset 0 1px rgba(239,255,255,.1);backdrop-filter:blur(18px) saturate(122%);
+}
+[data-theme=lagoon] .focus-panel { background:linear-gradient(135deg,rgba(7,57,67,.82),rgba(36,132,145,.56)); }
+[data-theme=lagoon] .stat-card__icon,[data-theme=lagoon] .ai-empty>span { color:#bfeef0;background:rgba(45,155,171,.28);border:1px solid rgba(177,229,231,.22);border-radius:50%; }
+[data-theme=lagoon] .button--primary,[data-theme=lagoon] .ask-box button,[data-theme=lagoon] .big-search button,[data-theme=lagoon] .database-module-tabs button.active,[data-theme=lagoon] .relation-analysis-actions button,[data-theme=lagoon] .graph-compare-tray button { color:#06333c;background:#f4faf8;border-color:#f4faf8;box-shadow:0 8px 22px rgba(0,27,34,.24); }
+[data-theme=lagoon] .button--primary:hover:not(:disabled) { background:#dff3f1;border-color:#dff3f1;box-shadow:0 10px 27px rgba(0,27,34,.3); }
+[data-theme=lagoon] .button--secondary { color:#eef9f8;background:rgba(167,220,222,.13);border-color:rgba(196,232,233,.28); }
+[data-theme=lagoon] .settings-tabs,[data-theme=lagoon] .ai-modes { background:rgba(4,48,57,.46);border:1px solid rgba(186,226,228,.2);backdrop-filter:blur(15px); }
+[data-theme=lagoon] .settings-tabs button.active,[data-theme=lagoon] .ai-modes button.active { color:#073740;background:#eaf6f4;box-shadow:0 6px 18px rgba(0,31,38,.2); }
+[data-theme=lagoon] .progress div,[data-theme=lagoon] .book-progress i,[data-theme=lagoon] .database-bars b { background:linear-gradient(90deg,#41b0c2,#b9ded6); }
+[data-theme=lagoon] .note-card { border-left-color:#57bfca; }
+[data-theme=lagoon] .note-card--thought { border-left-color:#b5d8c4; }
+[data-theme=lagoon] .graph-shell,[data-theme=lagoon] .search-dialog,[data-theme=lagoon] .ask-box,[data-theme=lagoon] .recommend-drawer { background:rgba(5,52,61,.9);border-color:rgba(190,230,231,.24);box-shadow:0 26px 68px rgba(0,25,31,.32);backdrop-filter:blur(22px) saturate(120%); }
+[data-theme=lagoon] input,[data-theme=lagoon] textarea,[data-theme=lagoon] select { color:var(--text); }
+[data-theme=lagoon] ::selection { color:#05313a;background:#a9dde0; }
+@media (prefers-reduced-motion:no-preference) {
+  [data-theme=lagoon] .main-content::before { animation:lagoon-current 16s ease-in-out infinite alternate; }
+  [data-theme=lagoon] .main-content::after { animation:lagoon-sparkle 10s ease-in-out infinite alternate; }
+  @keyframes lagoon-current { to { filter:hue-rotate(5deg) saturate(1.08);transform:scale(1.018) translate3d(-.7%,.4%,0); } }
+  @keyframes lagoon-sparkle { to { opacity:.6;transform:translate3d(1%,-1%,0); } }
+}
+
 /* Keep the content inset consistent across every route and viewport. */
 .main-content > .page {
   padding: 20px;

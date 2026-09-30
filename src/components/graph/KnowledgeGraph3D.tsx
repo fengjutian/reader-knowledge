@@ -52,25 +52,19 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       links: edges.map(edge => ({ ...edge, source: edge.from, target: edge.to })),
     };
   }, [nodes, edges]);
-  const neighbours = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    edges.forEach(edge => {
-      if (!map.has(edge.from)) map.set(edge.from, new Set());
-      if (!map.has(edge.to)) map.set(edge.to, new Set());
-      map.get(edge.from)!.add(edge.to);
-      map.get(edge.to)!.add(edge.from);
-    });
-    return map;
-  }, [edges]);
   useEffect(() => {
     if (!data.nodes.length) return;
-    const firstFit = window.setTimeout(() => graphRef.current?.zoomToFit(700, 55), 900);
-    const settledFit = window.setTimeout(() => graphRef.current?.zoomToFit(900, 55), 3200);
     const startRotation = window.setTimeout(() => {
       const controls = graphRef.current?.controls() as { autoRotate?: boolean; autoRotateSpeed?: number } | undefined;
       if (controls) { controls.autoRotate = true; controls.autoRotateSpeed = .38; }
     }, 400);
-    return () => { window.clearTimeout(firstFit); window.clearTimeout(settledFit); window.clearTimeout(startRotation); };
+    let fitCount = 0;
+    const keepFramed = window.setInterval(() => {
+      graphRef.current?.zoomToFit(450, 90);
+      fitCount += 1;
+      if (fitCount >= 15) window.clearInterval(keepFramed);
+    }, 2000);
+    return () => { window.clearTimeout(startRotation); window.clearInterval(keepFramed); };
   }, [data]);
   return <div ref={hostRef} className="force-graph-3d">
     <ForceGraph3D<Node3D, Link3D>
@@ -98,15 +92,14 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       linkColor={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
-        if (hoveredId && source !== hoveredId && target !== hoveredId) return "#d8d3ca";
-        return link.semanticRelation ? semanticColors[link.semanticRelation] ?? "#9c9284" : link.relation.includes("作者") ? "#587184" : link.score >= .28 ? "#a84435" : "#b99a78";
+        return hoveredId && (source === hoveredId || target === hoveredId) ? "#aaa49b" : "#d4d0c9";
       }}
       linkWidth={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
-        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.5 : .12 + Math.min(.65, link.score * 1.15);
+        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.25 : .035 + Math.min(.18, link.score * .28);
       }}
-      linkOpacity={.24}
+      linkOpacity={.065}
       linkResolution={2}
       linkDirectionalParticles={link => {
         const source = endpointId(link.source);
@@ -125,6 +118,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         return hoveredId && (source === hoveredId || target === hoveredId) ? 2.2 : 1.15;
       }}
       linkDirectionalParticleColor={link => link.semanticRelation ? semanticColors[link.semanticRelation] ?? "#9c9284" : link.relation.includes("作者") ? "#587184" : "#b84b38"}
+      onEngineStop={() => graphRef.current?.zoomToFit(800, 90)}
       onNodeHover={node => setHoveredId(node ? String(node.id) : undefined)}
       onNodeClick={(node: NodeObject<Node3D>, event) => { const id = String(node.id); if (event.detail > 1) onNodeOpen(id); else onNodeClick(id); }}
       onLinkClick={(link: LinkObject<Node3D, Link3D>) => onEdgeClick(link.id)}
