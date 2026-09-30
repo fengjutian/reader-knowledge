@@ -90,7 +90,7 @@ function analyze(booksInput: Book[], notes: Note[]) {
       ...relevantLeft.slice(0, 2).map(({ note }) => ({ bookId: books[a].id, noteId: note.id, text: note.content.slice(0, 150) })),
       ...relevantRight.slice(0, 2).map(({ note }) => ({ bookId: books[b].id, noteId: note.id, text: note.content.slice(0, 150) })),
     ];
-    const relation = books[a].author && books[a].author === books[b].author ? "同一作者" : score >= .28 ? "高度主题相似" : score >= .12 ? "主题相近" : "潜在关联";
+    const relation = books[a].author && books[a].author === books[b].author ? "共同作者 · 微信读书书架" : score >= .28 ? "高度主题相似" : score >= .12 ? "主题相近" : "潜在关联";
     candidates.push({ id: `${books[a].id}:${books[b].id}`, from: books[a].id, to: books[b].id, score, keywords, relation, evidence });
   });
   candidates.sort((a, b) => b.score - a.score);

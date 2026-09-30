@@ -33,6 +33,7 @@ export const api = {
   saveEmbeddingSettings: (settings: EmbeddingSettings, apiKey?: string) => call<void>("save_embedding_settings", { settings, apiKey }),
   testEmbedding: () => call<boolean>("test_embedding"),
   semanticRelations: () => call<SemanticRelation[]>("build_semantic_relations"),
+  metadataRelations: (source: "weread" | "douban") => call<SemanticRelation[]>("build_metadata_relations", { source }),
   localEmbeddingStatus: () => call<LocalModelStatus>("local_embedding_status"),
   downloadLocalEmbedding: () => call<LocalModelStatus>("download_local_embedding"),
   deleteLocalEmbedding: () => call<void>("delete_local_embedding"),

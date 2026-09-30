@@ -606,6 +606,70 @@ pub async fn build_semantic_relations(app: AppHandle, db: State<'_, Database>) -
 }
 
 #[tauri::command]
+pub fn build_metadata_relations(db: State<'_, Database>, source: String) -> Result<Vec<SemanticRelation>, AppError> {
+    if !matches!(source.as_str(), "weread" | "douban") {
+        return Err(AppError::Message("仅支持微信读书或豆瓣元数据关系".into()));
+    }
+    let c = db.connect()?;
+    let mut query = c.prepare("SELECT book_id,coalesce(authors_json,'[]'),coalesce(subjects_json,'[]') FROM book_metadata_sources WHERE source=?1")?;
+    let rows = query.query_map([&source], |row| {
+        let authors: String = row.get(1)?;
+        let subjects: String = row.get(2)?;
+        Ok((row.get::<_, String>(0)?, serde_json::from_str::<Vec<String>>(&authors).unwrap_or_default(), serde_json::from_str::<Vec<String>>(&subjects).unwrap_or_default()))
+    })?.collect::<Result<Vec<_>, _>>()?;
+    let mut postings: HashMap<String, Vec<String>> = HashMap::new();
+    for (book_id, authors, subjects) in rows {
+        for author in authors.into_iter().filter(|value| !value.trim().is_empty()) {
+            postings.entry(format!("author:{}", author.trim().to_lowercase())).or_default().push(book_id.clone());
+        }
+        for subject in subjects.into_iter().filter(|value| !value.trim().is_empty()) {
+            postings.entry(format!("subject:{}", subject.trim().to_lowercase())).or_default().push(book_id.clone());
+        }
+    }
+    let mut pairs: HashMap<(String, String), (Vec<String>, Vec<String>)> = HashMap::new();
+    for (term, mut ids) in postings {
+        ids.sort(); ids.dedup();
+        if ids.len() < 2 || ids.len() > 80 { continue; }
+        let is_author = term.starts_with("author:");
+        let label = term.split_once(':').map(|(_, value)| value.to_owned()).unwrap_or(term);
+        for left in 0..ids.len() { for right in left + 1..ids.len() {
+            let entry = pairs.entry((ids[left].clone(), ids[right].clone())).or_insert_with(|| (Vec::new(), Vec::new()));
+            let values = if is_author { &mut entry.1 } else { &mut entry.0 };
+            if values.len() < 6 && !values.contains(&label) { values.push(label.clone()); }
+        }}
+    }
+    let source_label = if source == "weread" { "微信读书" } else { "豆瓣" };
+    let mut relations = pairs.into_iter().flat_map(|((from, to), (subjects, authors))| {
+        [("author", "共同作者", authors, 0.94), ("subject", "共同主题", subjects.clone(), (0.48 + subjects.len() as f64 * 0.08).min(0.88))]
+            .into_iter().filter(|(_, _, keywords, _)| !keywords.is_empty()).map(|(kind, label, keywords, score)| {
+                let evidence_text = format!("来源：{source_label}；{label}：{}", keywords.join("、"));
+                SemanticRelation { id: format!("metadata:{source}:{kind}:{from}:{to}"), from: from.clone(), to: to.clone(), score, keywords: keywords.clone(), relation: format!("{label} · {source_label}"), evidence: vec![SemanticEvidence { book_id: from.clone(), note_id: String::new(), text: evidence_text.clone() }, SemanticEvidence { book_id: to.clone(), note_id: String::new(), text: evidence_text }] }
+            }).collect::<Vec<_>>()
+    }).collect::<Vec<_>>();
+    relations.sort_by(|left, right| right.score.total_cmp(&left.score));
+    Ok(relations)
+}
+
+fn metadata_context(db: &Database, book_ids: &[String]) -> Result<String, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare("SELECT source,coalesce(title,''),coalesce(authors_json,'[]'),coalesce(publisher,''),coalesce(published_date,''),coalesce(subjects_json,'[]'),coalesce(description,'') FROM book_metadata_sources WHERE book_id=?1 ORDER BY CASE source WHEN 'weread' THEN 0 WHEN 'douban' THEN 1 ELSE 9 END")?;
+    let mut context = String::new();
+    for book_id in book_ids.iter().take(20) {
+        let rows = query.query_map([book_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?)))?;
+        for row in rows {
+            let (source,title,authors_json,publisher,date,subjects_json,description)=row?;
+            if !matches!(source.as_str(), "weread" | "douban") { continue; }
+            let source_label=if source=="weread"{"微信读书"}else{"豆瓣"};
+            let authors=serde_json::from_str::<Vec<String>>(&authors_json).unwrap_or_default().join("、");
+            let subjects=serde_json::from_str::<Vec<String>>(&subjects_json).unwrap_or_default().join("、");
+            let intro=description.chars().take(600).collect::<String>();
+            context.push_str(&format!("[元数据来源：{source_label}]\n书名：{title}\n作者：{authors}\n出版社：{publisher}\n出版时间：{date}\n主题：{subjects}\n简介：{intro}\n\n"));
+        }
+    }
+    Ok(context)
+}
+
+#[tauri::command]
 pub fn save_ai_settings(
     db: State<'_, Database>,
     settings: AiSettings,
@@ -691,15 +755,18 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             content
         ));
     }
-    let system = "你是 wereader 的个人阅读知识助手。只能依据提供的阅读笔记回答；必须区分书籍原文划线与用户自己的想法；每个重要结论使用 [数字] 标注来源；证据不足时必须明确说明；不得把作者观点描述成用户观点。";
+    let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
+    let metadata = metadata_context(&db, &metadata_book_ids)?;
+    let system = "你是 wereader 的个人阅读知识助手。阅读笔记是观点回答的唯一证据；书籍元数据只能作为背景信息。必须区分书籍原文划线、用户自己的想法和元数据；不得把简介或主题当成用户观点或书中论证；不同元数据来源不得合并成一个事实。每个重要观点结论使用 [数字] 标注笔记来源；证据不足时必须明确说明。";
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
         "compare" => "任务类型：跨书分析。明确列出各书的共识、分歧与可互相补充之处。",
         _ => "任务类型：基于阅读知识库回答问题。对于宽泛主题，应综合尽可能多的相关书籍与笔记，先说明知识库覆盖范围，再按主题组织回答，避免只围绕单本书展开。",
     };
     let prompt = format!(
-        "{}\n\n以下是检索到的笔记：\n\n{}\n用户问题：{}",
+        "{}\n\n以下是按来源独立提供的书籍背景（不可作为观点证据）：\n\n{}\n以下是检索到的笔记证据：\n\n{}\n用户问题：{}",
         task,
+        metadata,
         context,
         question.trim()
     );
