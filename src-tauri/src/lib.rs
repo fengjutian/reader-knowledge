@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod database;
 mod error;
+mod http;
 mod models;
 mod metadata;
 mod sync;

@@ -1,4 +1,5 @@
 use super::provider::{AiProvider, ProviderFuture};
+use crate::http::{limited_json, MAX_API_RESPONSE_BYTES};
 use crate::models::ChatMessage;
 pub struct OpenAiCompatibleProvider {
     pub endpoint: String,
@@ -16,7 +17,7 @@ impl AiProvider for OpenAiCompatibleProvider {
                 let response = self.http.post(&self.endpoint).bearer_auth(&self.api_key).json(&body).send().await?;
                 let status = response.status();
                 if status.is_success() {
-                    value = Some(response.json::<serde_json::Value>().await?);
+                    value = Some(limited_json(response, MAX_API_RESPONSE_BYTES, "AI").await?);
                     break;
                 }
                 last_status = Some(status);
@@ -54,7 +55,7 @@ impl OpenAiCompatibleProvider {
         if !status.is_success() {
             return Err(crate::error::AppError::Message(format!("Embedding 服务请求失败（HTTP {}）", status.as_u16())));
         }
-        let value: serde_json::Value = response.json().await?;
+        let value: serde_json::Value = limited_json(response, MAX_API_RESPONSE_BYTES, "Embedding").await?;
         let data = value["data"].as_array().ok_or_else(|| crate::error::AppError::Message("Embedding 响应格式无效".into()))?;
         let mut ordered = data.iter().map(|item| {
             let index = item["index"].as_u64().unwrap_or(0) as usize;

@@ -1,4 +1,5 @@
 use crate::{database::Database, error::AppError, models::{BookMetadataRow, BookMetadataSourceDetail, MetadataFetchResult}};
+use crate::http::{limited_json, limited_text, MAX_API_RESPONSE_BYTES, MAX_HTML_RESPONSE_BYTES};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,7 +25,7 @@ pub async fn fetch_douban_url(db: &Database, book_id: &str, input_url: &str) -> 
     if response.url().host_str() != Some("book.douban.com") {
         return Err(AppError::Message("豆瓣要求安全验证，本次拉取已停止".into()));
     }
-    let html = response.text().await?;
+    let html = limited_text(response, MAX_HTML_RESPONSE_BYTES, "豆瓣图书页").await?;
     if html.contains("sec.douban.com") || html.contains("captcha") || html.contains("安全验证") {
         return Err(AppError::Message("豆瓣要求安全验证，本次拉取已停止".into()));
     }
@@ -38,7 +39,7 @@ async fn find_douban_book(db:&Database,book_id:&str,query:&str)->Result<reqwest:
     let search=if query.is_empty(){core_title(&title)}else{core_title(query)};
     let client=reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("Mozilla/5.0 (compatible; ReadFlow/0.1; personal metadata lookup)").build()?;
     let response=client.get("https://search.douban.com/book/subject_search").query(&[("search_text",search.as_str()),("cat","1001")]).send().await?.error_for_status()?;
-    let html=response.text().await?;
+    let html=limited_text(response,MAX_HTML_RESPONSE_BYTES,"豆瓣搜索页").await?;
     let marker="window.__DATA__ = ";
     let start=html.find(marker).ok_or_else(||AppError::Message("豆瓣搜索页未返回可识别结果".into()))?+marker.len();
     let end=html[start..].find(";</script>").or_else(||html[start..].find(";\n")).ok_or_else(||AppError::Message("豆瓣搜索结果格式已变化".into()))?+start;
@@ -204,7 +205,8 @@ async fn fetch_open_library(client:&reqwest::Client,title:&str,author:&str)->Res
     for (key,term,by_author) in searches {
         let mut request=client.get("https://openlibrary.org/search.json").query(&[(key,term.as_str()),("limit","5")]);
         if let Some(ref author)=by_author { if !author.trim().is_empty() { request=request.query(&[("author",author)]); } }
-        let value:Value=request.send().await?.error_for_status()?.json().await?;
+        let response=request.send().await?.error_for_status()?;
+        let value:Value=limited_json(response,MAX_API_RESPONSE_BYTES,"Open Library").await?;
         if let Some(d)=best_match(value.get("docs").and_then(Value::as_array),title,author,"title","author_name") { found=Some(d.clone()); break; }
     }
     let Some(d)=found else{return Ok(None)};
@@ -222,7 +224,7 @@ async fn fetch_google_books(client:&reqwest::Client,title:&str,author:&str,api_k
         if let Some(key)=api_key { request=request.query(&[("key",key)]); }
         let response=request.send().await?;
         if response.status()==reqwest::StatusCode::TOO_MANY_REQUESTS { return Err(AppError::Message("Google Books 请求已限流，请在设置中配置 API Key 或稍后重试".into())); }
-        let value:Value=response.error_for_status()?.json().await?;
+        let value:Value=limited_json(response.error_for_status()?,MAX_API_RESPONSE_BYTES,"Google Books").await?;
         if let Some(items)=value.get("items").and_then(Value::as_array) {
             let best=items.iter().max_by_key(|item| match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors"));
             if let Some(item)=best.filter(|item|match_score(item.get("volumeInfo").unwrap_or(&Value::Null),title,author,"title","authors")>0) { found=Some(item.clone()); break; }

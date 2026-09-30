@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::http::{limited_json, MAX_API_RESPONSE_BYTES};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
@@ -31,16 +32,15 @@ impl WeReadClient {
         let mut body = params;
         body.insert("api_name".into(), Value::String(api_name.into()));
         body.insert("skill_version".into(), Value::String(SKILL_VERSION.into()));
-        let response: Value = self
+        let response = self
             .http
             .post(GATEWAY_URL)
             .bearer_auth(&self.api_key)
             .json(&body)
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await?;
+            .error_for_status()?;
+        let response: Value = limited_json(response, MAX_API_RESPONSE_BYTES, "微信读书").await?;
         if let Some(upgrade) = response.get("upgrade_info") {
             let message = upgrade
                 .get("message")
