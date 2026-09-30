@@ -28,7 +28,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
   onEdgeClick: (id: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts>();
+  const chartRef = useRef<echarts.ECharts | undefined>(undefined);
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
