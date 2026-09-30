@@ -181,9 +181,20 @@ pub struct Citation {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GlossaryCitation {
+    pub index: usize,
+    pub term: String,
+    pub definition: String,
+    pub source: String,
+    pub source_url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiAnswer {
     pub content: String,
     pub citations: Vec<Citation>,
+    pub glossary_citations: Vec<GlossaryCitation>,
     pub sources_considered: usize,
 }
 

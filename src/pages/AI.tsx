@@ -28,8 +28,11 @@ function loadHistory(): AiConversation[] {
 }
 
 function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void }) {
-  const markdown = answer.content.replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)");
-  return <ReactMarkdown
+  const markdown = answer.content
+    .replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)")
+    .replace(/(?<!\\)\[W(\d+)\]/g, "[[W$1]](glossary:$1)");
+  const glossaryCitations = answer.glossaryCitations ?? [];
+  return <><ReactMarkdown
     remarkPlugins={[remarkGfm]}
     urlTransform={url => url.startsWith("citation:") ? url : url}
     components={{
@@ -39,10 +42,15 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
           const citation = answer.citations.find(item => item.index === index);
           return citation ? <button type="button" className="answer__source-link" onClick={() => openBook(citation.note.bookId, citation.note.id)}>{children}</button> : <>{children}</>;
         }
+        if (href?.startsWith("glossary:")) {
+          const index = Number(href.slice("glossary:".length));
+          const citation = glossaryCitations.find(item => item.index === index);
+          return citation ? <button type="button" className="answer__source-link answer__source-link--glossary" title={citation.definition}>{children}</button> : <>{children}</>;
+        }
         return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
       },
     }}
-  >{markdown}</ReactMarkdown>;
+  >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}</>;
 }
 
 export function AI() {

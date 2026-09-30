@@ -111,7 +111,8 @@ export interface ReadingStats {
 
 export interface SearchResult extends Note { score: number }
 export interface Citation { index: number; note: Note }
-export interface AiAnswer { content: string; citations: Citation[]; sourcesConsidered: number }
+export interface GlossaryCitation { index:number;term:string;definition:string;source:string;sourceUrl:string }
+export interface AiAnswer { content: string; citations: Citation[]; glossaryCitations?: GlossaryCitation[]; sourcesConsidered: number }
 export type AiMode = "ask" | "summary" | "compare";
 export interface AiTurn { question: string; answer: AiAnswer }
 export interface AiRequest { question: string; mode: AiMode; bookIds: string[]; history?: { question: string; answer: string }[] }

@@ -291,7 +291,7 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
 pub fn open_external_url(app: AppHandle, url: String) -> Result<(), AppError> {
     let parsed=reqwest::Url::parse(&url).map_err(|_|AppError::Message("无效的外部链接".into()))?;
     let host=parsed.host_str().unwrap_or_default();
-    let allowed=parsed.scheme()=="https"&&matches!(host,"book.douban.com"|"www.douban.com"|"openlibrary.org"|"books.google.com"|"books.google.cn"|"books.googleapis.com");
+    let allowed=parsed.scheme()=="https"&&matches!(host,"zh.wikipedia.org"|"book.douban.com"|"www.douban.com"|"openlibrary.org"|"books.google.com"|"books.google.cn"|"books.googleapis.com");
     if !allowed{return Err(AppError::Message("不允许打开该外部域名".into()));}
     app.opener().open_url(parsed.to_string(),None::<String>).map_err(|error|AppError::Message(format!("无法打开外部链接：{error}")))
 }
@@ -735,12 +735,12 @@ fn metadata_context(db: &Database, book_ids: &[String]) -> Result<String, AppErr
     Ok(context)
 }
 
-fn glossary_context(db:&Database,text:&str)->Result<String,AppError>{
+fn glossary_context(db:&Database,text:&str)->Result<(String,Vec<GlossaryCitation>),AppError>{
     let c=db.connect()?;let mut q=c.prepare("SELECT term,canonical_name,aliases_json,definition,source,coalesce(source_url,'') FROM glossary_terms WHERE status='confirmed' ORDER BY updated_at DESC")?;
     let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))?;
-    let normalized_text=text.to_lowercase();let mut result=String::new();let mut index=1;
-    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();let matched=[term.as_str(),name.as_str()].into_iter().chain(aliases.iter().map(String::as_str)).filter(|value|!value.trim().is_empty()).any(|value|normalized_text.contains(&value.to_lowercase()));if !matched{continue;}result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",if name.is_empty(){&term}else{&name},definition,if source=="wikipedia"{"中文维基百科"}else{"人工编辑"},if url.is_empty(){String::new()}else{format!("（{url}）")}));index+=1;if index>8{break;}}
-    Ok(result)
+    let normalized_text=text.to_lowercase();let mut result=String::new();let mut citations=Vec::new();let mut index=1;
+    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();let matched=[term.as_str(),name.as_str()].into_iter().chain(aliases.iter().map(String::as_str)).filter(|value|!value.trim().is_empty()).any(|value|normalized_text.contains(&value.to_lowercase()));if !matched{continue;}let display_name=if name.is_empty(){term.clone()}else{name};let source_label=if source=="wikipedia"{"中文维基百科"}else{"人工编辑"};result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",display_name,definition,source_label,if url.is_empty(){String::new()}else{format!("（{url}）")}));citations.push(GlossaryCitation{index,term:display_name,definition,source:source_label.into(),source_url:url});index+=1;if index>8{break;}}
+    Ok((result,citations))
 }
 
 #[tauri::command]
@@ -826,7 +826,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     }
     let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
     let metadata = metadata_context(&db, &metadata_book_ids)?;
-    let glossary = glossary_context(&db,&format!("{}\n{}",question,context))?;
+    let (glossary, glossary_matches) = glossary_context(&db,&format!("{}\n{}",question,context))?;
     if results.is_empty() && glossary.is_empty() {
         return Err(AppError::Message(
             "没有检索到相关笔记或名词解释，无法生成有依据的回答".into(),
@@ -864,9 +864,14 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
             note: result.note,
         })
         .collect();
+    let glossary_citations = glossary_matches
+        .into_iter()
+        .filter(|citation| content.contains(&format!("[W{}]", citation.index)))
+        .collect();
     Ok(AiAnswer {
         content,
         citations,
+        glossary_citations,
         sources_considered,
     })
 }

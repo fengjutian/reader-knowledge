@@ -33,6 +33,7 @@ export function KnowledgeGraph() {
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const openBook = useAppStore(state => state.openBook);
   const openAiCompare = useAppStore(state => state.openAiCompare);
+  const isActivePage = useAppStore(state => state.page === "graph");
   const workerRef = useRef<Worker | null>(null);
   const semanticEdgesRef = useRef<Edge[] | null>(null);
   const cacheKeyRef = useRef("");
@@ -52,6 +53,16 @@ export function KnowledgeGraph() {
   useEffect(() => {
     if (books.length) setFocusId(current => current ?? books[0].id);
   }, [books]);
+  useEffect(() => {
+    if (!graph.nodes.length || !graph.edges.length) return;
+    const connected = new Set(graph.edges.flatMap(edge => [edge.from, edge.to]));
+    setFocusId(current => {
+      if (current && connected.has(current) && graph.nodes.some(node => node.id === current)) return current;
+      return [...graph.nodes]
+        .filter(node => connected.has(node.id))
+        .sort((left, right) => (right.highlightCount + right.thoughtCount) - (left.highlightCount + left.thoughtCount))[0]?.id ?? current;
+    });
+  }, [graph.nodes, graph.edges]);
   useEffect(() => { const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength }); }; window.addEventListener("local-embedding-removed", removed); return () => window.removeEventListener("local-embedding-removed", removed); }, [strength]);
   useEffect(() => {
     const worker = new Worker(new URL("../workers/knowledgeGraph.worker.ts", import.meta.url), { type: "module" });
@@ -142,7 +153,7 @@ export function KnowledgeGraph() {
   return <div className="knowledge-graph-page"><PageHeader title="书籍关系图谱" />
     <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { navigateToBook(book.id); setQuery(""); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}><option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="all">12 个关联</option><option value="broad">20 个关联</option></select></label><label className="graph-strength"><span>关系</span><select value={relationFilter} onChange={e => { setRelationFilter(e.target.value as RelationFilter); setEdgeId(undefined); }}><option value="all">全部</option><option value="content">内容关联</option><option value="author">共同作者</option><option value="analyzable">可深度分析</option></select></label><div className="graph-nav"><button onClick={goBack} disabled={!backStack.length} title="返回上一本中心书" aria-label="返回"><ArrowLeft size={15}/></button><button onClick={goForward} disabled={!forwardStack.length} title="前进到下一本中心书" aria-label="前进"><ArrowRight size={15}/></button><button onClick={() => setFitRequest(value => value + 1)} disabled={!viewGraph.nodes.length} title="适应画布" aria-label="适应画布"><Maximize2 size={15}/></button><button onClick={() => refreshSemanticRelations(true)} disabled={semanticLoading} title="刷新语义关系" aria-label="刷新语义关系"><RotateCw className={semanticLoading ? "spin" : ""} size={15}/></button></div><span>{semanticLoading ? "正在刷新关系…" : viewGraph.nodes.length > 0 ? `发现 ${viewGraph.nodes.length - 1} 个关系` : "请选择一本书"}</span></div>
     <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}{!loading && !analyzing && !error && !graph.nodes.length && <div className="graph-state"><Share2/><strong>还没有发现可靠的书籍关系</strong><span>更多划线与想法会让关联分析更加准确。</span></div>}
-      {!loading && !error && !!viewGraph.nodes.length && <KnowledgeGraphCanvas
+      {isActivePage && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraphCanvas
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId}
         selectedEdgeId={edgeId} fitRequest={fitRequest}
         onNodeClick={id => { setSelectedId(id); setEdgeId(undefined); }} onNodeOpen={navigateToBook}
