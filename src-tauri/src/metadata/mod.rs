@@ -105,18 +105,21 @@ fn attribute_after(html:&str,marker:&str,end_marker:&str)->Option<String>{let st
 fn section_after_heading<'a>(html:&'a str,heading:&str)->Option<&'a str>{let start=html.find(&format!("<span>{heading}</span>"))?;let rest=&html[start..];let intro=rest.find("<div class=\"intro\">")?+"<div class=\"intro\">".len();let end=rest[intro..].find("</div>")?+intro;Some(&rest[intro..end])}
 fn strip_html_with_breaks(value:&str)->String{strip_html(&value.replace("<br/>","\n").replace("<br>","\n").replace("</p>","\n"))}
 
-pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
+pub fn list(db: &Database, source: &str) -> Result<Vec<BookMetadataRow>, AppError> {
+    if !matches!(source, "weread" | "douban" | "open_library" | "google_books" | "manual") {
+        return Err(AppError::Message("不支持的数据源".into()));
+    }
     let c = db.connect()?;
     let mut q = c.prepare(
         "SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(m.cover_url,b.cover,''),
          coalesce(m.isbn13,m.isbn10,''),coalesce(m.publisher,''),coalesce(m.published_date,''),m.page_count,
          coalesce(m.subjects_json,'[]'),coalesce(s.sources,''),s.last_fetched_at
          FROM books b
-         LEFT JOIN book_metadata_sources m ON m.book_id=b.book_id AND m.source='weread'
+         LEFT JOIN book_metadata_sources m ON m.book_id=b.book_id AND m.source=?1
          LEFT JOIN (SELECT book_id,group_concat(source) sources,max(fetched_at) last_fetched_at FROM book_metadata_sources GROUP BY book_id) s ON s.book_id=b.book_id
          WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC,b.title"
     )?;
-    let rows = q.query_map([], |r| {
+    let rows = q.query_map([source], |r| {
         let subjects_raw: String = r.get(8)?;
         let sources_raw: String = r.get(9)?;
         let fetched: Option<i64> = r.get(10)?;

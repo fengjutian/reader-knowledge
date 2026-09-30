@@ -15,7 +15,7 @@ export const api = {
   books: () => call<Book[]>("list_books"),
   booksPage: (query = "", limit = 500, offset = 0) => call<BookPage>("list_books_page", { query, limit, offset }),
   recommendations: (count = 12, maxIdx = 0) => call<BookRecommendations>("get_book_recommendations", { count, maxIdx }),
-  bookMetadata: () => call<BookMetadataRow[]>("list_book_metadata"),
+  bookMetadata: (source = "weread") => call<BookMetadataRow[]>("list_book_metadata", { source }),
   bookMetadataDetails: (bookId: string) => call<BookMetadataSourceDetail[]>("get_book_metadata_details", { bookId }),
   fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),
   fetchDoubanBookMetadata: (bookId: string, url: string) => call<MetadataFetchResult>("fetch_douban_book_metadata", { bookId, url }),

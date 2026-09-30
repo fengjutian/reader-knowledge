@@ -154,8 +154,8 @@ pub fn list_books_page(
 }
 
 #[tauri::command]
-pub fn list_book_metadata(db: State<'_, Database>) -> Result<Vec<BookMetadataRow>, AppError> {
-    crate::metadata::list(&db)
+pub fn list_book_metadata(db: State<'_, Database>, source: Option<String>) -> Result<Vec<BookMetadataRow>, AppError> {
+    crate::metadata::list(&db, source.as_deref().unwrap_or("weread"))
 }
 
 #[tauri::command]

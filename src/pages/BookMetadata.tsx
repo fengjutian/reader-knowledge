@@ -12,6 +12,7 @@ const labels: Record<string, string> = { weread: "微信读书", open_library: "
 const maxDoubanBatch = 10;
 const pageSize = 100;
 const hiddenSources = new Set(["open_library", "google_books"]);
+type VisibleSource = "weread" | "douban";
 
 function coreTitle(title: string) { return title.split(/[：:（(【[]/, 1)[0].trim(); }
 function readableError(error: unknown) {
@@ -25,6 +26,7 @@ export function BookMetadata() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
+  const [source, setSource] = useState<VisibleSource>("weread");
   const [message, setMessage] = useState<MessageValue>();
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -34,10 +36,10 @@ export function BookMetadata() {
   const closeMessage = useCallback(() => setMessage(undefined), []);
 
   const load = useCallback(async () => {
-    try { setItems(await api.bookMetadata()); }
+    try { setItems(await api.bookMetadata(source)); }
     catch (error) { setMessage({ kind: "error", text: readableError(error) }); }
     finally { setLoading(false); }
-  }, []);
+  }, [source]);
   useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => items.filter(item => `${item.title} ${item.author} ${item.isbn} ${item.publisher}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [items, query]);
@@ -107,6 +109,8 @@ export function BookMetadata() {
     setBusy(new Set());
   }
 
+  const pullSelectedSource = (ids: string[]) => source === "weread" ? pullWeread(ids) : pullDouban(ids);
+
   async function view(book: BookMetadataRow) {
     setViewBook(book); setDetails([]);
     try { setDetails((await api.bookMetadataDetails(book.bookId)).filter(detail => !hiddenSources.has(detail.source))); }
@@ -115,8 +119,8 @@ export function BookMetadata() {
 
   return <>
     <Message value={message} onClose={closeMessage}/>
-    <PageHeader title="书籍元数据" subtitle={`${items.length} 本书；当前列表展示微信读书字段，各来源详情独立保存。`} actions={<Button icon={<RefreshCw size={15}/>} disabled={!selected.size || busy.size > 0} onClick={() => void pullWeread([...selected])}>微信读书补全（{selected.size}/{maxDoubanBatch}）</Button>}/>
-    <div className="toolbar metadata-toolbar"><label className="field field--search"><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索书名、作者、ISBN 或出版社"/></label></div>
+    <PageHeader title="书籍元数据" subtitle={`${items.length} 本书；当前展示${labels[source]}字段，各来源详情独立保存。`} actions={<Button icon={<RefreshCw size={15}/>} disabled={!selected.size || busy.size > 0} onClick={() => void pullSelectedSource([...selected])}>{labels[source]}补全（{selected.size}/{maxDoubanBatch}）</Button>}/>
+    <div className="toolbar metadata-toolbar"><label className="field field--search"><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索书名、作者、ISBN 或出版社"/></label><label className="field metadata-source"><span>数据源</span><select value={source} onChange={event => { setSource(event.target.value as VisibleSource); setSelected(new Set()); }}><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></label></div>
     <div className="douban-import"><div><strong>按来源批量补全</strong><small>微信读书按 bookId 获取，豆瓣按书名与作者搜索；两个来源分别保存，不合并字段。</small></div><span className="douban-import__limit">已选 {selected.size} / {maxDoubanBatch}</span><div className="metadata-source-actions"><Button variant="secondary" disabled={!selected.size || busy.size > 0} onClick={() => void pullWeread([...selected])}>微信读书</Button><Button variant="secondary" disabled={!selected.size || busy.size > 0} onClick={() => void pullDouban([...selected])}>豆瓣</Button></div></div>
     {loading ? <div className="notes-loading">正在读取书籍…</div> : <div className="metadata-table-wrap">
       <table className="metadata-table">
@@ -128,9 +132,9 @@ export function BookMetadata() {
           <td><span className="metadata-ellipsis">{book.author || "—"}</span></td><td>{book.isbn || "—"}</td>
           <td><span className="metadata-ellipsis">{book.publisher || "—"}</span><small>{book.publishedDate}</small></td><td>{book.pageCount ?? "—"}</td>
           <td><div className="metadata-tags">{book.subjects.slice(0, 2).map(subject => <span key={subject}>{subject}</span>)}</div></td>
-          <td><div className="metadata-sources">{book.sources.filter(source => !hiddenSources.has(source)).length ? book.sources.filter(source => !hiddenSources.has(source)).map(source => <span key={source}>{labels[source] ?? source}</span>) : <em>未补全</em>}</div></td>
+          <td><div className="metadata-sources">{book.sources.includes(source) ? <span>{labels[source]}</span> : <em>未补全</em>}</div></td>
           <td><button className="metadata-view" onClick={() => void view(book)} aria-label="查看元数据"><Eye size={16}/></button></td>
-          <td><Button variant="secondary" disabled={busy.size > 0} icon={<RefreshCw size={14}/>} onClick={() => void pullDouban([book.bookId])}>豆瓣补全</Button></td>
+          <td><Button variant="secondary" disabled={busy.size > 0} icon={<RefreshCw size={14}/>} onClick={() => void pullSelectedSource([book.bookId])}>{labels[source]}补全</Button></td>
         </tr>)}</tbody>
       </table>
       <footer className="metadata-pagination"><span>第 {page + 1} / {pageCount} 页 · 共 {filtered.length} 本</span><div><button disabled={page === 0} onClick={() => setPage(value => value - 1)}>上一页</button><button disabled={page + 1 >= pageCount} onClick={() => setPage(value => value + 1)}>下一页</button></div></footer>
