@@ -43,7 +43,9 @@ export function BookMetadata() {
   const filtered = useMemo(() => items.filter(item => `${item.title} ${item.author} ${item.isbn} ${item.publisher}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [items, query]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visible = filtered.slice(page * pageSize, (page + 1) * pageSize);
-  const allVisibleSelected = visible.length > 0 && visible.every(item => selected.has(item.bookId));
+  const selectedVisibleCount = visible.reduce((count, item) => count + Number(selected.has(item.bookId)), 0);
+  const visibleSelectionTarget = Math.min(visible.length, maxDoubanBatch);
+  const allVisibleSelected = visibleSelectionTarget > 0 && selectedVisibleCount === visibleSelectionTarget;
   useEffect(() => setPage(0), [query]);
 
   function toggleAll() {

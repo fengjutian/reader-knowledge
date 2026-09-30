@@ -122,6 +122,38 @@ pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
 }
 
 #[tauri::command]
+pub fn list_books_page(
+    db: State<'_, Database>,
+    query: String,
+    limit: i64,
+    offset: i64,
+) -> Result<BookPage, AppError> {
+    let c = db.connect()?;
+    let pattern = format!("%{}%", query.trim());
+    let total = c.query_row(
+        "SELECT count(*) FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1)",
+        [&pattern],
+        |row| row.get(0),
+    )?;
+    let mut statement = c.prepare(
+        "SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),''),CASE WHEN b.finish_reading=1 THEN 'finished' WHEN coalesce(b.read_update_time,0)>0 OR coalesce(h.total,0)>0 OR coalesce(t.total,0)>0 THEN 'reading' ELSE 'unread' END
+         FROM books b
+         LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id
+         LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id
+         WHERE b.is_deleted=0 AND (b.title LIKE ?1 OR coalesce(b.author,'') LIKE ?1)
+         ORDER BY b.read_update_time DESC,b.book_id
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let books = statement.query_map(rusqlite::params![pattern, limit.clamp(1, 500), offset.max(0)], |row| {
+        Ok(Book {
+            id: row.get(0)?, title: row.get(1)?, author: row.get(2)?, category: row.get(3)?, cover: row.get(4)?,
+            highlight_count: row.get(5)?, thought_count: row.get(6)?, progress: row.get(7)?, updated_at: row.get(8)?, reading_status: row.get(9)?,
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
+    Ok(BookPage { total, books })
+}
+
+#[tauri::command]
 pub fn list_book_metadata(db: State<'_, Database>) -> Result<Vec<BookMetadataRow>, AppError> {
     crate::metadata::list(&db)
 }
