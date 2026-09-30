@@ -99,6 +99,23 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       }}
       linkOpacity={.18}
       linkResolution={2}
+      linkDirectionalParticles={link => {
+        const source = endpointId(link.source);
+        const target = endpointId(link.target);
+        if (hoveredId && (source === hoveredId || target === hoveredId)) return 3;
+        return link.score >= .28 || link.relation.includes("作者") ? 1 : 0;
+      }}
+      linkDirectionalParticleSpeed={link => {
+        const source = endpointId(link.source);
+        const target = endpointId(link.target);
+        return hoveredId && (source === hoveredId || target === hoveredId) ? .018 : .007 + Math.min(.006, link.score * .012);
+      }}
+      linkDirectionalParticleWidth={link => {
+        const source = endpointId(link.source);
+        const target = endpointId(link.target);
+        return hoveredId && (source === hoveredId || target === hoveredId) ? 2.2 : 1.15;
+      }}
+      linkDirectionalParticleColor={link => link.semanticRelation ? semanticColors[link.semanticRelation] ?? "#9c9284" : link.relation.includes("作者") ? "#587184" : "#b84b38"}
       onNodeHover={node => setHoveredId(node ? String(node.id) : undefined)}
       onNodeClick={(node: NodeObject<Node3D>, event) => { const id = String(node.id); if (event.detail > 1) onNodeOpen(id); else onNodeClick(id); }}
       onLinkClick={(link: LinkObject<Node3D, Link3D>) => onEdgeClick(link.id)}
