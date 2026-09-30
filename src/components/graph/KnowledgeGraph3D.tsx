@@ -158,6 +158,11 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    // A filter can replace most of the graph. Reset the viewport together
+    // with the series so the percentage never describes stale chart state.
+    zoomRef.current = 1;
+    panRef.current = [0, 0];
+    setZoom(1);
     chart.setOption({
       backgroundColor: "transparent",
       tooltip: {
@@ -221,7 +226,10 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
       }, {
         type: "graphGL",
         name: "书籍关系",
-        layout: "forceAtlas2",
+        // Nodes already have deterministic category-based positions. Running
+        // forceAtlas2 again on a sparse filtered graph can collapse it under
+        // gravity and stack every label at the centre.
+        layout: "none",
         data: data.nodes,
         edges: data.edges,
         left: "7%",
