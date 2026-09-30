@@ -48,10 +48,10 @@ export function Glossary() {
       <Dialog.Content className="glossary-drawer">
         <header className="glossary-drawer__head"><div><Dialog.Title>{editing.id > 0 ? "查看与编辑名词" : "新建名词"}</Dialog.Title><Dialog.Description>{editing.id > 0 ? "修改后保存将立即用于 AI 问答" : "填写名词后可优先从维基百科获取解释"}</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭"><X size={19}/></Dialog.Close></header>
         <div className="glossary-editor">
-          <label>名词<input ref={termInputRef} value={editing.term} onChange={event => setEditing({ ...editing, term: event.target.value })} placeholder="输入需要解释的名词"/></label>
+          <label>名词<div className="glossary-term-input"><input ref={termInputRef} value={editing.term} onChange={event => setEditing({ ...editing, term: event.target.value })} placeholder="输入需要解释的名词"/><button type="button" disabled={busy || !editing.term.trim()} onClick={() => void wiki()}><Search size={14}/>{busy ? "正在搜索…" : "优先从维基百科获取"}</button></div></label>
           <label>标准名称<input value={editing.canonicalName} onChange={event => setEditing({ ...editing, canonicalName: event.target.value })}/></label>
           <label>别名<input value={editing.aliases.join("、")} onChange={event => setEditing({ ...editing, aliases: event.target.value.split(/[、,，]/).map(value => value.trim()).filter(Boolean) })}/></label>
-          <div className="glossary-wiki"><button disabled={busy || !editing.term.trim()} onClick={() => void wiki()}><Search size={14}/>{busy ? "正在搜索…" : "优先从维基百科获取"}</button>{editing.sourceUrl && <button onClick={() => void api.openExternalUrl(editing.sourceUrl)}><ExternalLink size={14}/>查看来源</button>}</div>
+          {editing.sourceUrl && <div className="glossary-wiki"><button type="button" onClick={() => void api.openExternalUrl(editing.sourceUrl)}><ExternalLink size={14}/>查看来源</button></div>}
           {candidates.length > 0 && <div className="glossary-candidates">{candidates.map(item => <button key={item.title} onClick={() => choose(item)}><strong>{item.title}</strong><span>{item.description || item.excerpt}</span></button>)}</div>}
           <label>解释<textarea rows={12} value={editing.definition} onChange={event => setEditing({ ...editing, definition: event.target.value, source: "manual" })}/></label>
           {error && <p className="glossary-error">{error}</p>}
