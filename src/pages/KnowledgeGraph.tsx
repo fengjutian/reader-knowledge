@@ -14,8 +14,9 @@ type Analysis = { nodes: Node[]; candidates: Edge[] };
 type Strength = "all" | "strong" | "balanced" | "standard" | "broad";
 type WorkerStrength = Exclude<Strength, "standard">;
 type RelationFilter = "all" | "content" | "author" | "analyzable";
+type RelationSource = "all" | "local" | "semantic" | "weread" | "douban";
 const W = 1000, H = 650;
-const SEMANTIC_RELATIONS_CACHE_PREFIX = "semantic-relations:v2";
+const SEMANTIC_RELATIONS_CACHE_PREFIX = "semantic-relations:v3";
 const short = (value: string, size: number) => value.length > size ? `${value.slice(0, size)}…` : value;
 const relationLabels: Record<RelationKind, string> = { same_concept: "同义概念", agreement: "观点一致", conflict: "观点冲突", complementary: "观点互补", causal: "因果关系", application: "理论与应用", uncertain: "证据不足" };
 const workerStrength = (strength: Strength): WorkerStrength => strength === "standard" ? "all" : strength;
@@ -27,6 +28,7 @@ export function KnowledgeGraph() {
   const [semanticError, setSemanticError] = useState("");
   const [error, setError] = useState(""), [query, setQuery] = useState(""), [strength, setStrength] = useState<Strength>("all");
   const [relationFilter, setRelationFilter] = useState<RelationFilter>("all");
+  const [relationSource, setRelationSource] = useState<RelationSource>("all");
   const [connectedOnly, setConnectedOnly] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false), [pickerScroll, setPickerScroll] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(), [edgeId, setEdgeId] = useState<string>(), [focusId, setFocusId] = useState<string>();
@@ -64,7 +66,7 @@ export function KnowledgeGraph() {
     setGraph(current => ({ ...current, edges: combinedEdges(values.length ? values : null) }));
   }
   const semanticCacheKey = (currentBooks = books, currentNotes = notes) => `${SEMANTIC_RELATIONS_CACHE_PREFIX}:${graphCacheKey(currentBooks, currentNotes)}`;
-  function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); Promise.all([api.semanticRelations(), api.metadataRelations("weread").catch(() => []), api.metadataRelations("douban").catch(() => [])]).then(([semantic, weread, douban]) => { semanticEdgesRef.current = null; mergeExternalEdges([...semantic, ...weread, ...douban]); setSemanticEnabled(true); void writeGraphCache(semanticCacheKey(), semantic); }).catch(reason => { if (showError) setSemanticError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => setSemanticLoading(false)); }
+  function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); Promise.allSettled([api.semanticRelations(), api.metadataRelations("weread"), api.metadataRelations("douban")]).then(results => { const [semanticResult, wereadResult, doubanResult] = results; const semantic = semanticResult.status === "fulfilled" ? semanticResult.value : []; const weread = wereadResult.status === "fulfilled" ? wereadResult.value : []; const douban = doubanResult.status === "fulfilled" ? doubanResult.value : []; semanticEdgesRef.current = null; mergeExternalEdges([...semantic, ...weread, ...douban]); setSemanticEnabled(semantic.length > 0); if (semantic.length) void writeGraphCache(semanticCacheKey(), semantic); const failures = results.filter(result => result.status === "rejected"); if (showError && failures.length) setSemanticError(`${failures.length} 个关系来源刷新失败，已保留其他来源结果`); }).finally(() => setSemanticLoading(false)); }
   useEffect(() => {
     Promise.all([api.books(), api.notes()]).then(async ([b, n]) => { const cachedEdges = await readGraphCache<Edge[]>(semanticCacheKey(b, n)); if (cachedEdges?.length) { mergeExternalEdges(cachedEdges); setSemanticEnabled(true); } setBooks(b); setNotes(n); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
     Promise.all([api.metadataRelations("weread").catch(() => []), api.metadataRelations("douban").catch(() => [])]).then(([weread, douban]) => mergeExternalEdges([...weread, ...douban]));
@@ -81,6 +83,12 @@ export function KnowledgeGraph() {
         .filter(node => connected.has(node.id))
         .sort((left, right) => (right.highlightCount + right.thoughtCount) - (left.highlightCount + left.thoughtCount))[0]?.id ?? current;
     });
+  }, [graph.nodes, graph.edges]);
+  useEffect(() => {
+    const nodeIds = new Set(graph.nodes.map(node => node.id)), edgeIds = new Set(graph.edges.filter(edge => nodeIds.has(edge.from) && nodeIds.has(edge.to)).map(edge => edge.id));
+    setSelectedId(current => current && nodeIds.has(current) ? current : undefined);
+    setEdgeId(current => current && edgeIds.has(current) ? current : undefined);
+    setCompareIds(current => current.filter(id => nodeIds.has(id)));
   }, [graph.nodes, graph.edges]);
   useEffect(() => { const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength: workerStrength(strength) }); }; window.addEventListener("local-embedding-removed", removed); return () => window.removeEventListener("local-embedding-removed", removed); }, [strength]);
   useEffect(() => {
@@ -118,6 +126,10 @@ export function KnowledgeGraph() {
   const viewGraph = useMemo(() => {
     const bookById = new Map(graph.nodes.map(node => [node.id, node]));
     const filteredEdges = graph.edges.filter(edge => bookById.has(edge.from) && bookById.has(edge.to)).filter(edge => {
+      if (relationSource === "local" && (edge.id.startsWith("semantic:") || edge.id.startsWith("metadata:"))) return false;
+      if (relationSource === "semantic" && !edge.id.startsWith("semantic:")) return false;
+      if (relationSource === "weread" && !edge.id.startsWith("metadata:weread:")) return false;
+      if (relationSource === "douban" && !edge.id.startsWith("metadata:douban:")) return false;
       if (relationFilter === "author") return edge.relation.includes("作者");
       if (relationFilter === "content") return !edge.relation.includes("作者");
       if (relationFilter === "analyzable") return [edge.from, edge.to].every(id => { const book = bookById.get(id); return !!book && book.highlightCount + book.thoughtCount > 0; });
@@ -135,7 +147,7 @@ export function KnowledgeGraph() {
       return { ...node, x: W / 2 + Math.cos(angle) * ring * 1.12, y: H / 2 + Math.sin(angle) * ring };
     });
     return { nodes, edges: visibleEdges };
-  }, [focusId, graph, relationFilter, strength]);
+  }, [focusId, graph, relationFilter, relationSource, strength]);
   const renderedEdges = useMemo(() => viewGraph.edges.map(edge => ({ ...edge, semanticRelation: relationAnalyses[edge.id]?.relation })), [viewGraph.edges, relationAnalyses]);
   const selected = graph.nodes.find(node => node.id === selectedId), selectedEdge = graph.edges.find(edge => edge.id === edgeId && graph.nodes.some(node => node.id === edge.from) && graph.nodes.some(node => node.id === edge.to));
   useEffect(() => {
@@ -173,6 +185,7 @@ export function KnowledgeGraph() {
   function resetToGlobal() {
     setStrength("all");
     setRelationFilter("all");
+    setRelationSource("all");
     setFocusId(undefined);
     setSelectedId(undefined);
     setEdgeId(undefined);
@@ -194,6 +207,7 @@ export function KnowledgeGraph() {
   const pickerBooks = useMemo(() => q ? books.filter(book => `${book.title}${book.author}${book.category}`.toLowerCase().includes(q)) : books, [books, q]);
   const pickerStart = Math.max(0, Math.floor(pickerScroll / 46) - 2), pickerItems = pickerBooks.slice(pickerStart, pickerStart + 12);
   return <div className="knowledge-graph-page">
+    <div className="graph-source-toolbar"><span>关系来源</span><select value={relationSource} onChange={e => { setRelationSource(e.target.value as RelationSource); setEdgeId(undefined); }}><option value="all">全部来源</option><option value="local">本地笔记</option><option value="semantic">语义向量</option><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></div>
     <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { navigateToBook(book.id); setQuery(""); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}>{strength === "all" && <option value="all" disabled>全局预览</option>}<option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="standard">12 个关联</option><option value="broad">20 个关联</option></select></label><label className="graph-strength"><span>关系</span><select value={relationFilter} onChange={e => { setRelationFilter(e.target.value as RelationFilter); setEdgeId(undefined); }}><option value="all">全部</option><option value="content">内容关联</option><option value="author">共同作者</option><option value="analyzable">可深度分析</option></select></label><label className="graph-connected-filter"><input type="checkbox" checked={connectedOnly} onChange={event => setConnectedOnly(event.target.checked)}/><span>仅显示有关联</span></label><div className="graph-nav"><button onClick={goBack} disabled={!backStack.length} title="返回上一本中心书" aria-label="返回"><ArrowLeft size={15}/></button><button onClick={goForward} disabled={!forwardStack.length} title="前进到下一本中心书" aria-label="前进"><ArrowRight size={15}/></button><button onClick={resetToGlobal} disabled={!graph.nodes.length} title="重置到全局视图" aria-label="重置到全局视图"><Globe2 size={15}/></button><button onClick={() => setFitRequest(value => value + 1)} disabled={!viewGraph.nodes.length} title="适应画布" aria-label="适应画布"><Maximize2 size={15}/></button><button onClick={() => refreshSemanticRelations(true)} disabled={semanticLoading} title="刷新语义关系" aria-label="刷新语义关系"><RotateCw className={semanticLoading ? "spin" : ""} size={15}/></button></div><span>{semanticLoading ? "正在刷新关系…" : `${viewGraph.edges.length} 个关系`}</span></div>
     <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}{!loading && !analyzing && !error && !graph.nodes.length && <div className="graph-state"><Share2/><strong>还没有发现可靠的书籍关系</strong><span>更多划线与想法会让关联分析更加准确。</span></div>}
       {isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D

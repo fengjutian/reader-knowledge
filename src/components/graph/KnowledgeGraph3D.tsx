@@ -64,9 +64,10 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
       }
     });
     const hubIds = new Set([...fullDegree.entries()].sort((left, right) => right[1] - left[1]).slice(0, 18).map(([id]) => id));
-    const isolatedCount = nodes.reduce((sum, node) => sum + (degree.has(node.id) ? 0 : 1), 0);
+    const nodesToMap = showIsolated ? nodes : nodes.filter(node => fullDegree.has(node.id));
+    const isolatedCount = nodesToMap.reduce((sum, node) => sum + (degree.has(node.id) ? 0 : 1), 0);
     let isolatedIndex = 0;
-    const mappedNodes = nodes.map(node => {
+    const mappedNodes = nodesToMap.map(node => {
         const relationCount = degree.get(node.id) ?? 0;
         const totalRelationCount = fullDegree.get(node.id) ?? 0;
         const seed = hash(node.id);

@@ -655,7 +655,7 @@ pub async fn build_semantic_relations(app: AppHandle, db: State<'_, Database>) -
         let score = cosine(&book_vectors[&ids[a]], &book_vectors[&ids[b]]); if score < 0.35 { continue; }
         let best = |book_id: &String, target: &Vec<f32>| by_book[book_id].iter().max_by(|x,y| cosine(&vectors[&x.id],target).total_cmp(&cosine(&vectors[&y.id],target))).copied();
         let evidence = [best(&ids[a], &book_vectors[&ids[b]]), best(&ids[b], &book_vectors[&ids[a]])].into_iter().flatten().map(|note| SemanticEvidence { book_id:note.book_id.clone(),note_id:note.id.clone(),text:note.content.chars().take(180).collect() }).collect();
-        candidates.push(SemanticRelation { id:format!("{}:{}",ids[a],ids[b]),from:ids[a].clone(),to:ids[b].clone(),score,keywords:Vec::new(),relation:if score >= 0.72 { "高度语义相关".into() } else if score >= 0.52 { "语义相关".into() } else { "潜在语义关联".into() },evidence });
+        candidates.push(SemanticRelation { id:format!("semantic:{}:{}",ids[a],ids[b]),from:ids[a].clone(),to:ids[b].clone(),score,keywords:Vec::new(),relation:if score >= 0.72 { "高度语义相关".into() } else if score >= 0.52 { "语义相关".into() } else { "潜在语义关联".into() },evidence });
     }}
     let mut thought_vectors: HashMap<String, Vec<f32>> = HashMap::new();
     for (book_id, items) in &by_book {
@@ -671,10 +671,10 @@ pub async fn build_semantic_relations(app: AppHandle, db: State<'_, Database>) -
         let left=&thought_ids[a]; let right=&thought_ids[b]; let score=cosine(&thought_vectors[left],&thought_vectors[right]); if score<0.48 { continue; }
         let best=|book_id:&String,target:&Vec<f32>| by_book[book_id].iter().filter(|note|note.note_type=="thought").max_by(|x,y|cosine(&vectors[&x.id],target).total_cmp(&cosine(&vectors[&y.id],target))).copied();
         let evidence=[best(left,&thought_vectors[right]),best(right,&thought_vectors[left])].into_iter().flatten().map(|note|SemanticEvidence{book_id:note.book_id.clone(),note_id:note.id.clone(),text:note.content.chars().take(180).collect()}).collect();
-        candidates.push(SemanticRelation{id:format!("thought:{left}:{right}"),from:left.clone(),to:right.clone(),score,keywords:Vec::new(),relation:"用户观点关联".into(),evidence});
+        candidates.push(SemanticRelation{id:format!("semantic:thought:{left}:{right}"),from:left.clone(),to:right.clone(),score,keywords:Vec::new(),relation:"用户观点关联".into(),evidence});
     }}
     candidates.sort_by(|a,b| b.score.total_cmp(&a.score)); let mut degree: HashMap<String,usize> = HashMap::new();
-    Ok(candidates.into_iter().filter(|edge| { if degree.get(&edge.from).copied().unwrap_or(0)>=12 && degree.get(&edge.to).copied().unwrap_or(0)>=12 { return false; } *degree.entry(edge.from.clone()).or_default()+=1; *degree.entry(edge.to.clone()).or_default()+=1; true }).collect())
+    Ok(candidates.into_iter().filter(|edge| { if degree.get(&edge.from).copied().unwrap_or(0)>=12 || degree.get(&edge.to).copied().unwrap_or(0)>=12 { return false; } *degree.entry(edge.from.clone()).or_default()+=1; *degree.entry(edge.to.clone()).or_default()+=1; true }).collect())
 }
 
 #[tauri::command]

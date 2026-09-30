@@ -94,6 +94,15 @@ function analyze(booksInput: Book[], notes: Note[]) {
     const relation = books[a].author && books[a].author === books[b].author ? "共同作者 · 微信读书书架" : score >= .28 ? "高度主题相似" : score >= .12 ? "主题相近" : "潜在关联";
     candidates.push({ id: `${books[a].id}:${books[b].id}`, from: books[a].id, to: books[b].id, score, keywords, relation, evidence });
   });
+  const byAuthor = new Map<string, Book[]>();
+  books.forEach(book => { const author = book.author.trim().toLocaleLowerCase(); if (!author) return; const values = byAuthor.get(author) ?? []; values.push(book); byAuthor.set(author, values); });
+  byAuthor.forEach((items, author) => {
+    if (items.length < 2 || items.length > 80) return;
+    for (let left = 0; left < items.length; left += 1) for (let right = left + 1; right < items.length; right += 1) {
+      if (sameWork(items[left], items[right])) continue;
+      candidates.push({ id: `author:${items[left].id}:${items[right].id}`, from: items[left].id, to: items[right].id, score: .92, keywords: [author], relation: "共同作者 · 微信读书书架", evidence: [] });
+    }
+  });
   candidates.sort((a, b) => b.score - a.score);
   return { nodes: position(books), candidates };
 }
