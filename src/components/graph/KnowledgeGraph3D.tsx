@@ -17,11 +17,12 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]!);
 }
 
-export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest, onNodeClick, onNodeOpen, onEdgeClick }: {
+export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolated, fitRequest, onNodeClick, onNodeOpen, onEdgeClick }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   focusId?: string;
   selectedId?: string;
+  showIsolated: boolean;
   fitRequest: number;
   onNodeClick: (id: string) => void;
   onNodeOpen: (id: string) => void;
@@ -201,7 +202,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         type: "graph",
         name: "未关联书籍",
         layout: "none",
-        data: data.isolatedNodes,
+        data: showIsolated ? data.isolatedNodes : [],
         links: [],
         left: "2%",
         top: "2%",
@@ -248,7 +249,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         },
       }],
     } as never, true);
-  }, [data]);
+  }, [data, selectedId, showIsolated]);
 
   useEffect(() => {
     if (fitRequest <= 0) return;
