@@ -32,9 +32,24 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
+    const fullDegree = new Map<string, number>();
+    edges.forEach(edge => {
+      fullDegree.set(edge.from, (fullDegree.get(edge.from) ?? 0) + 1);
+      fullDegree.set(edge.to, (fullDegree.get(edge.to) ?? 0) + 1);
+    });
+    const skeletonDegree = new Map<string, number>();
+    const sortedEdges = [...edges].sort((left, right) => right.score - left.score);
+    const visibleEdges = selectedId
+      ? sortedEdges.filter(edge => edge.from === selectedId || edge.to === selectedId)
+      : sortedEdges.filter(edge => {
+        if ((skeletonDegree.get(edge.from) ?? 0) >= 3 || (skeletonDegree.get(edge.to) ?? 0) >= 3) return false;
+        skeletonDegree.set(edge.from, (skeletonDegree.get(edge.from) ?? 0) + 1);
+        skeletonDegree.set(edge.to, (skeletonDegree.get(edge.to) ?? 0) + 1);
+        return true;
+      }).slice(0, 1800);
     const degree = new Map<string, number>();
     const adjacentIds = new Set<string>();
-    edges.forEach(edge => {
+    visibleEdges.forEach(edge => {
       degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
       degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
       if (selectedId && (edge.from === selectedId || edge.to === selectedId)) {
@@ -42,11 +57,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         adjacentIds.add(edge.to);
       }
     });
+    const hubIds = new Set([...fullDegree.entries()].sort((left, right) => right[1] - left[1]).slice(0, 18).map(([id]) => id));
     const isolatedCount = nodes.reduce((sum, node) => sum + (degree.has(node.id) ? 0 : 1), 0);
     let isolatedIndex = 0;
-    return {
-      nodes: nodes.map(node => {
+    const mappedNodes = nodes.map(node => {
         const relationCount = degree.get(node.id) ?? 0;
+        const totalRelationCount = fullDegree.get(node.id) ?? 0;
         const seed = hash(node.id);
         let x: number;
         let y: number;
@@ -75,12 +91,17 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
             color: node.id === focusId ? "#ef493c" : node.id === selectedId ? "#27231f" : relationCount ? colors[hash(node.category || node.author || node.title) % colors.length] : "#d9d5ce",
             opacity: selectedId ? (node.id === selectedId || adjacentIds.has(node.id) ? 1 : .055) : relationCount ? .94 : .2,
           },
-          label: node.id === selectedId ? { show: true, color: "#302a26", fontSize: 12 } : undefined,
+          label: node.id === selectedId || (!selectedId && hubIds.has(node.id))
+            ? { show: true, color: "#49413b", fontSize: node.id === selectedId ? 12 : 10 }
+            : undefined,
           book: node,
-          relationCount,
+          relationCount: totalRelationCount,
         };
-      }),
-      edges: edges.map(edge => {
+      });
+    return {
+      nodes: mappedNodes.filter(node => node.value > 0),
+      isolatedNodes: mappedNodes.filter(node => node.value === 0),
+      edges: visibleEdges.map(edge => {
         const adjacent = !!selectedId && (edge.from === selectedId || edge.to === selectedId);
         return {
           id: edge.id,
@@ -90,7 +111,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           relation: edge.relation,
           lineStyle: selectedId
             ? { color: adjacent ? "#9b5044" : "#d8d5cf", width: adjacent ? 1.6 : .35, opacity: adjacent ? .9 : .025 }
-            : { color: "#c9c6c0", width: .7, opacity: .32 },
+            : { color: "#c9c6c0", width: .6, opacity: .22 },
         };
       }),
     };
@@ -131,6 +152,20 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         },
       },
       series: [{
+        type: "graph",
+        name: "未关联书籍",
+        layout: "none",
+        data: data.isolatedNodes,
+        links: [],
+        left: "2%",
+        top: "2%",
+        right: "2%",
+        bottom: "2%",
+        roam: false,
+        label: { show: false },
+        lineStyle: { opacity: 0 },
+        emphasis: { itemStyle: { color: "#aaa49b", opacity: .75 } },
+      }, {
         type: "graphGL",
         name: "书籍关系",
         layout: "forceAtlas2",
@@ -159,7 +194,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           jitterTolerence: .16,
           preventOverlap: true,
         },
-        lineStyle: { color: "#c9c6c0", width: .7, opacity: .32 },
+        lineStyle: { color: "#c9c6c0", width: .6, opacity: .22 },
         emphasis: {
           label: { show: true, color: "#302a26", fontSize: 12, backgroundColor: "rgba(255,252,247,.92)", padding: [5, 7], borderRadius: 5 },
           itemStyle: { color: "#ef493c", opacity: 1 },
