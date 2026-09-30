@@ -84,6 +84,21 @@ pub async fn get_reading_stats(mode: String) -> Result<serde_json::Value, AppErr
 }
 
 #[tauri::command]
+pub async fn get_book_recommendations(count: i64, max_idx: i64) -> Result<serde_json::Value, AppError> {
+    let secret = keyring::Entry::new("ReadFlow", "weread")?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => AppError::Message("请先在设置中填写微信读书 API Key".into()),
+            other => AppError::Credential(other),
+        })?;
+    let client = crate::weread::client::WeReadClient::new(secret)?;
+    let mut params = serde_json::Map::new();
+    params.insert("count".into(), serde_json::Value::from(count.clamp(1, 24)));
+    params.insert("maxIdx".into(), serde_json::Value::from(max_idx.max(0)));
+    client.call("/book/recommend", params).await
+}
+
+#[tauri::command]
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
     let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),''),CASE WHEN b.finish_reading=1 THEN 'finished' WHEN coalesce(b.read_update_time,0)>0 OR coalesce(h.total,0)>0 OR coalesce(t.total,0)>0 THEN 'reading' ELSE 'unread' END FROM books b LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;

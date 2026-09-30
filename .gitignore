@@ -1,7 +1,7 @@
 node_modules/
 dist/
 .cache/
-.catch/
+.cargo-check-target/
 src-tauri/target/
 .env
 *.db

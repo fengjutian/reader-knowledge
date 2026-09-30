@@ -16,6 +16,22 @@ export interface BookDetail extends Book {
   deepLink?: string;
   finished: boolean;
 }
+export interface RecommendedBook {
+  bookId: string;
+  title: string;
+  author: string;
+  cover: string;
+  intro: string;
+  category: string;
+  reason: string;
+  readingCount: number;
+  searchIdx: number;
+  newRating: number;
+  newRatingCount: number;
+  newRatingDetail?: { title?: string };
+  deepLink?: string;
+}
+export interface BookRecommendations { books: RecommendedBook[] }
 export interface BookMetadataRow {
   bookId: string; title: string; author: string; cover: string; isbn: string;
   publisher: string; publishedDate: string; pageCount?: number; subjects: string[];

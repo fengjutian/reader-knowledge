@@ -6,6 +6,7 @@ import { useAppStore, type Page } from "./stores/app";
 
 const Dashboard=lazy(()=>import("./pages/Dashboard").then(m=>({default:m.Dashboard})));
 const Books=lazy(()=>import("./pages/Books").then(m=>({default:m.Books})));
+const Discover=lazy(()=>import("./pages/Discover").then(m=>({default:m.Discover})));
 const BookDetail=lazy(()=>import("./pages/BookDetail").then(m=>({default:m.BookDetail})));
 const Notes=lazy(()=>import("./pages/Notes").then(m=>({default:m.Notes})));
 const AI=lazy(()=>import("./pages/AI").then(m=>({default:m.AI})));
@@ -14,7 +15,7 @@ const DatabasePage=lazy(()=>import("./pages/Database").then(m=>({default:m.Datab
 const BookMetadata=lazy(()=>import("./pages/BookMetadata").then(m=>({default:m.BookMetadata})));
 const KnowledgeGraph=lazy(()=>import("./pages/KnowledgeGraph").then(m=>({default:m.KnowledgeGraph})));
 
-const pages:Record<Page,ReactNode>={dashboard:<Dashboard/>,books:<Books/>,metadata:<BookMetadata/>,notes:<Notes/>,ai:<AI/>,graph:<KnowledgeGraph/>,database:<DatabasePage/>,settings:<Settings/>};
+const pages:Record<Page,ReactNode>={dashboard:<Dashboard/>,books:<Books/>,discover:<Discover/>,metadata:<BookMetadata/>,notes:<Notes/>,ai:<AI/>,graph:<KnowledgeGraph/>,database:<DatabasePage/>,settings:<Settings/>};
 export default function App(){
  const {page,theme,fontFamily,selectedBookId}=useAppStore(); const visitedPages=useRef(new Set<Page>()).current,scrollPositions=useRef<Partial<Record<Page,number>>>({}); visitedPages.add(page);
  useLayoutEffect(()=>{document.documentElement.dataset.theme=theme;delete document.documentElement.dataset.bootTheme},[theme]);
