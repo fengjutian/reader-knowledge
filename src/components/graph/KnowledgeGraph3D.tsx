@@ -1,4 +1,5 @@
 import * as echarts from "echarts";
+import "echarts-gl";
 import { useEffect, useMemo, useRef } from "react";
 import type { Book } from "../../types/domain";
 
@@ -45,13 +46,15 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         let x: number;
         let y: number;
         if (relationCount) {
-          const angle = (seed % 6283) / 1000;
-          const radius = 35 + ((seed >>> 8) % 260);
+          const group = hash(node.category || node.author || node.title) % colors.length;
+          const groupAngle = Math.PI * 2 * group / colors.length;
+          const angle = groupAngle + ((seed % 1000) / 1000 - .5) * .72;
+          const radius = 80 + ((seed >>> 8) % 180);
           x = Math.cos(angle) * radius;
           y = Math.sin(angle) * radius;
         } else {
           const angle = Math.PI * 2 * isolatedIndex / Math.max(1, isolatedCount);
-          const radius = 610 + (isolatedIndex % 11) * 5;
+          const radius = 760 + (isolatedIndex % 17) * 4;
           isolatedIndex += 1;
           x = Math.cos(angle) * radius;
           y = Math.sin(angle) * radius;
@@ -62,16 +65,16 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           value: relationCount,
           x,
           y,
-          symbolSize: 3,
+          symbolSize: relationCount ? 4 : 2,
           itemStyle: {
             color: node.id === focusId ? "#ef493c" : node.id === selectedId ? "#27231f" : relationCount ? colors[hash(node.category || node.author || node.title) % colors.length] : "#d9d5ce",
-            opacity: relationCount ? .92 : .42,
+            opacity: relationCount ? .94 : .2,
           },
           book: node,
           relationCount,
         };
       }),
-      links: edges.map(edge => ({ id: edge.id, source: edge.from, target: edge.to, value: Math.max(.1, edge.score), relation: edge.relation })),
+      edges: edges.map(edge => ({ id: edge.id, source: edge.from, target: edge.to, value: Math.max(.25, edge.score), relation: edge.relation })),
     };
   }, [nodes, edges, focusId, selectedId]);
 
@@ -80,8 +83,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
     if (!host) return;
     const chart = echarts.init(host, undefined, { renderer: "canvas" });
     chartRef.current = chart;
-    const resize = () => chart.resize();
-    const observer = new ResizeObserver(resize);
+    const observer = new ResizeObserver(() => chart.resize());
     observer.observe(host);
     chart.on("click", params => {
       const value = params.data as { id?: string } | undefined;
@@ -101,8 +103,6 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
     if (!chart) return;
     chart.setOption({
       backgroundColor: "transparent",
-      animation: true,
-      animationDuration: 900,
       tooltip: {
         confine: true,
         formatter: (params: { dataType?: string; data?: { book?: Book; relationCount?: number; relation?: string } }) => {
@@ -113,43 +113,40 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         },
       },
       series: [{
-        type: "graph",
-        name: "未关联书籍",
-        layout: "none",
-        data: data.nodes.filter(node => !node.relationCount),
-        links: [],
-        left: "12%",
-        top: "8%",
-        right: "12%",
-        bottom: "8%",
-        roam: false,
-        silent: false,
-        label: { show: false },
-        lineStyle: { opacity: 0 },
-        emphasis: { focus: "self", itemStyle: { color: "#aaa49b", opacity: .85 } },
-      }, {
-        type: "graph",
+        type: "graphGL",
         name: "书籍关系",
-        layout: "force",
-        data: data.nodes.filter(node => node.relationCount),
-        links: data.links,
-        left: "20%",
-        top: "14%",
-        right: "20%",
-        bottom: "14%",
+        layout: "forceAtlas2",
+        data: data.nodes,
+        edges: data.edges,
+        left: "7%",
+        top: "7%",
+        right: "7%",
+        bottom: "7%",
         roam: true,
-        draggable: false,
+        focusNodeAdjacency: true,
+        focusNodeAdjacencyOn: "mouseover",
         label: { show: false },
-        force: {
-          initLayout: "circular",
-          repulsion: 46,
-          gravity: .11,
-          edgeLength: [28, 85],
-          friction: .72,
-          layoutAnimation: true,
+        forceAtlas2: {
+          GPU: true,
+          steps: 2,
+          maxSteps: 420,
+          repulsionByDegree: true,
+          linLogMode: true,
+          strongGravityMode: false,
+          gravity: .65,
+          scaling: 2.2,
+          edgeWeightInfluence: .8,
+          edgeWeight: [1, 4],
+          nodeWeight: [1, 4],
+          jitterTolerence: .16,
+          preventOverlap: true,
         },
-        lineStyle: { color: "#cbc7c0", width: .65, opacity: .48, curveness: .13 },
-        emphasis: { focus: "adjacency", itemStyle: { color: "#ef493c", opacity: 1 }, lineStyle: { color: "#99938a", width: 1.4, opacity: .9, curveness: .18 } },
+        lineStyle: { color: "#c9c6c0", width: .7, opacity: .32 },
+        emphasis: {
+          label: { show: true, color: "#302a26", fontSize: 12, backgroundColor: "rgba(255,252,247,.92)", padding: [5, 7], borderRadius: 5 },
+          itemStyle: { color: "#ef493c", opacity: 1 },
+          lineStyle: { color: "#8f8980", width: 1.2, opacity: .82 },
+        },
       }],
     } as never, true);
   }, [data]);
