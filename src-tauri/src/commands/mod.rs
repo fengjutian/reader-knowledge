@@ -738,8 +738,8 @@ fn metadata_context(db: &Database, book_ids: &[String]) -> Result<String, AppErr
 fn glossary_context(db:&Database,text:&str)->Result<String,AppError>{
     let c=db.connect()?;let mut q=c.prepare("SELECT term,canonical_name,aliases_json,definition,source,coalesce(source_url,'') FROM glossary_terms WHERE status='confirmed' ORDER BY updated_at DESC")?;
     let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))?;
-    let mut result=String::new();let mut index=1;
-    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();if !text.contains(&term)&&!aliases.iter().any(|alias|text.contains(alias)){continue;}result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",if name.is_empty(){&term}else{&name},definition,if source=="wikipedia"{"中文维基百科"}else{"人工编辑"},if url.is_empty(){String::new()}else{format!("（{url}）")}));index+=1;if index>8{break;}}
+    let normalized_text=text.to_lowercase();let mut result=String::new();let mut index=1;
+    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();let matched=[term.as_str(),name.as_str()].into_iter().chain(aliases.iter().map(String::as_str)).filter(|value|!value.trim().is_empty()).any(|value|normalized_text.contains(&value.to_lowercase()));if !matched{continue;}result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",if name.is_empty(){&term}else{&name},definition,if source=="wikipedia"{"中文维基百科"}else{"人工编辑"},if url.is_empty(){String::new()}else{format!("（{url}）")}));index+=1;if index>8{break;}}
     Ok(result)
 }
 
@@ -796,11 +796,6 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         return Err(AppError::Message("问题不能为空".into()));
     }
     let results = rag_search(&db, &question, &request.mode, &request.book_ids)?;
-    if results.is_empty() {
-        return Err(AppError::Message(
-            "没有检索到相关笔记，无法生成有依据的回答".into(),
-        ));
-    }
     let mut context = String::new();
     for (index, result) in results.iter().enumerate() {
         let source = if result.note.note_type == "thought" {
@@ -832,6 +827,11 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
     let metadata = metadata_context(&db, &metadata_book_ids)?;
     let glossary = glossary_context(&db,&format!("{}\n{}",question,context))?;
+    if results.is_empty() && glossary.is_empty() {
+        return Err(AppError::Message(
+            "没有检索到相关笔记或名词解释，无法生成有依据的回答".into(),
+        ));
+    }
     let system = "你是 wereader 的个人阅读知识助手。阅读笔记是观点回答的唯一证据；书籍元数据只能作为背景信息。必须区分书籍原文划线、用户自己的想法和元数据；不得把简介或主题当成用户观点或书中论证；不同元数据来源不得合并成一个事实。每个重要观点结论使用 [数字] 标注笔记来源；证据不足时必须明确说明。";
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
