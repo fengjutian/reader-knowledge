@@ -62,12 +62,15 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
     });
     return map;
   }, [edges]);
-  const isHighlighted = (id: string) => !hoveredId || id === hoveredId || neighbours.get(hoveredId)?.has(id);
   useEffect(() => {
     if (!data.nodes.length) return;
     const firstFit = window.setTimeout(() => graphRef.current?.zoomToFit(700, 55), 900);
     const settledFit = window.setTimeout(() => graphRef.current?.zoomToFit(900, 55), 3200);
-    return () => { window.clearTimeout(firstFit); window.clearTimeout(settledFit); };
+    const startRotation = window.setTimeout(() => {
+      const controls = graphRef.current?.controls() as { autoRotate?: boolean; autoRotateSpeed?: number } | undefined;
+      if (controls) { controls.autoRotate = true; controls.autoRotateSpeed = .38; }
+    }, 400);
+    return () => { window.clearTimeout(firstFit); window.clearTimeout(settledFit); window.clearTimeout(startRotation); };
   }, [data]);
   return <div ref={hostRef} className="force-graph-3d">
     <ForceGraph3D<Node3D, Link3D>
@@ -86,12 +89,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         dragCoefficient: .02,
       }}
       warmupTicks={120}
-      cooldownTime={7000}
+      cooldownTime={30000}
       nodeLabel={node => `<div class="graph-3d-tooltip"><strong>${node.title}</strong>${node.author ? `<span>${node.author}</span>` : ""}<small>${node.category || "未分类"} · ${node.relationCount} 个关系</small></div>`}
-      nodeVal={node => node.id === focusId ? 5.5 : node.id === selectedId ? 4.5 : node.relationCount ? 1.15 + Math.min(2.8, Math.log2(node.relationCount + 1) * .55) : .16}
-      nodeColor={node => node.id === focusId ? "#8f3025" : node.id === selectedId ? "#28231f" : !isHighlighted(node.id) ? "#d8d3ca" : node.relationCount ? categoryColor(node) : "#c9c3b9"}
-      nodeOpacity={.94}
-      nodeResolution={10}
+      nodeVal={node => node.id === focusId ? 2.8 : node.id === selectedId ? 2.3 : node.relationCount ? .3 + Math.min(1.25, Math.log2(node.relationCount + 1) * .16) : .035}
+      nodeColor={node => node.id === focusId ? "#ff493d" : node.id === selectedId ? "#28231f" : node.relationCount ? categoryColor(node) : "#bdb6aa"}
+      nodeOpacity={.86}
+      nodeResolution={7}
       linkColor={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
@@ -128,6 +131,6 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       enableNodeDrag
       enableNavigationControls
     />
-    <div className="graph-3d-guide"><strong>全库 3D 星图</strong><span>拖拽旋转 · 滚轮缩放 · 悬停聚焦关系</span></div>
+    <div className="graph-3d-guide"><strong>全库 3D 星图</strong><span>自动巡航 · 拖拽旋转 · 悬停聚焦关系</span></div>
   </div>;
 }
