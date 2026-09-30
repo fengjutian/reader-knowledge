@@ -1,6 +1,7 @@
 import * as echarts from "echarts";
 import "echarts-gl";
-import { useEffect, useMemo, useRef } from "react";
+import { LocateFixed, Minus, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Book } from "../../types/domain";
 
 type GraphNode = Book & { x: number; y: number };
@@ -30,6 +31,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | undefined>(undefined);
+  const [zoom, setZoom] = useState(1);
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
@@ -255,7 +257,32 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
     chartRef.current?.dispatchAction({ type: "restore" });
   }, [fitRequest]);
 
+  useEffect(() => setZoom(1), [selectedId]);
+
+  function changeZoom(nextValue: number) {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const next = Math.max(.35, Math.min(4, Number(nextValue.toFixed(2))));
+    setZoom(next);
+    if (selectedId) chart.setOption({ series: [{ zoom: next }] } as never);
+    else chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, zoom: next });
+  }
+
+  function resetView() {
+    const chart = chartRef.current;
+    if (!chart) return;
+    setZoom(1);
+    if (selectedId) chart.setOption({ series: [{ zoom: 1, center: undefined }] } as never);
+    else chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, zoom: 1, offset: [0, 0] });
+  }
+
   return <div className="force-graph-3d force-graph-echarts">
     <div ref={hostRef} className="force-graph-echarts__canvas" />
+    <div className="graph-zoom-controls" aria-label="图谱缩放控制">
+      <button type="button" onClick={() => changeZoom(zoom / 1.25)} title="缩小" aria-label="缩小"><Minus size={15}/></button>
+      <span>{Math.round(zoom * 100)}%</span>
+      <button type="button" onClick={() => changeZoom(zoom * 1.25)} title="放大" aria-label="放大"><Plus size={15}/></button>
+      <button type="button" onClick={resetView} title="复位视图" aria-label="复位视图"><LocateFixed size={15}/></button>
+    </div>
   </div>;
 }
