@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUp, BookOpen, ChevronLeft, ChevronRight, MessageSquare, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowUp, BookOpen, ChevronRight, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -150,7 +150,7 @@ export function AI() {
   return <div className="ai-page">
     <div className={`ai-layout${historyCollapsed ? " ai-layout--history-collapsed" : ""}`}>
       <aside className={`ai-history${historyCollapsed ? " is-collapsed" : ""}`}>
-        <button className="ai-history__collapse" onClick={() => setHistoryCollapsed(value => !value)} aria-label={historyCollapsed ? "展开最近对话" : "折叠最近对话"} title={historyCollapsed ? "展开最近对话" : "折叠最近对话"}><ChevronLeft size={17}/></button>
+        <button className="ai-history__collapse" onClick={() => setHistoryCollapsed(value => !value)} aria-label={historyCollapsed ? "展开最近对话" : "折叠最近对话"} title={historyCollapsed ? "展开最近对话" : "折叠最近对话"}>{historyCollapsed ? <PanelLeftOpen size={17}/> : <PanelLeftClose size={17}/>}</button>
         <div className="ai-history__content">
         <button className="ai-history__new" onClick={newConversation}><Plus size={16}/>新对话</button>
         <div className="ai-history__title">最近对话</div>
@@ -183,7 +183,6 @@ export function AI() {
           <textarea ref={textareaRef} rows={1} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="问问你的阅读知识库…"/>
           <button type="submit" aria-label="发送" disabled={!question.trim() || loading}><ArrowUp size={18}/></button>
         </div>
-        <small>回答严格基于引用笔记；点击引用可定位原始笔记</small>
       </form>
       </div>
     </div>
