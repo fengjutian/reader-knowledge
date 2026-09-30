@@ -213,6 +213,15 @@ pub fn open_book(app: AppHandle, db: State<'_, Database>, book_id: String) -> Re
         .map_err(|error| AppError::Message(format!("无法打开微信读书：{error}")))
 }
 
+#[tauri::command]
+pub fn open_external_url(app: AppHandle, url: String) -> Result<(), AppError> {
+    let parsed=reqwest::Url::parse(&url).map_err(|_|AppError::Message("无效的外部链接".into()))?;
+    let host=parsed.host_str().unwrap_or_default();
+    let allowed=parsed.scheme()=="https"&&matches!(host,"book.douban.com"|"www.douban.com"|"openlibrary.org"|"books.google.com"|"books.google.cn"|"books.googleapis.com");
+    if !allowed{return Err(AppError::Message("不允许打开该外部域名".into()));}
+    app.opener().open_url(parsed.to_string(),None::<String>).map_err(|error|AppError::Message(format!("无法打开外部链接：{error}")))
+}
+
 /// Converts the book id returned by the WeRead API into the opaque id used by
 /// the web reader. The API id itself is not a valid `/web/reader/` path.
 fn weread_reader_id(book_id: &str) -> String {

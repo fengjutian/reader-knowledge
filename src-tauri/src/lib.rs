@@ -33,6 +33,7 @@ pub fn run() {
             commands::get_book,
             commands::list_book_notes,
             commands::open_book,
+            commands::open_external_url,
             commands::list_notes,
             commands::search_notes,
             commands::save_secret,

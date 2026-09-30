@@ -21,6 +21,7 @@ export const api = {
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),
   bookNotes: (bookId: string) => call<Note[]>("list_book_notes", { bookId }),
   openBook: (bookId: string) => call<void>("open_book", { bookId }),
+  openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
   notes: (type?: Note["type"]) => call<Note[]>("list_notes", { noteType: type }),
   search: (query: string, noteType?: Note["type"]) => call<SearchResult[]>("search_notes", { query, noteType }),
   aiSettings: () => call<AiSettings | null>("get_ai_settings"),
