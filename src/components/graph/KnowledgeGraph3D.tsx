@@ -1,5 +1,4 @@
 import * as echarts from "echarts";
-import "echarts-gl";
 import { useEffect, useMemo, useRef } from "react";
 import type { Book } from "../../types/domain";
 
@@ -114,25 +113,43 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         },
       },
       series: [{
-        type: "graphGL",
-        data: data.nodes,
-        nodes: data.nodes,
-        edges: data.links,
+        type: "graph",
+        name: "未关联书籍",
+        layout: "none",
+        data: data.nodes.filter(node => !node.relationCount),
+        links: [],
+        left: "12%",
+        top: "8%",
+        right: "12%",
+        bottom: "8%",
+        roam: false,
+        silent: false,
+        label: { show: false },
+        lineStyle: { opacity: 0 },
+        emphasis: { focus: "self", itemStyle: { color: "#aaa49b", opacity: .85 } },
+      }, {
+        type: "graph",
+        name: "书籍关系",
+        layout: "force",
+        data: data.nodes.filter(node => node.relationCount),
         links: data.links,
+        left: "20%",
+        top: "14%",
+        right: "20%",
+        bottom: "14%",
         roam: true,
-        focusNodeAdjacency: true,
-        lineStyle: { color: "rgba(175, 172, 166, .5)", width: .7, opacity: .5 },
-        emphasis: { itemStyle: { color: "#ef493c", opacity: 1 }, lineStyle: { color: "#aaa49b", width: 1.5, opacity: .9 } },
-        forceAtlas2: {
-          steps: 8,
-          stopThreshold: 6,
-          jitterTolerence: 8,
-          edgeWeight: 1.2,
-          gravity: 1.4,
-          edgeWeightInfluence: 1,
-          scaling: 1.8,
-          preventOverlap: true,
+        draggable: false,
+        label: { show: false },
+        force: {
+          initLayout: "circular",
+          repulsion: 46,
+          gravity: .11,
+          edgeLength: [28, 85],
+          friction: .72,
+          layoutAnimation: true,
         },
+        lineStyle: { color: "#cbc7c0", width: .65, opacity: .48, curveness: .13 },
+        emphasis: { focus: "adjacency", itemStyle: { color: "#ef493c", opacity: 1 }, lineStyle: { color: "#99938a", width: 1.4, opacity: .9, curveness: .18 } },
       }],
     } as never, true);
   }, [data]);
@@ -144,6 +161,5 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
 
   return <div className="force-graph-3d force-graph-echarts">
     <div ref={hostRef} className="force-graph-echarts__canvas" />
-    <div className="graph-3d-guide"><strong>全库关系图</strong><span>ECharts GL · 布局完成后自动静止</span></div>
   </div>;
 }
