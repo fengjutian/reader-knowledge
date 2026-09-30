@@ -134,8 +134,11 @@ export function KnowledgeGraph() {
     const inMemory = relationAnalyses[selectedEdge.id];
     if (inMemory) { setDeepAnalysis(inMemory); return; }
     let cancelled = false; setDeepAnalysis(undefined);
-    setDeepLoading(true);
-    void api.cachedRelation(selectedEdge.from, selectedEdge.to, selectedEdge.keywords).then(result => result ?? api.analyzeRelation(selectedEdge.from, selectedEdge.to, selectedEdge.keywords)).then(result => { if (!cancelled) { setDeepAnalysis(result); setRelationAnalyses(values => ({ ...values, [selectedEdge.id]: result })); } }).catch(reason => { if (!cancelled) setDeepError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => { if (!cancelled) setDeepLoading(false); });
+    void api.cachedRelation(selectedEdge.from, selectedEdge.to, selectedEdge.keywords).then(result => {
+      if (!cancelled && result) {
+        setDeepAnalysis(result);
+      }
+    }).catch(reason => { if (!cancelled) setDeepError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { cancelled = true; };
   }, [edgeId, selectedEdge, relationAnalyses]);
   function navigateToBook(id: string) {
