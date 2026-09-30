@@ -3,6 +3,8 @@ import { ExternalLink, Eye, Plus, Search, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/tauri";
 import { PageHeader } from "../components/ui/PageHeader";
+import { DataTable, type DataTableColumn } from "../components/ui/DataTable";
+import { Button } from "../components/ui/Button";
 import type { GlossaryTerm, WikipediaCandidate } from "../types/domain";
 
 const empty = (): GlossaryTerm => ({ id: 0, term: "", canonicalName: "", aliases: [], definition: "", source: "manual", sourceTitle: "", sourceUrl: "", wikipediaSnapshot: "", status: "confirmed", updatedAt: 0 });
@@ -23,18 +25,23 @@ export function Glossary() {
   function create() { setEditing(empty()); setCandidates([]); setError(""); setDrawerOpen(true); requestAnimationFrame(() => termInputRef.current?.focus()); }
   function view(item: GlossaryTerm) { setEditing(item); setCandidates([]); setError(""); setDrawerOpen(true); }
   async function wiki() { if (!editing.term.trim()) return; setBusy(true); setError(""); try { setCandidates(await api.searchWikipedia(editing.term.trim())); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } }
-  function choose(item: WikipediaCandidate) { const definition = [item.description, item.excerpt].filter(Boolean).join("。 "); setEditing(value => ({ ...value, canonicalName: item.title, definition, source: "wikipedia", sourceTitle: item.title, sourceUrl: item.url, wikipediaSnapshot: definition, status: "confirmed" })); setCandidates([]); }
+  function choose(item: WikipediaCandidate) { const definition = item.excerpt.trim() || item.description.trim(); setEditing(value => ({ ...value, canonicalName: item.title, definition, source: "wikipedia", sourceTitle: item.title, sourceUrl: item.url, wikipediaSnapshot: definition, status: "confirmed" })); setCandidates([]); }
   async function save() { setBusy(true); setError(""); try { const savedTerm = editing.term.trim(); await api.saveGlossaryTerm({ ...editing, term: savedTerm, canonicalName: editing.canonicalName || savedTerm }); setItems(await api.glossaryTerms(query)); setDrawerOpen(false); setCandidates([]); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } }
   async function remove(id: number) { setBusy(true); setError(""); try { await api.deleteGlossaryTerm(id); setDrawerOpen(false); setEditing(empty()); await load(); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } }
 
+  const columns: DataTableColumn<GlossaryTerm>[] = [
+    { key: "term", header: "名词", render: item => <div className="glossary-term-cell"><strong>{item.term}</strong><small>{item.definition}</small></div> },
+    { key: "canonicalName", header: "标准名称", width: 180, render: item => item.canonicalName || "—" },
+    { key: "source", header: "来源", width: 110, render: item => item.source === "wikipedia" ? "维基百科" : "人工编辑" },
+    { key: "status", header: "状态", width: 90, render: item => <span className="glossary-status">{item.status === "confirmed" ? "已确认" : "待确认"}</span> },
+    { key: "actions", header: "操作", width: 90, align: "center", render: item => <Button variant="secondary" className="glossary-view" icon={<Eye size={14}/>} onClick={() => view(item)}>查看</Button> },
+  ];
+
   return <>
-    <PageHeader title="名词库" subtitle="维基百科负责初始化，人工编辑内容优先生效；解释只作为 AI 背景。" actions={<button className="button button--primary" onClick={create}><Plus size={15}/>新建名词</button>}/>
+    <PageHeader title="名词库" subtitle="维基百科负责初始化，人工编辑内容优先生效；解释只作为 AI 背景。" actions={<Button icon={<Plus size={15}/>} onClick={create}>新建名词</Button>}/>
     <section className="glossary-list glossary-list--full">
       <label className="field field--search"><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索名词或解释"/></label>
-      <div className="glossary-table-wrap"><table className="glossary-table">
-        <thead><tr><th>名词</th><th>标准名称</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody>{items.map(item => <tr key={item.id}><td><strong>{item.term}</strong><small>{item.definition.slice(0, 80)}</small></td><td>{item.canonicalName || "—"}</td><td>{item.source === "wikipedia" ? "维基百科" : "人工编辑"}</td><td><span>{item.status === "confirmed" ? "已确认" : "待确认"}</span></td><td><button className="glossary-view" onClick={() => view(item)}><Eye size={14}/>查看</button></td></tr>)}</tbody>
-      </table>{items.length === 0 && <div className="glossary-empty">暂无名词</div>}</div>
+      <DataTable columns={columns} rows={items} rowKey={item => item.id} empty="暂无名词"/>
     </section>
     <Dialog.Root open={drawerOpen} onOpenChange={setDrawerOpen}><Dialog.Portal>
       <Dialog.Overlay className="glossary-drawer__overlay"/>

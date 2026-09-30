@@ -211,7 +211,16 @@ pub async fn search_wikipedia(term:String)->Result<Vec<WikipediaCandidate>,AppEr
     let client=reqwest::Client::builder().user_agent("wereader/0.1 personal knowledge app").timeout(std::time::Duration::from_secs(12)).build()?;
     let value:Value=client.get("https://zh.wikipedia.org/w/rest.php/v1/search/page").query(&[("q",term.as_str()),("limit","5")]).send().await?.error_for_status()?.json().await?;
     let pages=value.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
-    Ok(pages.into_iter().filter_map(|page|{let title=page.get("title")?.as_str()?.to_owned();let description=page.get("description").and_then(Value::as_str).unwrap_or("").to_owned();let excerpt=page.get("excerpt").and_then(Value::as_str).unwrap_or("").replace("<span class=\"searchmatch\">","").replace("</span>","");let url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));Some(WikipediaCandidate{title,description,excerpt,url})}).collect())
+    let mut candidates=pages.into_iter().filter_map(|page|{let title=page.get("title")?.as_str()?.to_owned();let description=page.get("description").and_then(Value::as_str).unwrap_or("").to_owned();let excerpt=page.get("excerpt").and_then(Value::as_str).unwrap_or("").replace("<span class=\"searchmatch\">","").replace("</span>","");let url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));Some(WikipediaCandidate{title,description,excerpt,url})}).collect::<Vec<_>>();
+    for candidate in &mut candidates {
+        let detail=client.get("https://zh.wikipedia.org/w/api.php").query(&[("action","query"),("format","json"),("formatversion","2"),("prop","extracts"),("explaintext","1"),("exsectionformat","plain"),("redirects","1"),("titles",candidate.title.as_str())]).send().await;
+        let Ok(response)=detail else{continue};let Ok(response)=response.error_for_status() else{continue};let Ok(value)=response.json::<Value>().await else{continue};
+        if let Some(page)=value.pointer("/query/pages/0") {
+            if let Some(title)=page.get("title").and_then(Value::as_str){candidate.title=title.to_owned();candidate.url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));}
+            if let Some(extract)=page.get("extract").and_then(Value::as_str).filter(|value|!value.trim().is_empty()){candidate.excerpt=extract.chars().take(20_000).collect();}
+        }
+    }
+    Ok(candidates)
 }
 
 #[tauri::command]
@@ -739,7 +748,7 @@ fn glossary_context(db:&Database,text:&str)->Result<(String,Vec<GlossaryCitation
     let c=db.connect()?;let mut q=c.prepare("SELECT term,canonical_name,aliases_json,definition,source,coalesce(source_url,'') FROM glossary_terms WHERE status='confirmed' ORDER BY updated_at DESC")?;
     let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))?;
     let normalized_text=text.to_lowercase();let mut result=String::new();let mut citations=Vec::new();let mut index=1;
-    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();let matched=[term.as_str(),name.as_str()].into_iter().chain(aliases.iter().map(String::as_str)).filter(|value|!value.trim().is_empty()).any(|value|normalized_text.contains(&value.to_lowercase()));if !matched{continue;}let display_name=if name.is_empty(){term.clone()}else{name};let source_label=if source=="wikipedia"{"中文维基百科"}else{"人工编辑"};result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",display_name,definition,source_label,if url.is_empty(){String::new()}else{format!("（{url}）")}));citations.push(GlossaryCitation{index,term:display_name,definition,source:source_label.into(),source_url:url});index+=1;if index>8{break;}}
+    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();let matched=[term.as_str(),name.as_str()].into_iter().chain(aliases.iter().map(String::as_str)).filter(|value|!value.trim().is_empty()).any(|value|normalized_text.contains(&value.to_lowercase()));if !matched{continue;}let display_name=if name.is_empty(){term.clone()}else{name};let source_label=if source=="wikipedia"{"中文维基百科"}else{"人工编辑"};let ai_definition=definition.chars().take(8_000).collect::<String>();result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",display_name,ai_definition,source_label,if url.is_empty(){String::new()}else{format!("（{url}）")}));citations.push(GlossaryCitation{index,term:display_name,definition,source:source_label.into(),source_url:url});index+=1;if index>8{break;}}
     Ok((result,citations))
 }
 
