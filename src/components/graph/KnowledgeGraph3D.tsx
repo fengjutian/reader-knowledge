@@ -63,6 +63,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
     return map;
   }, [edges]);
   const isHighlighted = (id: string) => !hoveredId || id === hoveredId || neighbours.get(hoveredId)?.has(id);
+  useEffect(() => {
+    if (!data.nodes.length) return;
+    const firstFit = window.setTimeout(() => graphRef.current?.zoomToFit(700, 55), 900);
+    const settledFit = window.setTimeout(() => graphRef.current?.zoomToFit(900, 55), 3200);
+    return () => { window.clearTimeout(firstFit); window.clearTimeout(settledFit); };
+  }, [data]);
   return <div ref={hostRef} className="force-graph-3d">
     <ForceGraph3D<Node3D, Link3D>
       ref={graphRef}
@@ -73,18 +79,18 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       showNavInfo={false}
       forceEngine="ngraph"
       ngraphPhysics={{
-        timestep: 1.8,
-        springLength: 100,
+        timestep: 20,
+        springLength: 70,
         springCoefficient: .0008,
-        gravity: -1.4,
+        gravity: -1.8,
         dragCoefficient: .02,
       }}
-      warmupTicks={80}
+      warmupTicks={120}
       cooldownTime={7000}
       nodeLabel={node => `<div class="graph-3d-tooltip"><strong>${node.title}</strong>${node.author ? `<span>${node.author}</span>` : ""}<small>${node.category || "未分类"} · ${node.relationCount} 个关系</small></div>`}
       nodeVal={node => node.id === focusId ? 5.5 : node.id === selectedId ? 4.5 : node.relationCount ? 1.15 + Math.min(2.8, Math.log2(node.relationCount + 1) * .55) : .16}
       nodeColor={node => node.id === focusId ? "#8f3025" : node.id === selectedId ? "#28231f" : !isHighlighted(node.id) ? "#d8d3ca" : node.relationCount ? categoryColor(node) : "#c9c3b9"}
-      nodeOpacity={.84}
+      nodeOpacity={.94}
       nodeResolution={10}
       linkColor={link => {
         const source = endpointId(link.source);
@@ -97,7 +103,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         const target = endpointId(link.target);
         return hoveredId && (source === hoveredId || target === hoveredId) ? 1.5 : .12 + Math.min(.65, link.score * 1.15);
       }}
-      linkOpacity={.18}
+      linkOpacity={.24}
       linkResolution={2}
       linkDirectionalParticles={link => {
         const source = endpointId(link.source);
@@ -108,7 +114,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       linkDirectionalParticleSpeed={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
-        return hoveredId && (source === hoveredId || target === hoveredId) ? .018 : .007 + Math.min(.006, link.score * .012);
+        return hoveredId && (source === hoveredId || target === hoveredId) ? .035 : .016 + Math.min(.012, link.score * .02);
       }}
       linkDirectionalParticleWidth={link => {
         const source = endpointId(link.source);

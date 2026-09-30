@@ -157,6 +157,10 @@
 .theme-option--landpack .theme-option__preview::before { background:#151517;border-color:#3b3032; }
 .theme-option--landpack .theme-option__preview i { background:#242124;border-color:#4a3b3d; }
 .theme-option--landpack .theme-option__preview i:nth-child(1) { right:22%;background:#ed7c70;border:0; }
+.theme-option--parley .theme-option__preview { background:linear-gradient(172deg,#f8dfce 0 22%,#dc7865 23% 45%,#aab1ae 46% 61%,#833e45 62% 71%,#ec8b31 72%);border-color:#d48b68; }
+.theme-option--parley .theme-option__preview::before { background:rgba(255,238,220,.66);border-color:rgba(116,59,54,.25);backdrop-filter:blur(2px); }
+.theme-option--parley .theme-option__preview i { background:rgba(255,245,229,.86);border-color:rgba(121,66,54,.22); }
+.theme-option--parley .theme-option__preview i:nth-child(1) { background:#8d3f45;border:0; }
 .theme-option__copy { display:flex;min-width:0;flex-direction:column;gap:3px;padding:0 2px 2px; }
 .theme-option__copy strong { font-size:13px; }
 .theme-option__copy small { overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
@@ -740,6 +744,54 @@ body { background-color:var(--bg); }
 @media (prefers-reduced-motion:no-preference) {
   [data-theme=landpack] .main-content::before { animation:landpack-halo 11s ease-in-out infinite alternate; }
   @keyframes landpack-halo { to { opacity:.72;transform:scale(1.04) translate3d(1.5%,-1%,0); } }
+}
+
+/* Parley — painterly desert light, terracotta cliffs and a cool distant horizon. */
+[data-theme=parley] {
+  --bg:#f1c8aa;--surface:rgba(255,244,226,.88);--surface-hover:#f3d5bd;
+  --text:#4a2c2b;--secondary:#77504b;--muted:#9d7469;--border:rgba(123,65,55,.24);
+  --accent:#9f4544;--accent-soft:#efd0bd;--radius-md:12px;--radius-lg:18px;color-scheme:light;
+}
+[data-theme=parley] body { background:#e9a56f; }
+[data-theme=parley] .main-content { position:relative;isolation:isolate;background:#efc09c; }
+[data-theme=parley] .main-content::before {
+  content:"";position:absolute;z-index:0;inset:0;pointer-events:none;
+  background:
+    linear-gradient(176deg,transparent 0 27%,rgba(197,102,85,.28) 28% 39%,rgba(168,174,171,.36) 40% 54%,transparent 55%),
+    radial-gradient(ellipse 46% 26% at 88% 28%,rgba(133,57,66,.45),transparent 72%),
+    radial-gradient(ellipse 42% 22% at 16% 69%,rgba(105,43,42,.4),transparent 73%),
+    linear-gradient(164deg,#f8e2d2 0%,#f2b485 34%,#dc7760 53%,#e99854 72%,#f5bd65 100%);
+}
+[data-theme=parley] .main-content::after {
+  content:"";position:absolute;z-index:0;inset:0;pointer-events:none;opacity:.28;mix-blend-mode:multiply;
+  background:repeating-linear-gradient(4deg,transparent 0 8px,rgba(116,58,48,.08) 9px,transparent 11px),repeating-linear-gradient(92deg,transparent 0 23px,rgba(255,245,223,.12) 24px,transparent 27px);
+}
+[data-theme=parley] .main-content>.page { position:relative;z-index:1; }
+[data-theme=parley] .sidebar { background:rgba(255,235,211,.88);border-right-color:rgba(112,56,49,.24);box-shadow:14px 0 42px rgba(104,48,39,.12);backdrop-filter:blur(18px) saturate(112%); }
+[data-theme=parley] .brand { color:#633333;font-family:Georgia,"Songti SC",serif;letter-spacing:-.02em; }
+[data-theme=parley] .brand__mark { color:#fff4e6;background:#963f42;border-radius:50%;box-shadow:0 8px 22px rgba(116,46,47,.24); }
+[data-theme=parley] .quick-search { color:#79534c;background:rgba(255,246,230,.62);border-color:rgba(119,63,54,.25); }
+[data-theme=parley] .nav button.active,[data-theme=parley] .sidebar__footer button.active { color:#743536;background:rgba(171,75,65,.14);box-shadow:inset 2px 0 #a44743; }
+[data-theme=parley] .page-header h1 { color:#613333;font-family:Georgia,"Songti SC","Noto Serif CJK SC",serif;font-size:34px;font-weight:500;letter-spacing:-.035em; }
+[data-theme=parley] .panel h2,[data-theme=parley] .settings-card h2,[data-theme=parley] .book-card h3,[data-theme=parley] .chart-heading h3 { font-family:Georgia,"Songti SC","Noto Serif CJK SC",serif;font-weight:600; }
+[data-theme=parley] .stat-card,[data-theme=parley] .panel,[data-theme=parley] .book-card,[data-theme=parley] .note-card,[data-theme=parley] .settings-card,[data-theme=parley] .database-summary article,[data-theme=parley] .database-panel,[data-theme=parley] .database-browser,[data-theme=parley] .recommend-card,[data-theme=parley] .discover-state {
+  background:rgba(255,244,226,.82);border-color:rgba(117,62,53,.22);box-shadow:0 16px 38px rgba(111,50,42,.1),inset 0 1px rgba(255,255,255,.62);backdrop-filter:blur(14px) saturate(108%);
+}
+[data-theme=parley] .focus-panel { background:linear-gradient(135deg,rgba(255,245,226,.92),rgba(230,157,117,.82)); }
+[data-theme=parley] .stat-card__icon,[data-theme=parley] .ai-empty>span { color:#8f3d41;background:#ecc4a9;border-radius:50%; }
+[data-theme=parley] .button--primary,[data-theme=parley] .ask-box button,[data-theme=parley] .big-search button,[data-theme=parley] .database-module-tabs button.active,[data-theme=parley] .relation-analysis-actions button,[data-theme=parley] .graph-compare-tray button { color:#fff7ed;background:#963f42;border-color:#963f42;box-shadow:0 7px 18px rgba(111,45,47,.2); }
+[data-theme=parley] .button--primary:hover:not(:disabled) { background:#7d3439;border-color:#7d3439;box-shadow:0 9px 22px rgba(111,45,47,.27); }
+[data-theme=parley] .button--secondary { color:#623c38;background:rgba(255,244,226,.72);border-color:rgba(119,63,54,.28); }
+[data-theme=parley] .settings-tabs,[data-theme=parley] .ai-modes { background:rgba(226,164,128,.55);border:1px solid rgba(126,68,57,.16); }
+[data-theme=parley] .settings-tabs button.active,[data-theme=parley] .ai-modes button.active { color:#5e3432;background:#fff0dc;box-shadow:0 5px 15px rgba(112,50,42,.1); }
+[data-theme=parley] .progress div,[data-theme=parley] .book-progress i,[data-theme=parley] .database-bars b { background:linear-gradient(90deg,#913d42,#e37c3c,#efaa45); }
+[data-theme=parley] .note-card { border-left-color:#e2793f; }
+[data-theme=parley] .note-card--thought { border-left-color:#963f42; }
+[data-theme=parley] .graph-shell,[data-theme=parley] .search-dialog,[data-theme=parley] .ask-box,[data-theme=parley] .recommend-drawer { background:rgba(255,241,221,.93);border-color:rgba(118,59,52,.25);box-shadow:0 24px 60px rgba(99,45,39,.2);backdrop-filter:blur(18px); }
+[data-theme=parley] ::selection { color:#fff8ee;background:#9f4544; }
+@media (prefers-reduced-motion:no-preference) {
+  [data-theme=parley] .main-content::before { animation:parley-sunset 14s ease-in-out infinite alternate; }
+  @keyframes parley-sunset { to { filter:saturate(1.06) brightness(1.025);transform:scale(1.015); } }
 }
 
 /* Keep the content inset consistent across every route and viewport. */
