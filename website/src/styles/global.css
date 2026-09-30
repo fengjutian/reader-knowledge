@@ -7,3 +7,15 @@ section,.reveal{opacity:0;transform:translateY(18px);transition:opacity .65s eas
 
 /* Lucide icon treatment */
 .icon{display:block;flex:0 0 auto}.brand-mark{border-radius:10px;font-family:inherit}.theme-toggle{display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid transparent;border-radius:50%;transition:.2s}.theme-toggle:hover{border-color:var(--line);background:var(--surface)}.theme-toggle .sun-icon{display:none}[data-theme=dark] .theme-toggle .moon-icon{display:none}[data-theme=dark] .theme-toggle .sun-icon{display:block}.button{gap:9px}.privacy li{display:flex;align-items:center;gap:11px}.privacy li span{display:inline-flex;margin-right:0}
+
+/* Product screenshots */
+.product-preview img{display:block;width:100%;height:auto;border-radius:0 0 6px 6px;box-shadow:var(--shadow)}
+.screenshots{padding:130px 6vw;border-top:1px solid var(--line)}
+.screenshots .section-head{display:flex;align-items:end;justify-content:space-between;gap:50px;margin:30px 0 55px}
+.screenshots h2{margin:0;font:500 clamp(36px,4.6vw,62px)/1.16 "Noto Serif SC",serif;letter-spacing:-.04em}
+.screenshots .section-head p{max-width:470px;margin:0;color:var(--muted);font-size:17px;line-height:1.8}
+.screenshot-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.screenshot-grid figure{margin:0}
+.screenshot-grid img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+.screenshot-grid figcaption{padding:14px 2px;color:var(--muted);font:12px "DM Mono",monospace}
+@media(max-width:800px){.screenshots{padding:90px 22px}.screenshots .section-head{display:block}.screenshots .section-head p{margin-top:24px}.screenshot-grid{grid-template-columns:1fr}}
