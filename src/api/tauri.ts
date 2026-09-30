@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -15,6 +15,7 @@ export const api = {
   books: () => call<Book[]>("list_books"),
   booksPage: (query = "", limit = 500, offset = 0, category = "all", readingStatus = "all", withHighlights = true, withThoughts = true, sortBy = "recent") => call<BookPage>("list_books_page", { query, limit, offset, category, readingStatus, withHighlights, withThoughts, sortBy }),
   recommendations: (count = 12, maxIdx = 0) => call<BookRecommendations>("get_book_recommendations", { count, maxIdx }),
+  recommendationDetail: (bookId: string, title: string) => call<RecommendedBook>("get_book_recommendation_detail", { bookId, title }),
   bookMetadata: (source = "weread") => call<BookMetadataRow[]>("list_book_metadata", { source }),
   bookMetadataDetails: (bookId: string) => call<BookMetadataSourceDetail[]>("get_book_metadata_details", { bookId }),
   fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),

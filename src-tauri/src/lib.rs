@@ -26,6 +26,7 @@ pub fn run() {
             commands::list_database_rows,
             commands::get_reading_stats,
             commands::get_book_recommendations,
+            commands::get_book_recommendation_detail,
             commands::list_books,
             commands::list_books_page,
             commands::list_book_metadata,

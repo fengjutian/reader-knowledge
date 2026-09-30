@@ -58,6 +58,20 @@ export function Discover() {
     if (book.bookId) void api.openBook(book.bookId);
   };
 
+  const selectBook = (book: RecommendedBook) => {
+    setSelectedBook(book);
+    if (!book.bookId) return;
+    void api.recommendationDetail(book.bookId, book.title).then(detail => {
+      const enriched = { ...book, ...detail };
+      setSelectedBook(current => current?.bookId === book.bookId ? enriched : current);
+      setBooks(current => {
+        const next = current.map(item => item.bookId === book.bookId ? enriched : item);
+        recommendationsCache = next;
+        return next;
+      });
+    }).catch(() => undefined);
+  };
+
   return <>
     <PageHeader title="好书推荐" subtitle="从你的阅读偏好出发，发现下一本值得读的书。" actions={
       <Button variant="secondary" icon={<RefreshCw size={15}/>} disabled={loading} onClick={() => void load()}>换一批</Button>
@@ -67,7 +81,7 @@ export function Discover() {
       : books.length === 0 ? <div className="discover-state"><BookOpen/><strong>暂时没有找到合适的推荐</strong><span>稍后再来看看，或先在微信读书中读几本书。</span></div>
       : <div className="discover-scroll">
         <section className="recommend-grid">
-          {books.map((book, index) => <article className="recommend-card recommend-card--clickable" key={`${book.bookId}-${index}`} role="button" tabIndex={0} onClick={() => setSelectedBook(book)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedBook(book); } }}>
+          {books.map((book, index) => <article className="recommend-card recommend-card--clickable" key={`${book.bookId}-${index}`} role="button" tabIndex={0} onClick={() => selectBook(book)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectBook(book); } }}>
             <div className="recommend-cover"><span>{book.title}</span>{book.cover && <img src={book.cover} alt={`${book.title}封面`} loading="lazy" referrerPolicy="no-referrer"/>}<i>{String(index + 1).padStart(2, "0")}</i></div>
             <div className="recommend-copy">
               <div className="recommend-meta"><span>{book.category || "为你推荐"}</span>{book.newRatingDetail?.title && <em>{book.newRatingDetail.title}</em>}</div>

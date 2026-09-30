@@ -144,6 +144,44 @@ fn normalize_recommendations(mut response: Value) -> Value {
 }
 
 #[tauri::command]
+pub async fn get_book_recommendation_detail(book_id: String, title: String) -> Result<Value, AppError> {
+    let secret = keyring::Entry::new("ReadFlow", "weread")?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => AppError::Message("请先在设置中填写微信读书 API Key".into()),
+            other => AppError::Credential(other),
+        })?;
+    let client = crate::weread::client::WeReadClient::new(secret)?;
+    let mut info_params = serde_json::Map::new();
+    info_params.insert("bookId".into(), Value::String(book_id.clone()));
+    let mut detail: Value = client.call("/book/info", info_params).await?;
+
+    let mut search_params = serde_json::Map::new();
+    search_params.insert("keyword".into(), Value::String(title));
+    search_params.insert("scope".into(), Value::from(10));
+    let search: Value = client.call("/store/search", search_params).await?;
+    if let Some(found) = search
+        .get("results").and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|group| group.get("books").and_then(Value::as_array)).flatten()
+        .find(|item| item.pointer("/bookInfo/bookId").or_else(|| item.get("bookId")).is_some_and(|value| {
+            value.as_str().map_or_else(|| value.to_string() == book_id, |value| value == book_id)
+        }))
+    {
+        let nested = found.get("bookInfo").and_then(Value::as_object);
+        if let Some(target) = detail.as_object_mut() {
+            if let Some(source) = nested {
+                for (key, value) in source { target.entry(key.clone()).or_insert_with(|| value.clone()); }
+            }
+            for field in ["readingCount", "newRating", "newRatingCount", "newRatingDetail"] {
+                if let Some(value) = found.get(field) { target.insert(field.into(), value.clone()); }
+            }
+        }
+    }
+    let wrapper = serde_json::json!({ "books": [detail] });
+    Ok(normalize_recommendations(wrapper)["books"][0].clone())
+}
+
+#[tauri::command]
 pub fn list_books(db: State<'_, Database>) -> Result<Vec<Book>, AppError> {
     let c = db.connect()?;
     let mut q=c.prepare("SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),coalesce(b.cover,''),coalesce(h.total,0),coalesce(t.total,0),CASE b.finish_reading WHEN 1 THEN 100 ELSE 0 END,coalesce(datetime(b.read_update_time,'unixepoch','localtime'),''),CASE WHEN b.finish_reading=1 THEN 'finished' WHEN coalesce(b.read_update_time,0)>0 OR coalesce(h.total,0)>0 OR coalesce(t.total,0)>0 THEN 'reading' ELSE 'unread' END FROM books b LEFT JOIN (SELECT book_id,count(*) total FROM highlights WHERE is_deleted=0 GROUP BY book_id) h ON h.book_id=b.book_id LEFT JOIN (SELECT book_id,count(*) total FROM thoughts WHERE is_deleted=0 GROUP BY book_id) t ON t.book_id=b.book_id WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC")?;
@@ -1439,6 +1477,7 @@ mod tests {
         assert_eq!(book["newRating"], 82.0);
         assert_eq!(book["newRatingCount"], 90.0);
     }
+
 
     #[test]
     fn restricts_credential_names_to_known_namespaces() {
