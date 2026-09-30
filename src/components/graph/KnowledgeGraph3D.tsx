@@ -47,7 +47,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         skeletonDegree.set(edge.from, (skeletonDegree.get(edge.from) ?? 0) + 1);
         skeletonDegree.set(edge.to, (skeletonDegree.get(edge.to) ?? 0) + 1);
         return true;
-      }).slice(0, 1800);
+      }).slice(0, 900);
     const degree = new Map<string, number>();
     const adjacentIds = new Set<string>();
     visibleEdges.forEach(edge => {
@@ -132,7 +132,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const chart = echarts.init(host, undefined, { renderer: "canvas" });
+    const chart = echarts.init(host, undefined, { renderer: "canvas", devicePixelRatio: Math.min(window.devicePixelRatio, 1.25) });
     chartRef.current = chart;
     const observer = new ResizeObserver(() => chart.resize());
     observer.observe(host);
@@ -223,13 +223,12 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         right: "7%",
         bottom: "7%",
         roam: true,
-        focusNodeAdjacency: true,
-        focusNodeAdjacencyOn: "mouseover",
+        focusNodeAdjacency: false,
         label: { show: false },
         forceAtlas2: {
           GPU: true,
-          steps: 2,
-          maxSteps: 420,
+          steps: 4,
+          maxSteps: 140,
           repulsionByDegree: true,
           linLogMode: true,
           strongGravityMode: false,
