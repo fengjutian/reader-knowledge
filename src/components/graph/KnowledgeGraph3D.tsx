@@ -80,13 +80,24 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           x = Math.cos(angle) * radius;
           y = Math.sin(angle) * radius;
         }
+        if (selectedId && relationCount) {
+          if (node.id === selectedId) {
+            x = 0;
+            y = 0;
+          } else {
+            const angle = (seed % 6283) / 1000;
+            x = Math.cos(angle) * 220;
+            y = Math.sin(angle) * 220;
+          }
+        }
         return {
           id: node.id,
           name: node.title,
           value: relationCount,
           x,
           y,
-          symbolSize: node.id === selectedId ? 9 : selectedId && adjacentIds.has(node.id) ? 5 : relationCount ? 4 : 2,
+          fixed: node.id === selectedId,
+          symbolSize: node.id === selectedId ? 14 : selectedId && adjacentIds.has(node.id) ? 9 : relationCount ? 7 : 3,
           itemStyle: {
             color: node.id === focusId ? "#ef493c" : node.id === selectedId ? "#27231f" : relationCount ? colors[hash(node.category || node.author || node.title) % colors.length] : "#d9d5ce",
             opacity: selectedId ? (node.id === selectedId || adjacentIds.has(node.id) ? 1 : .055) : relationCount ? .94 : .2,
@@ -151,7 +162,42 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
           return `<div class="graph-3d-tooltip"><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author || "未知作者")}</span><small>${params.data?.relationCount ?? 0} 个关系</small></div>`;
         },
       },
-      series: [{
+      series: selectedId ? [{
+        type: "graph",
+        name: "相邻关系",
+        layout: "force",
+        data: data.nodes,
+        links: data.edges,
+        left: "10%",
+        top: "10%",
+        right: "10%",
+        bottom: "10%",
+        roam: true,
+        draggable: true,
+        label: {
+          show: true,
+          position: "right",
+          distance: 6,
+          color: "#514943",
+          fontSize: 11,
+          formatter: "{b}",
+        },
+        force: {
+          initLayout: "circular",
+          repulsion: 520,
+          gravity: .12,
+          edgeLength: [115, 190],
+          friction: .72,
+          layoutAnimation: true,
+        },
+        lineStyle: { color: "#ad6a5d", width: 1.5, opacity: .78, curveness: .16 },
+        edgeLabel: { show: false },
+        emphasis: {
+          focus: "adjacency",
+          itemStyle: { color: "#ef493c", opacity: 1 },
+          lineStyle: { color: "#8d4034", width: 2.2, opacity: 1, curveness: .2 },
+        },
+      }] : [{
         type: "graph",
         name: "未关联书籍",
         layout: "none",
