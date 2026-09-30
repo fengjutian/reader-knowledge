@@ -1,10 +1,10 @@
-import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Focus, GitCompareArrows, Globe2, Link2, Maximize2, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Eraser, Focus, GitCompareArrows, Globe2, Link2, Maximize2, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/tauri";
 import { KnowledgeGraphCanvas } from "../components/graph/KnowledgeGraphCanvas";
 import { KnowledgeGraph3D } from "../components/graph/KnowledgeGraph3D";
 import { useAppStore } from "../stores/app";
-import { graphCacheKey, readGraphCache, writeGraphCache } from "../utils/graphCache";
+import { clearGraphCache, graphCacheKey, readGraphCache, writeGraphCache } from "../utils/graphCache";
 import type { Book, Note, RelationAnalysis, RelationKind } from "../types/domain";
 
 type Node = Book & { x: number; y: number };
@@ -29,6 +29,8 @@ export function KnowledgeGraph() {
   const [error, setError] = useState(""), [query, setQuery] = useState(""), [strength, setStrength] = useState<Strength>("all");
   const [relationFilter, setRelationFilter] = useState<RelationFilter>("all");
   const [relationSource, setRelationSource] = useState<RelationSource>("all");
+  const [minimumScore, setMinimumScore] = useState(0);
+  const [cacheNotice, setCacheNotice] = useState("");
   const [connectedOnly, setConnectedOnly] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false), [pickerScroll, setPickerScroll] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(), [edgeId, setEdgeId] = useState<string>(), [focusId, setFocusId] = useState<string>();
@@ -43,6 +45,7 @@ export function KnowledgeGraph() {
   const lexicalEdgesRef = useRef<Edge[]>([]);
   const semanticEdgesRef = useRef<Edge[] | null>(null);
   const cacheKeyRef = useRef("");
+  const recomputingRef = useRef(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const wasActiveRef = useRef(false);
   const combinedEdges = (external: Edge[] | null = semanticEdgesRef.current, lexical = lexicalEdgesRef.current) => {
@@ -99,6 +102,7 @@ export function KnowledgeGraph() {
       setGraph({ ...event.data.graph, edges: combinedEdges() });
       if (event.data.type === "result") {
         setAnalyzing(false);
+        if (recomputingRef.current) { recomputingRef.current = false; setCacheNotice("本地关系已重新计算"); window.setTimeout(() => setCacheNotice(""), 2200); }
         setFocusId(current => {
           if (current) return current;
           const connected = new Set(event.data.graph.edges.flatMap(edge => [edge.from, edge.to]));
@@ -107,7 +111,7 @@ export function KnowledgeGraph() {
       }
       if (event.data.analysis && cacheKeyRef.current) void writeGraphCache(cacheKeyRef.current, event.data.analysis);
     };
-    worker.onerror = event => { setError(event.message || "关系分析失败"); setAnalyzing(false); };
+    worker.onerror = event => { recomputingRef.current = false; setError(event.message || "关系分析失败"); setAnalyzing(false); };
     return () => worker.terminate();
   }, []);
   useEffect(() => {
@@ -125,7 +129,7 @@ export function KnowledgeGraph() {
   useEffect(() => { const shortcuts = (event: KeyboardEvent) => { const target = event.target as HTMLElement; if (target.matches("input,select,textarea")) return; if (event.key === "Escape") { setSelectedId(undefined); setEdgeId(undefined); } if (event.key.toLowerCase() === "f") setFitRequest(value => value + 1); }; window.addEventListener("keydown", shortcuts); return () => window.removeEventListener("keydown", shortcuts); }, []);
   const viewGraph = useMemo(() => {
     const bookById = new Map(graph.nodes.map(node => [node.id, node]));
-    const filteredEdges = graph.edges.filter(edge => bookById.has(edge.from) && bookById.has(edge.to)).filter(edge => {
+    const filteredEdges = graph.edges.filter(edge => bookById.has(edge.from) && bookById.has(edge.to) && edge.score >= minimumScore).filter(edge => {
       if (relationSource === "local" && (edge.id.startsWith("semantic:") || edge.id.startsWith("metadata:"))) return false;
       if (relationSource === "semantic" && !edge.id.startsWith("semantic:")) return false;
       if (relationSource === "weread" && !edge.id.startsWith("metadata:weread:")) return false;
@@ -147,7 +151,7 @@ export function KnowledgeGraph() {
       return { ...node, x: W / 2 + Math.cos(angle) * ring * 1.12, y: H / 2 + Math.sin(angle) * ring };
     });
     return { nodes, edges: visibleEdges };
-  }, [focusId, graph, relationFilter, relationSource, strength]);
+  }, [focusId, graph, minimumScore, relationFilter, relationSource, strength]);
   const renderedEdges = useMemo(() => viewGraph.edges.map(edge => ({ ...edge, semanticRelation: relationAnalyses[edge.id]?.relation })), [viewGraph.edges, relationAnalyses]);
   const selected = graph.nodes.find(node => node.id === selectedId), selectedEdge = graph.edges.find(edge => edge.id === edgeId && graph.nodes.some(node => node.id === edge.from) && graph.nodes.some(node => node.id === edge.to));
   useEffect(() => {
@@ -203,11 +207,25 @@ export function KnowledgeGraph() {
     catch (reason) { setDeepError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setDeepLoading(false); }
   }
+  async function clearCaches() {
+    await clearGraphCache();
+    setRelationAnalyses({}); setDeepAnalysis(undefined); setCacheNotice("缓存已清理");
+    window.setTimeout(() => setCacheNotice(""), 2200);
+  }
+  async function recomputeLocalRelations() {
+    if (!workerRef.current || analyzing) return;
+    await clearGraphCache();
+    lexicalEdgesRef.current = [];
+    recomputingRef.current = true;
+    setAnalyzing(true); setCacheNotice("正在重新计算本地关系…");
+    const key = graphCacheKey(books, notes); cacheKeyRef.current = key;
+    workerRef.current.postMessage({ type: "init", books, notes: notes.map(({ id, type, bookId, chapter, content, bookTitle, createdAt }) => ({ id, type, bookId, chapter, content, bookTitle, createdAt })), strength: workerStrength(strength) });
+  }
   const q = query.trim().toLowerCase();
   const pickerBooks = useMemo(() => q ? books.filter(book => `${book.title}${book.author}${book.category}`.toLowerCase().includes(q)) : books, [books, q]);
   const pickerStart = Math.max(0, Math.floor(pickerScroll / 46) - 2), pickerItems = pickerBooks.slice(pickerStart, pickerStart + 12);
   return <div className="knowledge-graph-page">
-    <div className="graph-source-toolbar"><span>关系来源</span><select value={relationSource} onChange={e => { setRelationSource(e.target.value as RelationSource); setEdgeId(undefined); }}><option value="all">全部来源</option><option value="local">本地笔记</option><option value="semantic">语义向量</option><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></div>
+    <div className="graph-source-toolbar"><label><span>关系来源</span><select value={relationSource} onChange={e => { setRelationSource(e.target.value as RelationSource); setEdgeId(undefined); }}><option value="all">全部来源</option><option value="local">本地笔记</option><option value="semantic">语义向量</option><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></label><label className="graph-score-filter"><span>最低关联度</span><input type="range" min="0" max="90" step="5" value={Math.round(minimumScore * 100)} onChange={event => { setMinimumScore(Number(event.target.value) / 100); setEdgeId(undefined); }}/><strong>{Math.round(minimumScore * 100)}%</strong></label><button type="button" onClick={() => void clearCaches()}><Eraser size={14}/>清理缓存</button><button type="button" disabled={analyzing} onClick={() => void recomputeLocalRelations()}><RotateCw className={analyzing ? "spin" : ""} size={14}/>重新计算本地关系</button>{cacheNotice && <em>{cacheNotice}</em>}</div>
     <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { navigateToBook(book.id); setQuery(""); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}>{strength === "all" && <option value="all" disabled>全局预览</option>}<option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="standard">12 个关联</option><option value="broad">20 个关联</option></select></label><label className="graph-strength"><span>关系</span><select value={relationFilter} onChange={e => { setRelationFilter(e.target.value as RelationFilter); setEdgeId(undefined); }}><option value="all">全部</option><option value="content">内容关联</option><option value="author">共同作者</option><option value="analyzable">可深度分析</option></select></label><label className="graph-connected-filter"><input type="checkbox" checked={connectedOnly} onChange={event => setConnectedOnly(event.target.checked)}/><span>仅显示有关联</span></label><div className="graph-nav"><button onClick={goBack} disabled={!backStack.length} title="返回上一本中心书" aria-label="返回"><ArrowLeft size={15}/></button><button onClick={goForward} disabled={!forwardStack.length} title="前进到下一本中心书" aria-label="前进"><ArrowRight size={15}/></button><button onClick={resetToGlobal} disabled={!graph.nodes.length} title="重置到全局视图" aria-label="重置到全局视图"><Globe2 size={15}/></button><button onClick={() => setFitRequest(value => value + 1)} disabled={!viewGraph.nodes.length} title="适应画布" aria-label="适应画布"><Maximize2 size={15}/></button><button onClick={() => refreshSemanticRelations(true)} disabled={semanticLoading} title="刷新语义关系" aria-label="刷新语义关系"><RotateCw className={semanticLoading ? "spin" : ""} size={15}/></button></div><span>{semanticLoading ? "正在刷新关系…" : `${viewGraph.edges.length} 个关系`}</span></div>
     <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}{!loading && !analyzing && !error && !graph.nodes.length && <div className="graph-state"><Share2/><strong>还没有发现可靠的书籍关系</strong><span>更多划线与想法会让关联分析更加准确。</span></div>}
       {isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D
@@ -223,6 +241,7 @@ export function KnowledgeGraph() {
       {selected && <aside className="graph-detail"><button className="graph-detail__close" onClick={() => setSelectedId(undefined)}><X size={16}/></button><span className="graph-kind">书籍</span><h2>《{selected.title}》</h2><p>{selected.author}</p><small>{selected.highlightCount} 条划线 · {selected.thoughtCount} 条想法 · {graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).length} 本关联书籍</small><button className={`graph-compare-toggle${compareIds.includes(selected.id) ? " selected" : ""}`} onClick={() => toggleCompare(selected.id)} disabled={selected.highlightCount + selected.thoughtCount === 0 || (!compareIds.includes(selected.id) && compareIds.length >= 4)}>{compareIds.includes(selected.id) ? <Check size={14}/> : <GitCompareArrows size={14}/>} {compareIds.includes(selected.id) ? "已加入比较" : "加入比较"}</button><div className="graph-detail__actions"><button onClick={() => navigateToBook(selected.id)}><Focus size={14}/>设为中心书</button><button onClick={() => openBook(selected.id)}><BookOpen size={14}/>打开书籍</button></div></aside>}
       {selectedEdge && (() => { const from = graph.nodes.find(n => n.id === selectedEdge.from)!, to = graph.nodes.find(n => n.id === selectedEdge.to)!, missing = [from, to].filter(book => book.highlightCount + book.thoughtCount === 0), canAnalyze = missing.length === 0, authorRelation = selectedEdge.relation.includes("作者"); return <aside className="graph-detail graph-relation-detail"><button className="graph-detail__close" onClick={() => setEdgeId(undefined)}><X size={16}/></button><span className="graph-kind">{deepAnalysis ? relationLabels[deepAnalysis.relation] : selectedEdge.relation}</span><h2>《{from.title}》<br/>与《{to.title}》</h2><p>{authorRelation && !deepAnalysis ? "共同作者：" : "共同主题："}</p><div className="relation-keywords">{(deepAnalysis?.concepts.length ? deepAnalysis.concepts : selectedEdge.keywords).map(word => <span key={word}>{word}</span>)}</div>{!deepAnalysis && selectedEdge.evidence.map(item => <button className="relation-evidence" key={item.noteId} onClick={() => openBook(item.bookId, item.noteId)}>“{short(item.text, 72)}”</button>)}{deepAnalysis && <div className="deep-relation"><p>{deepAnalysis.summary}</p>{deepAnalysis.claims.map((claim, index) => <section key={`${claim.relation}-${index}`}><strong>{relationLabels[claim.relation]} · {Math.round(claim.confidence * 100)}%</strong><p>{claim.summary}</p>{claim.evidence.map(item => <button className="relation-evidence" key={item.noteId} onClick={() => openBook(item.bookId, item.noteId)}><i>{item.noteType === "thought" ? "我的想法" : "原文划线"}</i>“{short(item.text, 90)}”</button>)}</section>)}</div>}<small>{deepAnalysis ? `AI 判断置信度 ${Math.round(deepAnalysis.confidence * 100)}%${deepAnalysis.cached ? " · 已缓存" : ""}` : `综合关联度 ${Math.round(selectedEdge.score * 100)}%`}</small>{deepError && <p className="relation-analysis-error">{deepError}</p>}{!canAnalyze && <p className="relation-analysis-notice">《{missing.map(book => book.title).join("》《")}》暂无划线或想法，不能进行有证据的观点分析。</p>}<div className="relation-analysis-actions"><button onClick={() => openAiCompare([from.id, to.id])} disabled={!canAnalyze}><GitCompareArrows size={14}/>比较这两本</button><button onClick={() => void analyzeRelation(!!deepAnalysis)} disabled={deepLoading || !canAnalyze}>{deepAnalysis ? <RotateCw size={14}/> : <Sparkles size={14}/>} {deepLoading ? "正在分析…" : deepAnalysis ? "重新分析" : "AI 深度分析"}</button></div></aside>; })()}
       {!!viewGraph.nodes.length && <div className="graph-legend graph-legend--help"><span>单击节点查看相邻关系</span><span>拖动平移画布</span><span>滚轮缩放</span></div>}
+      {!!viewGraph.nodes.length && <div className="graph-color-legend"><strong>图例</strong><div><i className="node-center"/>中心书<i className="node-related"/>关联书<i className="node-isolated"/>无关联</div><div><i className="edge-content"/>内容关系<i className="edge-author"/>共同作者<i className="edge-agreement"/>观点一致<i className="edge-conflict"/>观点冲突<i className="edge-complementary"/>观点互补<i className="edge-causal"/>因果关系</div></div>}
       {!!compareIds.length && <div className="graph-compare-tray"><div><GitCompareArrows size={15}/><strong>已选 {compareIds.length}/4 本</strong><span>{compareIds.map(id => graph.nodes.find(node => node.id === id)?.title).filter(Boolean).join("、")}</span></div><button className="clear" onClick={() => setCompareIds([])} title="清空比较"><Trash2 size={14}/></button><button onClick={() => openAiCompare(compareIds)} disabled={compareIds.length < 2}>进入 AI 比较</button></div>}
     </section></div>;
 }

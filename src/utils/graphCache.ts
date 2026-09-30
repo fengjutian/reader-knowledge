@@ -32,6 +32,17 @@ export async function writeGraphCache(key: string, value: unknown) {
   } catch { /* Cache failure must not block the graph. */ }
 }
 
+export async function clearGraphCache() {
+  try {
+    const db = await database();
+    await new Promise<void>((resolve, reject) => {
+      const request = db.transaction(STORE, "readwrite").objectStore(STORE).clear();
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch { /* Cache cleanup is best-effort. */ }
+}
+
 export function graphCacheKey(
   books: { id: string; updatedAt: string; highlightCount: number; thoughtCount: number }[],
   notes: { id: string; bookId: string; chapter: string; content: string; type: string; createdAt: string }[],
