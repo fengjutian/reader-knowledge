@@ -1,4 +1,5 @@
 use crate::ai::provider::AiProvider;
+use crate::http::{limited_json, MAX_API_RESPONSE_BYTES};
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
 use serde_json::Value;
@@ -229,12 +230,13 @@ pub fn delete_glossary_term(db:State<'_,Database>,id:i64)->Result<(),AppError>{d
 #[tauri::command]
 pub async fn search_wikipedia(term:String)->Result<Vec<WikipediaCandidate>,AppError>{
     let client=reqwest::Client::builder().user_agent("wereader/0.1 personal knowledge app").timeout(std::time::Duration::from_secs(12)).build()?;
-    let value:Value=client.get("https://zh.wikipedia.org/w/rest.php/v1/search/page").query(&[("q",term.as_str()),("limit","5")]).send().await?.error_for_status()?.json().await?;
+    let response=client.get("https://zh.wikipedia.org/w/rest.php/v1/search/page").query(&[("q",term.as_str()),("limit","5")]).send().await?.error_for_status()?;
+    let value:Value=limited_json(response,MAX_API_RESPONSE_BYTES,"维基百科").await?;
     let pages=value.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut candidates=pages.into_iter().filter_map(|page|{let title=page.get("title")?.as_str()?.to_owned();let description=page.get("description").and_then(Value::as_str).unwrap_or("").to_owned();let excerpt=page.get("excerpt").and_then(Value::as_str).unwrap_or("").replace("<span class=\"searchmatch\">","").replace("</span>","");let url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));Some(WikipediaCandidate{title,description,excerpt,url})}).collect::<Vec<_>>();
     for candidate in &mut candidates {
         let detail=client.get("https://zh.wikipedia.org/w/api.php").query(&[("action","query"),("format","json"),("formatversion","2"),("prop","extracts"),("explaintext","1"),("exsectionformat","plain"),("redirects","1"),("titles",candidate.title.as_str())]).send().await;
-        let Ok(response)=detail else{continue};let Ok(response)=response.error_for_status() else{continue};let Ok(value)=response.json::<Value>().await else{continue};
+        let Ok(response)=detail else{continue};let Ok(response)=response.error_for_status() else{continue};let Ok(value)=limited_json::<Value>(response,MAX_API_RESPONSE_BYTES,"维基百科").await else{continue};
         if let Some(page)=value.pointer("/query/pages/0") {
             if let Some(title)=page.get("title").and_then(Value::as_str){candidate.title=title.to_owned();candidate.url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));}
             if let Some(extract)=page.get("extract").and_then(Value::as_str).filter(|value|!value.trim().is_empty()){candidate.excerpt=extract.chars().take(20_000).collect();}
@@ -449,6 +451,7 @@ fn map_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<SearchResult> {
 
 #[tauri::command]
 pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
+    validate_secret_kind(&kind)?;
     let entry = keyring::Entry::new("ReadFlow", &kind)?;
     entry.set_password(&value)?;
     let persisted = entry.get_password()?;
@@ -460,6 +463,7 @@ pub fn save_secret(kind: String, value: String) -> Result<(), AppError> {
 
 #[tauri::command]
 pub fn has_secret(kind: String) -> Result<bool, AppError> {
+    validate_secret_kind(&kind)?;
     match keyring::Entry::new("ReadFlow", &kind)?.get_password() {
         Ok(value) => Ok(!value.is_empty()),
         Err(keyring::Error::NoEntry) => Ok(false),
@@ -468,6 +472,7 @@ pub fn has_secret(kind: String) -> Result<bool, AppError> {
 }
 #[tauri::command]
 pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool, AppError> {
+    validate_secret_kind(&kind)?;
     let secret = match value.filter(|value| !value.trim().is_empty()) {
         Some(value) => value,
         None => keyring::Entry::new("ReadFlow", &kind)?.get_password()?,
@@ -478,6 +483,23 @@ pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool
             .await?;
     }
     Ok(true)
+}
+
+fn validate_secret_kind(kind: &str) -> Result<(), AppError> {
+    let valid_provider_kind = ["ai:", "embedding:"].iter().any(|prefix| {
+        kind.strip_prefix(prefix).is_some_and(|provider| {
+            !provider.is_empty()
+                && provider.len() <= 64
+                && provider
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        })
+    });
+    if matches!(kind, "weread" | "google_books") || valid_provider_kind {
+        Ok(())
+    } else {
+        Err(AppError::Message("不支持的凭据类型".into()))
+    }
 }
 #[tauri::command]
 pub async fn sync_weread(app: AppHandle, db: State<'_, Database>) -> Result<SyncProgress, AppError> {
