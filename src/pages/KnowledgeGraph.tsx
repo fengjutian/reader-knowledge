@@ -191,7 +191,7 @@ export function KnowledgeGraph() {
       {isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId} showIsolated={!connectedOnly}
         fitRequest={fitRequest}
-        onNodeClick={id => { setSelectedId(id); setEdgeId(undefined); }} onNodeOpen={navigateToBook}
+        onNodeClick={navigateToBook} onNodeOpen={navigateToBook}
         onEdgeClick={id => { setEdgeId(id); setSelectedId(undefined); }} />}
       {isActivePage && strength !== "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraphCanvas
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId}

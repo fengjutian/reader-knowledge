@@ -33,6 +33,8 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   const chartRef = useRef<echarts.ECharts | undefined>(undefined);
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
+  const panRef = useRef<[number, number]>([0, 0]);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; target: HTMLElement } | null>(null);
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
@@ -272,6 +274,50 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
     return () => host.removeEventListener("wheel", handleWheel);
   }, [selectedId]);
 
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const start = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target instanceof HTMLElement ? event.target : host;
+      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, target };
+      target.setPointerCapture(event.pointerId);
+      host.classList.add("is-panning");
+    };
+    const move = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      const chart = chartRef.current;
+      if (!drag || drag.pointerId !== event.pointerId || !chart) return;
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      if (!dx && !dy) return;
+      drag.x = event.clientX; drag.y = event.clientY;
+      event.preventDefault();
+      if (selectedId) {
+        chart.dispatchAction({ type: "graphRoam", seriesIndex: 0, dx, dy });
+      } else {
+        panRef.current = [panRef.current[0] + dx, panRef.current[1] + dy];
+        chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, offset: panRef.current });
+      }
+    };
+    const end = (event: PointerEvent) => {
+      if (dragRef.current?.pointerId !== event.pointerId) return;
+      const target = dragRef.current.target;
+      dragRef.current = null;
+      if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+      host.classList.remove("is-panning");
+    };
+    host.addEventListener("pointerdown", start);
+    host.addEventListener("pointermove", move);
+    host.addEventListener("pointerup", end);
+    host.addEventListener("pointercancel", end);
+    return () => {
+      host.removeEventListener("pointerdown", start);
+      host.removeEventListener("pointermove", move);
+      host.removeEventListener("pointerup", end);
+      host.removeEventListener("pointercancel", end);
+    };
+  }, [selectedId]);
+
   function changeZoom(nextValue: number) {
     const chart = chartRef.current;
     if (!chart) return;
@@ -286,6 +332,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
     const chart = chartRef.current;
     if (!chart) return;
     zoomRef.current = 1;
+    panRef.current = [0, 0];
     setZoom(1);
     if (selectedId) chart.setOption({ series: [{ zoom: 1, center: undefined }] } as never);
     else chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, zoom: 1, offset: [0, 0] });
