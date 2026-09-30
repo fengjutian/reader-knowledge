@@ -112,9 +112,7 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
          coalesce(m.isbn13,m.isbn10,''),coalesce(m.publisher,''),coalesce(m.published_date,''),m.page_count,
          coalesce(m.subjects_json,'[]'),coalesce(s.sources,''),s.last_fetched_at
          FROM books b
-         LEFT JOIN book_metadata_sources m ON m.book_id=b.book_id AND m.source=(
-           SELECT source FROM book_metadata_sources x WHERE x.book_id=b.book_id
-           ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END LIMIT 1)
+         LEFT JOIN book_metadata_sources m ON m.book_id=b.book_id AND m.source='weread'
          LEFT JOIN (SELECT book_id,group_concat(source) sources,max(fetched_at) last_fetched_at FROM book_metadata_sources GROUP BY book_id) s ON s.book_id=b.book_id
          WHERE b.is_deleted=0 ORDER BY b.read_update_time DESC,b.title"
     )?;
@@ -136,13 +134,13 @@ pub fn list(db: &Database) -> Result<Vec<BookMetadataRow>, AppError> {
 
 pub fn details(db:&Database,book_id:&str)->Result<Vec<BookMetadataSourceDetail>,AppError>{
     let c=db.connect()?;
-    let mut q=c.prepare("SELECT s.source,s.source_id,s.source_url,coalesce(s.title,''),coalesce(s.authors_json,'[]'),coalesce(s.isbn13,s.isbn10,''),coalesce(s.publisher,''),coalesce(s.published_date,''),s.page_count,coalesce(s.subjects_json,'[]'),coalesce(s.cover_url,''),coalesce(s.description,''),s.rating,s.rating_count,datetime(s.fetched_at,'unixepoch','localtime'),coalesce(e.author_name,''),coalesce(e.author_avatar,''),coalesce(e.author_url,''),coalesce(e.author_bio,''),coalesce(e.table_of_contents,'') FROM book_metadata_sources s LEFT JOIN book_metadata_extras e ON e.book_id=s.book_id AND e.source=s.source WHERE s.book_id=?1 ORDER BY CASE s.source WHEN 'manual' THEN 0 WHEN 'douban' THEN 1 WHEN 'open_library' THEN 2 WHEN 'google_books' THEN 3 ELSE 9 END")?;
+    let mut q=c.prepare("SELECT s.source,s.source_id,s.source_url,coalesce(s.title,''),coalesce(s.authors_json,'[]'),coalesce(s.isbn13,s.isbn10,''),coalesce(s.publisher,''),coalesce(s.published_date,''),s.page_count,coalesce(s.subjects_json,'[]'),coalesce(s.cover_url,''),coalesce(s.description,''),s.rating,s.rating_count,datetime(s.fetched_at,'unixepoch','localtime'),coalesce(e.author_name,''),coalesce(e.author_avatar,''),coalesce(e.author_url,''),coalesce(e.author_bio,''),coalesce(e.table_of_contents,'') FROM book_metadata_sources s LEFT JOIN book_metadata_extras e ON e.book_id=s.book_id AND e.source=s.source WHERE s.book_id=?1 ORDER BY CASE s.source WHEN 'weread' THEN 0 WHEN 'douban' THEN 1 WHEN 'manual' THEN 2 WHEN 'open_library' THEN 3 WHEN 'google_books' THEN 4 ELSE 9 END")?;
     let rows=q.query_map([book_id],|r|Ok(BookMetadataSourceDetail{source:r.get(0)?,source_id:r.get(1)?,source_url:r.get(2)?,title:r.get(3)?,authors:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),isbn:r.get(5)?,publisher:r.get(6)?,published_date:r.get(7)?,page_count:r.get(8)?,subjects:serde_json::from_str(&r.get::<_,String>(9)?).unwrap_or_default(),cover_url:r.get(10)?,description:r.get(11)?,rating:r.get(12)?,rating_count:r.get(13)?,fetched_at:r.get(14)?,author_name:r.get(15)?,author_avatar:r.get(16)?,author_url:r.get(17)?,author_bio:r.get(18)?,table_of_contents:r.get(19)?}))?.collect::<Result<Vec<_>,_>>()?;
     Ok(rows)
 }
 
 pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> Result<MetadataFetchResult, AppError> {
-    if !matches!(source, "smart" | "open_library" | "google_books") {
+    if !matches!(source, "smart" | "weread" | "open_library" | "google_books") {
         return Err(AppError::Message("不支持的数据源".into()));
     }
     let c = db.connect()?;
@@ -154,6 +152,28 @@ pub async fn fetch(db: &Database, book_id: &str, source: &str, force: bool) -> R
         }
     }
     drop(c);
+    if source == "weread" {
+        let secret = keyring::Entry::new("ReadFlow", "weread")?
+            .get_password()
+            .map_err(|_| AppError::Message("请先在设置中配置微信读书 Agent Gateway API Key".into()))?;
+        let client = crate::weread::client::WeReadClient::new(secret)?;
+        let mut params = serde_json::Map::new();
+        params.insert("bookId".into(), Value::String(book_id.into()));
+        let value: Value = client.call("/book/info", params).await?;
+        let authors = value.get("author").and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| vec![v]).unwrap_or_default();
+        let isbns = value.get("isbn").and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| vec![v]).unwrap_or_default();
+        let subjects = value.get("category").and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| vec![v]).unwrap_or_default();
+        let data = json!({
+            "source_id": value.get("bookId").and_then(Value::as_str).unwrap_or(book_id),
+            "source_url": value.get("deepLink"),
+            "title": value.get("title"), "authors": authors, "isbn": isbns,
+            "publisher": value.get("publisher"), "published_date": value.get("publishTime"),
+            "subjects": subjects, "cover_url": value.get("cover"), "description": value.get("intro"),
+            "rating": value.get("newRating"), "rating_count": value.get("newRatingCount"), "raw": value
+        });
+        save(db, book_id, "weread", &data)?;
+        return Ok(MetadataFetchResult { book_id: book_id.into(), source: "weread".into(), status: "updated".into(), message: "微信读书信息已独立保存到本地".into() });
+    }
     let client=reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("ReadFlow/0.1 personal metadata client").build()?;
     let google_key=keyring::Entry::new("ReadFlow","google_books").ok().and_then(|entry|entry.get_password().ok()).filter(|value|!value.trim().is_empty());
     let (actual_source,data) = match source {

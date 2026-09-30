@@ -8,7 +8,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { useAppStore } from "../stores/app";
 import type { BookMetadataRow, BookMetadataSourceDetail, MetadataFetchResult } from "../types/domain";
 
-const labels: Record<string, string> = { open_library: "Open Library", google_books: "Google Books", douban: "豆瓣", manual: "手动" };
+const labels: Record<string, string> = { weread: "微信读书", open_library: "Open Library", google_books: "Google Books", douban: "豆瓣", manual: "手动" };
 const maxDoubanBatch = 10;
 const pageSize = 100;
 const hiddenSources = new Set(["open_library", "google_books"]);
@@ -89,6 +89,24 @@ export function BookMetadata() {
     setBusy(new Set());
   }
 
+  async function pullWeread(ids: string[]) {
+    if (!ids.length) return;
+    setBusy(new Set(ids));
+    setMessage({ kind: "info", text: `正在从微信读书补全 ${ids.length} 本书…` });
+    let updated = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const result = await api.fetchBookMetadata(id, "weread", true);
+        if (result.status === "updated" || result.status === "cached") updated += 1;
+        else failed += 1;
+      } catch { failed += 1; }
+    }
+    setMessage({ kind: failed ? "error" : "success", text: `微信读书补全完成：成功 ${updated}，失败 ${failed}。` });
+    await load();
+    setBusy(new Set());
+  }
+
   async function view(book: BookMetadataRow) {
     setViewBook(book); setDetails([]);
     try { setDetails((await api.bookMetadataDetails(book.bookId)).filter(detail => !hiddenSources.has(detail.source))); }
@@ -97,9 +115,9 @@ export function BookMetadata() {
 
   return <>
     <Message value={message} onClose={closeMessage}/>
-    <PageHeader title="书籍元数据" subtitle={`${items.length} 本书；每个来源独立保存。`} actions={<Button icon={<RefreshCw size={15}/>} disabled={!selected.size || busy.size > 0} onClick={() => void pullDouban([...selected])}>豆瓣补全（{selected.size}/{maxDoubanBatch}）</Button>}/>
+    <PageHeader title="书籍元数据" subtitle={`${items.length} 本书；当前列表展示微信读书字段，各来源详情独立保存。`} actions={<Button icon={<RefreshCw size={15}/>} disabled={!selected.size || busy.size > 0} onClick={() => void pullWeread([...selected])}>微信读书补全（{selected.size}/{maxDoubanBatch}）</Button>}/>
     <div className="toolbar metadata-toolbar"><label className="field field--search"><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索书名、作者、ISBN 或出版社"/></label></div>
-    <div className="douban-import"><div><strong>豆瓣批量补全</strong><small>勾选 1–10 本书，系统会按照书名与作者逐本搜索并保存匹配结果。</small></div><span className="douban-import__limit">已选 {selected.size} / {maxDoubanBatch}</span><Button variant="secondary" disabled={!selected.size || busy.size > 0} onClick={() => void pullDouban([...selected])}>从豆瓣补全</Button></div>
+    <div className="douban-import"><div><strong>按来源批量补全</strong><small>微信读书按 bookId 获取，豆瓣按书名与作者搜索；两个来源分别保存，不合并字段。</small></div><span className="douban-import__limit">已选 {selected.size} / {maxDoubanBatch}</span><div className="metadata-source-actions"><Button variant="secondary" disabled={!selected.size || busy.size > 0} onClick={() => void pullWeread([...selected])}>微信读书</Button><Button variant="secondary" disabled={!selected.size || busy.size > 0} onClick={() => void pullDouban([...selected])}>豆瓣</Button></div></div>
     {loading ? <div className="notes-loading">正在读取书籍…</div> : <div className="metadata-table-wrap">
       <table className="metadata-table">
         <colgroup><col className="col-check"/><col className="col-title"/><col className="col-author"/><col className="col-isbn"/><col className="col-publisher"/><col className="col-pages"/><col className="col-subjects"/><col className="col-sources"/><col className="col-view"/><col className="col-actions"/></colgroup>
