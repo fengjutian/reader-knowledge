@@ -13,7 +13,7 @@ export const api = {
   databaseRows: (table: string, query = "", limit = 40, offset = 0) => call<DatabaseRows>("list_database_rows", { table, query, limit, offset }),
   readingStats: (mode: ReadingPeriod) => call<ReadingStats>("get_reading_stats", { mode }),
   books: () => call<Book[]>("list_books"),
-  booksPage: (query = "", limit = 500, offset = 0) => call<BookPage>("list_books_page", { query, limit, offset }),
+  booksPage: (query = "", limit = 500, offset = 0, category = "all", readingStatus = "all", withHighlights = true, withThoughts = true, sortBy = "recent") => call<BookPage>("list_books_page", { query, limit, offset, category, readingStatus, withHighlights, withThoughts, sortBy }),
   recommendations: (count = 12, maxIdx = 0) => call<BookRecommendations>("get_book_recommendations", { count, maxIdx }),
   bookMetadata: (source = "weread") => call<BookMetadataRow[]>("list_book_metadata", { source }),
   bookMetadataDetails: (bookId: string) => call<BookMetadataSourceDetail[]>("get_book_metadata_details", { bookId }),

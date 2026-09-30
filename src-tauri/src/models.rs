@@ -42,6 +42,7 @@ pub struct Book {
 pub struct BookPage {
     pub total: i64,
     pub books: Vec<Book>,
+    pub categories: Vec<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

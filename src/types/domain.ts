@@ -16,7 +16,7 @@ export interface BookDetail extends Book {
   deepLink?: string;
   finished: boolean;
 }
-export interface BookPage { total: number; books: Book[] }
+export interface BookPage { total: number; books: Book[]; categories: string[] }
 export interface RecommendedBook {
   bookId: string;
   title: string;
