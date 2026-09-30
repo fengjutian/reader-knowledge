@@ -1,6 +1,7 @@
 use crate::ai::provider::AiProvider;
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
+use serde_json::Value;
 use std::{collections::{HashMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -601,6 +602,22 @@ pub async fn build_semantic_relations(app: AppHandle, db: State<'_, Database>) -
         let evidence = [best(&ids[a], &book_vectors[&ids[b]]), best(&ids[b], &book_vectors[&ids[a]])].into_iter().flatten().map(|note| SemanticEvidence { book_id:note.book_id.clone(),note_id:note.id.clone(),text:note.content.chars().take(180).collect() }).collect();
         candidates.push(SemanticRelation { id:format!("{}:{}",ids[a],ids[b]),from:ids[a].clone(),to:ids[b].clone(),score,keywords:Vec::new(),relation:if score >= 0.72 { "高度语义相关".into() } else if score >= 0.52 { "语义相关".into() } else { "潜在语义关联".into() },evidence });
     }}
+    let mut thought_vectors: HashMap<String, Vec<f32>> = HashMap::new();
+    for (book_id, items) in &by_book {
+        let thoughts = items.iter().filter(|note| note.note_type == "thought").collect::<Vec<_>>();
+        let Some(first) = thoughts.first().and_then(|note| vectors.get(&note.id)) else { continue; };
+        let mut mean = vec![0.0f32; first.len()];
+        for note in &thoughts { if let Some(vector) = vectors.get(&note.id) { for (value, component) in mean.iter_mut().zip(vector) { *value += component; } } }
+        for value in &mut mean { *value /= thoughts.len() as f32; }
+        thought_vectors.insert(book_id.clone(), mean);
+    }
+    let thought_ids = thought_vectors.keys().cloned().collect::<Vec<_>>();
+    for a in 0..thought_ids.len() { for b in a+1..thought_ids.len() {
+        let left=&thought_ids[a]; let right=&thought_ids[b]; let score=cosine(&thought_vectors[left],&thought_vectors[right]); if score<0.48 { continue; }
+        let best=|book_id:&String,target:&Vec<f32>| by_book[book_id].iter().filter(|note|note.note_type=="thought").max_by(|x,y|cosine(&vectors[&x.id],target).total_cmp(&cosine(&vectors[&y.id],target))).copied();
+        let evidence=[best(left,&thought_vectors[right]),best(right,&thought_vectors[left])].into_iter().flatten().map(|note|SemanticEvidence{book_id:note.book_id.clone(),note_id:note.id.clone(),text:note.content.chars().take(180).collect()}).collect();
+        candidates.push(SemanticRelation{id:format!("thought:{left}:{right}"),from:left.clone(),to:right.clone(),score,keywords:Vec::new(),relation:"用户观点关联".into(),evidence});
+    }}
     candidates.sort_by(|a,b| b.score.total_cmp(&a.score)); let mut degree: HashMap<String,usize> = HashMap::new();
     Ok(candidates.into_iter().filter(|edge| { if degree.get(&edge.from).copied().unwrap_or(0)>=12 && degree.get(&edge.to).copied().unwrap_or(0)>=12 { return false; } *degree.entry(edge.from.clone()).or_default()+=1; *degree.entry(edge.to.clone()).or_default()+=1; true }).collect())
 }
@@ -611,41 +628,64 @@ pub fn build_metadata_relations(db: State<'_, Database>, source: String) -> Resu
         return Err(AppError::Message("仅支持微信读书或豆瓣元数据关系".into()));
     }
     let c = db.connect()?;
-    let mut query = c.prepare("SELECT book_id,coalesce(authors_json,'[]'),coalesce(subjects_json,'[]') FROM book_metadata_sources WHERE source=?1")?;
+    let mut query = c.prepare("SELECT book_id,coalesce(authors_json,'[]'),coalesce(subjects_json,'[]'),coalesce(raw_json,'{}') FROM book_metadata_sources WHERE source=?1")?;
     let rows = query.query_map([&source], |row| {
         let authors: String = row.get(1)?;
         let subjects: String = row.get(2)?;
-        Ok((row.get::<_, String>(0)?, serde_json::from_str::<Vec<String>>(&authors).unwrap_or_default(), serde_json::from_str::<Vec<String>>(&subjects).unwrap_or_default()))
+        let raw: String = row.get(3)?;
+        let raw: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        let translators: Vec<String> = raw.get("translator").map(|value| if let Some(values)=value.as_array(){values.iter().filter_map(Value::as_str).map(str::to_owned).collect()}else{value.as_str().map(|text|text.split(['、',',','/']).map(str::trim).filter(|part|!part.is_empty()).map(str::to_owned).collect()).unwrap_or_default()}).unwrap_or_default();
+        Ok((row.get::<_, String>(0)?, serde_json::from_str::<Vec<String>>(&authors).unwrap_or_default(), serde_json::from_str::<Vec<String>>(&subjects).unwrap_or_default(), translators))
     })?.collect::<Result<Vec<_>, _>>()?;
     let mut postings: HashMap<String, Vec<String>> = HashMap::new();
-    for (book_id, authors, subjects) in rows {
+    for (book_id, authors, subjects, translators) in rows {
         for author in authors.into_iter().filter(|value| !value.trim().is_empty()) {
             postings.entry(format!("author:{}", author.trim().to_lowercase())).or_default().push(book_id.clone());
         }
         for subject in subjects.into_iter().filter(|value| !value.trim().is_empty()) {
             postings.entry(format!("subject:{}", subject.trim().to_lowercase())).or_default().push(book_id.clone());
         }
+        for translator in translators.into_iter().filter(|value| !value.trim().is_empty()) {
+            postings.entry(format!("translator:{}", translator.trim().to_lowercase())).or_default().push(book_id.clone());
+        }
     }
-    let mut pairs: HashMap<(String, String), (Vec<String>, Vec<String>)> = HashMap::new();
+    let mut pairs: HashMap<(String, String), (Vec<String>, Vec<String>, Vec<String>)> = HashMap::new();
     for (term, mut ids) in postings {
         ids.sort(); ids.dedup();
         if ids.len() < 2 || ids.len() > 80 { continue; }
         let is_author = term.starts_with("author:");
+        let is_translator = term.starts_with("translator:");
         let label = term.split_once(':').map(|(_, value)| value.to_owned()).unwrap_or(term);
         for left in 0..ids.len() { for right in left + 1..ids.len() {
-            let entry = pairs.entry((ids[left].clone(), ids[right].clone())).or_insert_with(|| (Vec::new(), Vec::new()));
-            let values = if is_author { &mut entry.1 } else { &mut entry.0 };
+            let entry = pairs.entry((ids[left].clone(), ids[right].clone())).or_insert_with(|| (Vec::new(), Vec::new(), Vec::new()));
+            let values = if is_author { &mut entry.1 } else if is_translator { &mut entry.2 } else { &mut entry.0 };
             if values.len() < 6 && !values.contains(&label) { values.push(label.clone()); }
         }}
     }
     let source_label = if source == "weread" { "微信读书" } else { "豆瓣" };
-    let mut relations = pairs.into_iter().flat_map(|((from, to), (subjects, authors))| {
-        [("author", "共同作者", authors, 0.94), ("subject", "共同主题", subjects.clone(), (0.48 + subjects.len() as f64 * 0.08).min(0.88))]
+    let mut relations = pairs.into_iter().flat_map(|((from, to), (subjects, authors, translators))| {
+        [("author", "共同作者", authors, 0.94), ("translator", "共同译者", translators, 0.9), ("subject", "共同主题", subjects.clone(), (0.48 + subjects.len() as f64 * 0.08).min(0.88))]
             .into_iter().filter(|(_, _, keywords, _)| !keywords.is_empty()).map(|(kind, label, keywords, score)| {
                 let evidence_text = format!("来源：{source_label}；{label}：{}", keywords.join("、"));
                 SemanticRelation { id: format!("metadata:{source}:{kind}:{from}:{to}"), from: from.clone(), to: to.clone(), score, keywords: keywords.clone(), relation: format!("{label} · {source_label}"), evidence: vec![SemanticEvidence { book_id: from.clone(), note_id: String::new(), text: evidence_text.clone() }, SemanticEvidence { book_id: to.clone(), note_id: String::new(), text: evidence_text }] }
             }).collect::<Vec<_>>()
     }).collect::<Vec<_>>();
+    let mut version_query=c.prepare("SELECT book_id,coalesce(title,''),coalesce(isbn13,isbn10,'') FROM book_metadata_sources WHERE source=?1")?;
+    let versions=version_query.query_map([&source],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))?.collect::<Result<Vec<_>,_>>()?;
+    let mut works:HashMap<String,Vec<(String,String,String)>>=HashMap::new();
+    for (book_id,title,isbn) in versions { let key=title.to_lowercase().replace(['《','》',' '],"").split(['（','(',':','：']).next().unwrap_or("").to_owned(); if key.chars().count()>=3 { works.entry(key).or_default().push((book_id,title,isbn)); } }
+    for items in works.into_values().filter(|items|items.len()>1&&items.len()<=12) { for left in 0..items.len(){for right in left+1..items.len(){
+        if !items[left].2.is_empty()&&items[left].2==items[right].2 { continue; }
+        let keywords=vec![items[left].1.clone(),items[right].1.clone()]; let evidence_text=format!("来源：{source_label}；同一作品的不同版本");
+        relations.push(SemanticRelation{id:format!("metadata:{source}:version:{}:{}",items[left].0,items[right].0),from:items[left].0.clone(),to:items[right].0.clone(),score:0.86,keywords,relation:format!("同系列／不同版本 · {source_label}"),evidence:vec![SemanticEvidence{book_id:items[left].0.clone(),note_id:String::new(),text:evidence_text.clone()},SemanticEvidence{book_id:items[right].0.clone(),note_id:String::new(),text:evidence_text.clone()}]});
+    }}}
+    let mut intro_query=c.prepare("SELECT book_id,coalesce(description,'') FROM book_metadata_sources WHERE source=?1 AND length(coalesce(description,''))>=40")?;
+    let intros=intro_query.query_map([&source],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+    let mut intro_lengths:HashMap<String,usize>=HashMap::new(); let mut intro_postings:HashMap<String,Vec<String>>=HashMap::new();
+    for (book_id,intro) in intros { let terms=semantic_bigrams(&intro).into_iter().collect::<HashSet<_>>(); intro_lengths.insert(book_id.clone(),terms.len()); for term in terms { intro_postings.entry(term).or_default().push(book_id.clone()); } }
+    let mut intro_pairs:HashMap<(String,String),usize>=HashMap::new();
+    for ids in intro_postings.into_values().filter(|ids|ids.len()>1&&ids.len()<=60) { for left in 0..ids.len(){for right in left+1..ids.len(){let pair=if ids[left]<ids[right]{(ids[left].clone(),ids[right].clone())}else{(ids[right].clone(),ids[left].clone())};*intro_pairs.entry(pair).or_default()+=1;}}}
+    for ((from,to),shared) in intro_pairs { if shared<4 {continue;} let score=shared as f64/((intro_lengths[&from]*intro_lengths[&to]) as f64).sqrt(); if score<0.18 {continue;} let evidence_text=format!("来源：{source_label}；两本书的简介语义相似度 {}%",(score*100.0).round()); relations.push(SemanticRelation{id:format!("metadata:{source}:intro:{from}:{to}"),from:from.clone(),to:to.clone(),score:score.min(0.92),keywords:vec!["简介语义相似".into()],relation:format!("简介语义相似 · {source_label}"),evidence:vec![SemanticEvidence{book_id:from,note_id:String::new(),text:evidence_text.clone()},SemanticEvidence{book_id:to,note_id:String::new(),text:evidence_text}]}); }
     relations.sort_by(|left, right| right.score.total_cmp(&left.score));
     Ok(relations)
 }
