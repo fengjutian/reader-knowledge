@@ -536,6 +536,8 @@
 .graph-toolbar > button { height:36px;display:flex;align-items:center;gap:6px;padding:0 11px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--secondary); }
 .graph-toolbar > button.active { border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:var(--accent-soft);color:var(--accent); }
 .graph-toolbar > span { margin-left:auto;color:var(--muted);font-size:12px; }
+.graph-connected-filter { height:36px;display:flex;flex:none;align-items:center;gap:7px;padding:0 11px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--secondary);font-size:12px;cursor:pointer; }
+.graph-connected-filter input { width:14px;height:14px;margin:0;accent-color:var(--accent);cursor:pointer; }
 .graph-nav { display:flex;gap:3px;margin-left:auto; }.graph-nav button { display:grid;width:32px;height:32px;place-items:center;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--secondary); }.graph-nav button:hover:not(:disabled) { border-color:var(--accent);color:var(--accent); }.graph-nav button:disabled { color:var(--muted);cursor:not-allowed;opacity:.45; }.graph-nav + span { margin-left:5px!important; }
 .graph-search { width:240px;height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--muted); }
 .graph-search-wrap { position:relative; }
