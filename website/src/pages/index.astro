@@ -85,13 +85,6 @@ const faqs = [
       <section class="cta"><div class="brand-mark large"><Icon name="book-open" size={28}/></div><h2>把读过的，<br/>真正变成自己的。</h2><p>从同步第一本书开始，建立一个不会遗忘、可以生长的个人知识库。</p><a class="button light" href={releaseUrl} target="_blank" rel="noreferrer">下载最新版 <Icon name="arrow-up-right" size={15}/></a></section>
     </main>
     <footer><a class="brand" href="#top"><span class="brand-mark"><Icon name="book-open" size={18}/></span><span>阅读者<i>·</i></span></a><span>本地优先的个人阅读知识库</span><span>© {new Date().getFullYear()} 阅读者</span></footer>
-    <script>
-      const toggle = document.querySelector('.theme-toggle');
-      toggle?.addEventListener('click', () => { const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = next; localStorage.setItem('wereader-site-theme', next); });
-      const nav = document.querySelector('[data-nav]');
-      addEventListener('scroll', () => nav?.classList.toggle('scrolled', scrollY > 20), { passive: true });
-      const observer = new IntersectionObserver(entries => entries.forEach(entry => entry.isIntersecting && entry.target.classList.add('visible')), { threshold: .12 });
-      document.querySelectorAll('section, .reveal').forEach(el => observer.observe(el));
-    </script>
+    <script is:inline src="/site.js"></script>
   </body>
 </html>

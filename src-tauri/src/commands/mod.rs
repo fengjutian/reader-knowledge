@@ -97,7 +97,50 @@ pub async fn get_book_recommendations(count: i64, max_idx: i64) -> Result<serde_
     let mut params = serde_json::Map::new();
     params.insert("count".into(), serde_json::Value::from(count.clamp(1, 24)));
     params.insert("maxIdx".into(), serde_json::Value::from(max_idx.max(0)));
-    client.call("/book/recommend", params).await
+    let response = client.call("/book/recommend", params).await?;
+    Ok(normalize_recommendations(response))
+}
+
+fn normalize_recommendations(mut response: Value) -> Value {
+    let Some(books) = response.get_mut("books").and_then(Value::as_array_mut) else {
+        return response;
+    };
+    const BOOK_FIELDS: &[&str] = &[
+        "bookId", "deepLink", "title", "author", "cover", "intro", "category",
+        "reason", "readingCount", "searchIdx", "newRating", "newRatingCount",
+        "newRatingDetail",
+    ];
+    const NUMBER_FIELDS: &[&str] = &[
+        "readingCount", "searchIdx", "newRating", "newRatingCount",
+    ];
+
+    for book in books {
+        let nested = book
+            .get("bookInfo")
+            .or_else(|| book.pointer("/book/bookInfo"))
+            .and_then(Value::as_object)
+            .cloned();
+        let Some(target) = book.as_object_mut() else { continue };
+
+        if let Some(source) = nested {
+            for field in BOOK_FIELDS {
+                let missing = target.get(*field).is_none_or(Value::is_null);
+                if missing {
+                    if let Some(value) = source.get(*field) {
+                        target.insert((*field).to_owned(), value.clone());
+                    }
+                }
+            }
+        }
+        for field in NUMBER_FIELDS {
+            if let Some(value) = target.get_mut(*field) {
+                if let Some(parsed) = value.as_str().and_then(|text| text.trim().parse::<f64>().ok()) {
+                    *value = Value::from(parsed);
+                }
+            }
+        }
+    }
+    response
 }
 
 #[tauri::command]
@@ -1372,7 +1415,30 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fts_query, parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id};
+    use super::{fts_query, normalize_recommendations, parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id};
+
+    #[test]
+    fn normalizes_nested_recommendation_metrics_and_numeric_strings() {
+        let response = serde_json::json!({
+            "books": [{
+                "reason": "recommended",
+                "bookInfo": {
+                    "bookId": "123",
+                    "title": "Example",
+                    "readingCount": "4567",
+                    "newRating": "82",
+                    "newRatingCount": "90"
+                }
+            }]
+        });
+        let normalized = normalize_recommendations(response);
+        let book = &normalized["books"][0];
+        assert_eq!(book["bookId"], "123");
+        assert_eq!(book["title"], "Example");
+        assert_eq!(book["readingCount"], 4567.0);
+        assert_eq!(book["newRating"], 82.0);
+        assert_eq!(book["newRatingCount"], 90.0);
+    }
 
     #[test]
     fn restricts_credential_names_to_known_namespaces() {
