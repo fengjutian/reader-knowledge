@@ -176,7 +176,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         right: "10%",
         bottom: "10%",
         roam: true,
-        draggable: true,
+        draggable: false,
         label: {
           show: true,
           position: "right",

@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import Icon from "../components/Icon.astro";
 
 const features = [
   ["01", "完整同步", "同步微信读书书架、划线、想法与阅读统计，让散落的阅读记录重新归位。"],
@@ -31,9 +32,9 @@ const faqs = [
   <body>
     <a class="skip" href="#main">跳到正文</a>
     <header class="nav" data-nav>
-      <a class="brand" href="#top" aria-label="阅读者首页"><span class="brand-mark">阅</span><span>阅读者<i>·</i></span></a>
+      <a class="brand" href="#top" aria-label="阅读者首页"><span class="brand-mark"><Icon name="book-open" size={18}/></span><span>阅读者<i>·</i></span></a>
       <nav aria-label="主导航"><a href="#story">理念</a><a href="#features">功能</a><a href="#privacy">隐私</a><a href="#faq">问答</a></nav>
-      <div class="nav-actions"><button class="theme-toggle" type="button" aria-label="切换明暗主题">◐</button><a class="button small secondary" href="https://github.com/fengjutian/wxreader-knowledge" target="_blank" rel="noreferrer">GitHub ↗</a></div>
+      <div class="nav-actions"><button class="theme-toggle" type="button" aria-label="切换明暗主题"><Icon name="moon" class="moon-icon"/><Icon name="sun" class="sun-icon"/></button><a class="button small secondary" href="https://github.com/fengjutian/wxreader-knowledge" target="_blank" rel="noreferrer"><Icon name="github" size={16}/>GitHub<Icon name="arrow-up-right" size={14}/></a></div>
     </header>
 
     <main id="main">
@@ -43,14 +44,14 @@ const faqs = [
           <div class="eyebrow"><span></span>本地优先 · 为深度阅读而生</div>
           <h1>读过的每一本书，<br/><em>都成为你的思想。</em></h1>
           <p>把微信读书里的书籍、划线与想法带回本地。让散落的阅读记录变得可搜索、可关联、可追溯。</p>
-          <div class="hero-actions"><a class="button" href="#features">看看它能做什么 <b>↓</b></a><a class="button secondary" href="#privacy">了解本地优先 →</a></div>
+          <div class="hero-actions"><a class="button" href="#features">看看它能做什么 <Icon name="arrow-down" size={15}/></a><a class="button secondary" href="#privacy">了解本地优先 <Icon name="arrow-right" size={15}/></a></div>
           <small>开放源代码 · 数据自主 · 不制造信息噪音</small>
         </div>
 
         <figure class="app-preview reveal">
           <div class="window-bar"><span></span><span></span><span></span><b>阅读者 / 今日概览</b></div>
           <div class="app-shell">
-            <aside><div class="mini-brand">阅</div><i class="active"></i><i></i><i></i><i></i><i></i><i class="bottom"></i></aside>
+            <aside><div class="mini-brand"><Icon name="book-open" size={18}/></div><i class="active"></i><i></i><i></i><i></i><i></i><i class="bottom"></i></aside>
             <div class="dashboard">
               <div class="dash-head"><div><small>你的阅读宇宙</small><h3>晚上好，继续思考。</h3></div><button>同步书架</button></div>
               <div class="stats"><article><small>书架</small><strong>128</strong><span>本书</span></article><article><small>笔记</small><strong>2,460</strong><span>条记录</span></article><article><small>知识连接</small><strong>386</strong><span>条关系</span></article></div>
@@ -69,15 +70,15 @@ const faqs = [
         </article>
       </section>
 
-      <section class="features" id="features"><div class="section-label">02 / 工具箱</div><div class="section-head"><h2>阅读之后，需要的一切。<br/>除此之外，没有多余。</h2><p>围绕个人知识库构建的一组克制工具。每项能力都服务于找回信息、建立连接和形成观点。</p></div><div class="feature-grid">{features.map(([num,title,desc]) => <article><span>{num}</span><h3>{title}</h3><p>{desc}</p><b>↗</b></article>)}</div></section>
+      <section class="features" id="features"><div class="section-label">02 / 工具箱</div><div class="section-head"><h2>阅读之后，需要的一切。<br/>除此之外，没有多余。</h2><p>围绕个人知识库构建的一组克制工具。每项能力都服务于找回信息、建立连接和形成观点。</p></div><div class="feature-grid">{features.map(([num,title,desc]) => <article><span>{num}</span><h3>{title}</h3><p>{desc}</p><b><Icon name="arrow-up-right" size={19}/></b></article>)}</div></section>
 
-      <section class="privacy" id="privacy"><div class="privacy-copy"><span class="kicker">你的阅读，只属于你</span><h2>本地保存。<br/>按需连接。<br/><em>始终由你掌控。</em></h2><p>书籍、笔记、索引和分析缓存默认留在本机。即使启用远程 AI，也只发送回答当前问题所必需的少量上下文。</p><ul><li><span>✓</span> SQLite 本地数据库</li><li><span>✓</span> 系统凭据库保存密钥</li><li><span>✓</span> 同步失败不删除本地数据</li></ul></div><div class="privacy-seal"><div><span>LOCAL</span><b>你的数据<br/>你的设备</b><span>FIRST</span></div></div></section>
+      <section class="privacy" id="privacy"><div class="privacy-copy"><span class="kicker">你的阅读，只属于你</span><h2>本地保存。<br/>按需连接。<br/><em>始终由你掌控。</em></h2><p>书籍、笔记、索引和分析缓存默认留在本机。即使启用远程 AI，也只发送回答当前问题所必需的少量上下文。</p><ul><li><span><Icon name="check" size={16}/></span> SQLite 本地数据库</li><li><span><Icon name="check" size={16}/></span> 系统凭据库保存密钥</li><li><span><Icon name="check" size={16}/></span> 同步失败不删除本地数据</li></ul></div><div class="privacy-seal"><div><span>LOCAL</span><b>你的数据<br/>你的设备</b><span>FIRST</span></div></div></section>
 
-      <section class="faq" id="faq"><div><div class="section-label">03 / 常见问题</div><h2>开始之前，<br/>你可能想知道。</h2></div><div>{faqs.map(([q,a]) => <details><summary>{q}<span>＋</span></summary><p>{a}</p></details>)}</div></section>
+      <section class="faq" id="faq"><div><div class="section-label">03 / 常见问题</div><h2>开始之前，<br/>你可能想知道。</h2></div><div>{faqs.map(([q,a]) => <details><summary>{q}<span><Icon name="plus" size={19}/></span></summary><p>{a}</p></details>)}</div></section>
 
-      <section class="cta"><div class="brand-mark large">阅</div><h2>把读过的，<br/>真正变成自己的。</h2><p>从同步第一本书开始，建立一个不会遗忘、可以生长的个人知识库。</p><a class="button light" href="#top">回到开始 ↑</a></section>
+      <section class="cta"><div class="brand-mark large"><Icon name="book-open" size={28}/></div><h2>把读过的，<br/>真正变成自己的。</h2><p>从同步第一本书开始，建立一个不会遗忘、可以生长的个人知识库。</p><a class="button light" href="#top">回到开始 <Icon name="arrow-up" size={15}/></a></section>
     </main>
-    <footer><a class="brand" href="#top"><span class="brand-mark">阅</span><span>阅读者<i>·</i></span></a><span>本地优先的个人阅读知识库</span><span>© {new Date().getFullYear()} 阅读者</span></footer>
+    <footer><a class="brand" href="#top"><span class="brand-mark"><Icon name="book-open" size={18}/></span><span>阅读者<i>·</i></span></a><span>本地优先的个人阅读知识库</span><span>© {new Date().getFullYear()} 阅读者</span></footer>
     <script>
       const toggle = document.querySelector('.theme-toggle');
       toggle?.addEventListener('click', () => { const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = next; localStorage.setItem('wereader-site-theme', next); });
