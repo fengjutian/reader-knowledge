@@ -58,6 +58,7 @@ const themes: { id: Theme; name: string; description: string }[] = [
   { id: "voyage", name: "航行", description: "冷白、蓝紫与柔焦光晕" },
   { id: "minimax", name: "MiniMax", description: "珊瑚渐变、轻透卡片与鲜明能量" },
   { id: "landpack", name: "Landpack", description: "深夜黑、珊瑚光晕与编辑感衬线" },
+  { id: "parley", name: "Parley 荒原", description: "陶土山谷、油画色块与金色暖光" },
 ];
 
 const fonts: { id: FontFamily; name: string; description: string; sample: string }[] = [
