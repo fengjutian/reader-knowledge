@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -20,6 +20,10 @@ export const api = {
   fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),
   fetchDoubanBookMetadata: (bookId: string, url: string) => call<MetadataFetchResult>("fetch_douban_book_metadata", { bookId, url }),
   fetchBooksMetadata: (bookIds: string[], source: string, force = false) => call<MetadataFetchResult[]>("fetch_books_metadata", { bookIds, source, force }),
+  glossaryTerms: (query = "") => call<GlossaryTerm[]>("list_glossary_terms", { query }),
+  saveGlossaryTerm: (term: GlossaryTerm) => call<void>("save_glossary_term", { term }),
+  deleteGlossaryTerm: (id: number) => call<void>("delete_glossary_term", { id }),
+  searchWikipedia: (term: string) => call<WikipediaCandidate[]>("search_wikipedia", { term }),
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),
   bookNotes: (bookId: string) => call<Note[]>("list_book_notes", { bookId }),
   openBook: (bookId: string) => call<void>("open_book", { bookId }),

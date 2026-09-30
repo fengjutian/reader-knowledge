@@ -100,3 +100,17 @@ CREATE TABLE IF NOT EXISTS book_metadata_extras (
     PRIMARY KEY(book_id,source),
     FOREIGN KEY(book_id,source) REFERENCES book_metadata_sources(book_id,source) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS glossary_terms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term TEXT NOT NULL UNIQUE,
+    canonical_name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    definition TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_title TEXT,
+    source_url TEXT,
+    wikipedia_snapshot TEXT,
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_terms_status ON glossary_terms(status,term);

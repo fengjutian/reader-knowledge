@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type Page = "dashboard" | "books" | "discover" | "metadata" | "notes" | "ai" | "graph" | "database" | "settings";
+export type Page = "dashboard" | "books" | "discover" | "metadata" | "notes" | "ai" | "graph" | "glossary" | "database" | "settings";
 export type Theme = "light" | "dark" | "voyage" | "minimax";
 export type FontFamily = "system" | "source-han-sans" | "source-han-serif" | "lxgw-wenkai";
 interface AppState {

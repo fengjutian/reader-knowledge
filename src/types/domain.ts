@@ -47,6 +47,8 @@ export interface BookMetadataSourceDetail {
   description:string; rating?:number; ratingCount?:number; fetchedAt:string;
   authorName:string; authorAvatar:string; authorUrl:string; authorBio:string; tableOfContents:string;
 }
+export interface GlossaryTerm { id:number;term:string;canonicalName:string;aliases:string[];definition:string;source:"manual"|"wikipedia";sourceTitle:string;sourceUrl:string;wikipediaSnapshot:string;status:"confirmed"|"pending";updatedAt:number }
+export interface WikipediaCandidate { title:string;description:string;excerpt:string;url:string }
 
 export interface Note {
   id: string;

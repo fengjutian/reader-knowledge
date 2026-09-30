@@ -86,6 +86,12 @@ pub struct BookMetadataSourceDetail {
     pub author_name: String, pub author_avatar: String, pub author_url: String,
     pub author_bio: String, pub table_of_contents: String,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlossaryTerm { pub id:i64,pub term:String,pub canonical_name:String,pub aliases:Vec<String>,pub definition:String,pub source:String,pub source_title:String,pub source_url:String,pub wikipedia_snapshot:String,pub status:String,pub updated_at:i64 }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikipediaCandidate { pub title:String,pub description:String,pub excerpt:String,pub url:String }
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {

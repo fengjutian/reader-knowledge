@@ -189,6 +189,31 @@ pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>
 }
 
 #[tauri::command]
+pub fn list_glossary_terms(db:State<'_,Database>,query:Option<String>)->Result<Vec<GlossaryTerm>,AppError>{
+    let pattern=format!("%{}%",query.unwrap_or_default()); let c=db.connect()?;
+    let mut q=c.prepare("SELECT id,term,canonical_name,aliases_json,definition,source,coalesce(source_title,''),coalesce(source_url,''),coalesce(wikipedia_snapshot,''),status,updated_at FROM glossary_terms WHERE term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1 ORDER BY updated_at DESC")?;
+    Ok(q.query_map([pattern],|r|Ok(GlossaryTerm{id:r.get(0)?,term:r.get(1)?,canonical_name:r.get(2)?,aliases:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or_default(),definition:r.get(4)?,source:r.get(5)?,source_title:r.get(6)?,source_url:r.get(7)?,wikipedia_snapshot:r.get(8)?,status:r.get(9)?,updated_at:r.get(10)?}))?.collect::<Result<Vec<_>,_>>()?)
+}
+
+#[tauri::command]
+pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),AppError>{
+    if term.term.trim().is_empty()||term.definition.trim().is_empty(){return Err(AppError::Message("名词和解释不能为空".into()));}
+    let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    db.connect()?.execute("INSERT INTO glossary_terms(id,term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at) VALUES(nullif(?1,0),?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(term) DO UPDATE SET canonical_name=excluded.canonical_name,aliases_json=excluded.aliases_json,definition=excluded.definition,source=excluded.source,source_title=excluded.source_title,source_url=excluded.source_url,wikipedia_snapshot=excluded.wikipedia_snapshot,status=excluded.status,updated_at=excluded.updated_at",rusqlite::params![term.id,term.term.trim(),term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),term.source,term.source_title,term.source_url,term.wikipedia_snapshot,term.status,now])?; Ok(())
+}
+
+#[tauri::command]
+pub fn delete_glossary_term(db:State<'_,Database>,id:i64)->Result<(),AppError>{db.connect()?.execute("DELETE FROM glossary_terms WHERE id=?1",[id])?;Ok(())}
+
+#[tauri::command]
+pub async fn search_wikipedia(term:String)->Result<Vec<WikipediaCandidate>,AppError>{
+    let client=reqwest::Client::builder().user_agent("wereader/0.1 personal knowledge app").timeout(std::time::Duration::from_secs(12)).build()?;
+    let value:Value=client.get("https://zh.wikipedia.org/w/rest.php/v1/search/page").query(&[("q",term.as_str()),("limit","5")]).send().await?.error_for_status()?.json().await?;
+    let pages=value.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
+    Ok(pages.into_iter().filter_map(|page|{let title=page.get("title")?.as_str()?.to_owned();let description=page.get("description").and_then(Value::as_str).unwrap_or("").to_owned();let excerpt=page.get("excerpt").and_then(Value::as_str).unwrap_or("").replace("<span class=\"searchmatch\">","").replace("</span>","");let url=format!("https://zh.wikipedia.org/wiki/{}",title.replace(' ',"_"));Some(WikipediaCandidate{title,description,excerpt,url})}).collect())
+}
+
+#[tauri::command]
 pub fn get_book(db: State<'_, Database>, book_id: String) -> Result<BookDetail, AppError> {
     let c = db.connect()?;
     c.query_row(
@@ -709,6 +734,14 @@ fn metadata_context(db: &Database, book_ids: &[String]) -> Result<String, AppErr
     Ok(context)
 }
 
+fn glossary_context(db:&Database,text:&str)->Result<String,AppError>{
+    let c=db.connect()?;let mut q=c.prepare("SELECT term,canonical_name,aliases_json,definition,source,coalesce(source_url,'') FROM glossary_terms WHERE status='confirmed' ORDER BY updated_at DESC")?;
+    let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))?;
+    let mut result=String::new();let mut index=1;
+    for row in rows {let(term,name,aliases,definition,source,url)=row?;let aliases=serde_json::from_str::<Vec<String>>(&aliases).unwrap_or_default();if !text.contains(&term)&&!aliases.iter().any(|alias|text.contains(alias)){continue;}result.push_str(&format!("[W{index}] 名词：{}\n解释：{}\n来源：{}{}\n\n",if name.is_empty(){&term}else{&name},definition,if source=="wikipedia"{"中文维基百科"}else{"人工编辑"},if url.is_empty(){String::new()}else{format!("（{url}）")}));index+=1;if index>8{break;}}
+    Ok(result)
+}
+
 #[tauri::command]
 pub fn save_ai_settings(
     db: State<'_, Database>,
@@ -797,6 +830,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     }
     let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
     let metadata = metadata_context(&db, &metadata_book_ids)?;
+    let glossary = glossary_context(&db,&format!("{}\n{}",question,context))?;
     let system = "你是 wereader 的个人阅读知识助手。阅读笔记是观点回答的唯一证据；书籍元数据只能作为背景信息。必须区分书籍原文划线、用户自己的想法和元数据；不得把简介或主题当成用户观点或书中论证；不同元数据来源不得合并成一个事实。每个重要观点结论使用 [数字] 标注笔记来源；证据不足时必须明确说明。";
     let task = match request.mode.as_str() {
         "summary" => "任务类型：单书总结。提炼主题、核心观点和用户想法，不要逐条复述。",
@@ -804,8 +838,9 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         _ => "任务类型：基于阅读知识库回答问题。对于宽泛主题，应综合尽可能多的相关书籍与笔记，先说明知识库覆盖范围，再按主题组织回答，避免只围绕单本书展开。",
     };
     let prompt = format!(
-        "{}\n\n以下是按来源独立提供的书籍背景（不可作为观点证据）：\n\n{}\n以下是检索到的笔记证据：\n\n{}\n用户问题：{}",
+        "{}\n\n以下是已确认的名词解释（仅作背景；引用格式为 [W数字]）：\n\n{}\n以下是按来源独立提供的书籍背景（不可作为观点证据）：\n\n{}\n以下是检索到的笔记证据：\n\n{}\n用户问题：{}",
         task,
+        glossary,
         metadata,
         context,
         question.trim()
