@@ -7,9 +7,14 @@ import type { RecommendedBook } from "../types/domain";
 
 let recommendationsCache: RecommendedBook[] | null = null;
 
+function numberOf(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function ratingOf(book: RecommendedBook) {
-  if (!book.newRating) return "暂无评分";
-  const rating = book.newRating > 10 ? book.newRating / 10 : book.newRating;
+  const rawRating = numberOf(book.newRating);
+  if (!rawRating) return "暂无评分";
+  const rating = rawRating > 10 ? rawRating / 10 : rawRating;
   return rating.toFixed(1);
 }
 
@@ -24,7 +29,7 @@ export function Discover() {
     append ? setLoadingMore(true) : setLoading(true);
     setError("");
     try {
-      const maxIdx = append && books.length ? books[books.length - 1].searchIdx : 0;
+      const maxIdx = append && books.length ? numberOf(books[books.length - 1].searchIdx) : 0;
       const result = await api.recommendations(12, maxIdx);
       const next = Array.isArray(result.books) ? result.books : [];
       const merged = append
@@ -49,7 +54,7 @@ export function Discover() {
   }, [selectedBook]);
 
   const openBook = (book: RecommendedBook) => {
-    if (book.deepLink) void api.openExternalUrl(book.deepLink);
+    if (book.bookId) void api.openBook(book.bookId);
   };
 
   return <>
@@ -67,7 +72,7 @@ export function Discover() {
               <div className="recommend-meta"><span>{book.category || "为你推荐"}</span>{book.newRatingDetail?.title && <em>{book.newRatingDetail.title}</em>}</div>
               <h2>{book.title}</h2><p className="recommend-author">{book.author || "作者未署名"}</p>
               <p className="recommend-reason">{book.reason || book.intro || "与你的阅读偏好相契合"}</p>
-              <footer><span><Star size={13}/>{ratingOf(book)}</span>{book.readingCount > 0 && <span><Users size={13}/>{book.readingCount.toLocaleString()} 人在读</span>}{book.deepLink && <ChevronRight size={16}/>}</footer>
+              <footer><span><Star size={13}/>{ratingOf(book)}</span>{numberOf(book.readingCount) > 0 && <span><Users size={13}/>{numberOf(book.readingCount).toLocaleString()} 人在读</span>}{book.bookId && <ChevronRight size={16}/>}</footer>
             </div>
           </article>)}
         </section>
@@ -82,11 +87,11 @@ export function Discover() {
             <div className="recommend-drawer__cover"><span>{selectedBook.title}</span>{selectedBook.cover && <img src={selectedBook.cover} alt={`${selectedBook.title}封面`} referrerPolicy="no-referrer"/>}</div>
             <div><div className="recommend-meta"><span>{selectedBook.category || "为你推荐"}</span>{selectedBook.newRatingDetail?.title && <em>{selectedBook.newRatingDetail.title}</em>}</div><h2 id="recommend-drawer-title">{selectedBook.title}</h2><p>{selectedBook.author || "作者未署名"}</p></div>
           </div>
-          <div className="recommend-drawer__stats"><span><Star size={15}/><b>{ratingOf(selectedBook)}</b><small>{selectedBook.newRatingCount > 0 ? `${selectedBook.newRatingCount.toLocaleString()} 人评分` : "微信读书评分"}</small></span><span><Users size={15}/><b>{selectedBook.readingCount.toLocaleString()}</b><small>人在读</small></span></div>
+          <div className="recommend-drawer__stats"><span><Star size={15}/><b>{ratingOf(selectedBook)}</b><small>{numberOf(selectedBook.newRatingCount) > 0 ? `${numberOf(selectedBook.newRatingCount).toLocaleString()} 人评分` : "微信读书评分"}</small></span><span><Users size={15}/><b>{numberOf(selectedBook.readingCount).toLocaleString()}</b><small>人在读</small></span></div>
           {selectedBook.reason && <section><label>推荐理由</label><p>{selectedBook.reason}</p></section>}
           <section><label>内容简介</label><p>{selectedBook.intro || "这本书暂时没有简介。"}</p></section>
         </div>
-        <footer><Button disabled={!selectedBook.deepLink} icon={<ExternalLink size={15}/>} onClick={() => openBook(selectedBook)}>打开微信读书</Button></footer>
+        <footer><Button disabled={!selectedBook.bookId} icon={<ExternalLink size={15}/>} onClick={() => openBook(selectedBook)}>打开微信读书</Button></footer>
       </aside>
     </div>}
   </>;

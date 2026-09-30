@@ -293,9 +293,8 @@
 .chapter-group__header span { color:var(--muted);font-size:11px; }
 @keyframes drawer-in { from { transform:translateX(28px);opacity:.6; } to { transform:translateX(0);opacity:1; } }
 
-.page:has(.ai-page) { height:100vh;overflow:hidden;padding-bottom:20px; }
+.page:has(.ai-page) { height:100vh;overflow:hidden;padding-top:20px;padding-bottom:20px; }
 .ai-page { height:100%;display:flex;min-height:0;flex-direction:column;overflow:hidden; }
-.ai-page > .page-header { flex:none; }
 .ai-layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -303,14 +302,22 @@
   flex:1;
   min-height:0;
   overflow:hidden;
+  transition:grid-template-columns .2s ease,gap .2s ease;
 }
+.ai-layout--history-collapsed { grid-template-columns:42px minmax(0,1fr);gap:14px; }
 .ai-history {
+  position:relative;
   min-width: 0;
   padding-right: 16px;
-  overflow-y:auto;
-  overscroll-behavior:contain;
+  overflow:hidden;
   border-right: 1px solid var(--border);
 }
+.ai-history__content { height:100%;overflow-y:auto;overscroll-behavior:contain;padding-top:42px; }
+.ai-history__collapse { position:absolute;z-index:2;top:0;right:8px;display:grid;width:32px;height:32px;padding:0;place-items:center;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--secondary); }
+.ai-history__collapse:hover { color:var(--text);background:var(--surface-hover); }
+.ai-history.is-collapsed { padding-right:8px; }
+.ai-history.is-collapsed .ai-history__content { visibility:hidden; }
+.ai-history.is-collapsed .ai-history__collapse { right:4px;transform:rotate(180deg); }
 .ai-history__new {
   display: flex;
   align-items: center;
@@ -337,20 +344,19 @@
 .ai-history__delete:hover { background:var(--accent-soft);color:var(--accent); }
 .ai-history__empty { margin:14px 8px;color:var(--muted);font-size:12px;line-height:1.6; }
 .ai-wrap {
+  display:flex;
+  flex-direction:column;
   width: 100%;
   max-width: none;
   margin: 0;
   min-height:0;
-  padding:0 10px 12px 0;
-  overflow-y:auto;
-  overscroll-behavior:contain;
-  scrollbar-gutter:stable;
+  padding:0 10px 0 0;
+  overflow:hidden;
   min-width: 0;
 }
+.ai-controls { flex:none; }
+.ai-content { display:flex;min-height:0;flex:1;flex-direction:column;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding:0 6px 16px 0;scrollbar-gutter:stable; }
 .ai-modes {
-  position: sticky;
-  top: 0;
-  z-index: 6;
   display: flex;
   gap: 4px;
   width: max-content;
@@ -436,8 +442,11 @@
 .answer__sources-head span { color:var(--muted);font-size:12px; }
 .ai-empty { margin: 12vh auto auto; }
 .ask-box {
-  bottom: 12px;
+  position:relative;
+  bottom:auto;
+  flex:none;
   width: min(920px, 100%);
+  margin-top:12px;
   margin-right: auto;
   margin-left: auto;
   padding: 13px 14px 9px 18px;
