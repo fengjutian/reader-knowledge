@@ -8,7 +8,8 @@ import type { RecommendedBook } from "../types/domain";
 let recommendationsCache: RecommendedBook[] | null = null;
 
 function numberOf(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : 0;
+  return Number.isFinite(number) ? number : 0;
 }
 
 function ratingOf(book: RecommendedBook) {
