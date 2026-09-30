@@ -857,3 +857,64 @@ body { background-color:var(--bg); }
 .main-content > .page {
   padding: 20px;
 }
+
+/* Compact fixed-page footer: the general page inset above must not add a
+   second strip below pagination. */
+.main-content > .page.page--books {
+  padding-bottom: 0;
+}
+
+.books-pagination {
+  min-height: 52px;
+  padding: 8px 8px 8px 0;
+}
+
+/* Slim, unobtrusive scrollbars modelled after macOS overlay scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 28%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 28px;
+  min-height: 28px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 44%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Do not reserve a permanent scrollbar lane; macOS-style scrollbars float
+   over the scrolling surface and appear only when needed. */
+.dashboard-module,
+.reading-dashboard__scroll,
+.page--notes > .notes-content,
+.ai-content,
+.page--books .books-scroll,
+.page:has(.settings) .settings,
+.page--database > .database-module,
+.page--database .database-records,
+.discover-scroll {
+  scrollbar-gutter: auto;
+}

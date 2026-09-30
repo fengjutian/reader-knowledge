@@ -39,6 +39,15 @@ export function KnowledgeGraph() {
   const semanticEdgesRef = useRef<Edge[] | null>(null);
   const cacheKeyRef = useRef("");
   const pickerRef = useRef<HTMLDivElement>(null);
+  const wasActiveRef = useRef(false);
+  useEffect(() => {
+    if (isActivePage && !wasActiveRef.current) {
+      setSelectedId(undefined);
+      setEdgeId(undefined);
+      setPickerOpen(false);
+    }
+    wasActiveRef.current = isActivePage;
+  }, [isActivePage]);
   function mergeExternalEdges(edges: Edge[]) {
     const merged = new Map((semanticEdgesRef.current ?? []).map(edge => [edge.id, edge]));
     edges.forEach(edge => merged.set(edge.id, edge));

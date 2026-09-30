@@ -4,7 +4,7 @@ import type { Book } from "../../types/domain";
 
 type GraphNode = Book & { x: number; y: number };
 type GraphEdge = { id: string; from: string; to: string; score: number; relation: string; semanticRelation?: string };
-type Node3D = GraphNode & { id: string; relationCount: number };
+type Node3D = GraphNode & { id: string; z?: number; fx?: number; fy?: number; fz?: number; relationCount: number };
 type Link3D = GraphEdge & { source: string; target: string };
 const semanticColors: Record<string, string> = { agreement: "#4f8a64", conflict: "#b74335", complementary: "#4f78a8", causal: "#8b6aa8", application: "#3f8790", same_concept: "#a06b3b", uncertain: "#a39b90" };
 const clusterColors = ["#a84435", "#4d7185", "#66805d", "#a8783f", "#77638c", "#397b78", "#9a5d72", "#6f7450"];
@@ -20,6 +20,19 @@ function endpointId(value: unknown) {
   return typeof value === "object" && value && "id" in value ? String(value.id) : String(value);
 }
 
+function seededUnit(value: string, salt: number) {
+  let hash = salt | 0;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (Math.abs(hash) % 100000) / 100000;
+}
+
+function spherePoint(index: number, total: number, radius: number) {
+  const y = 1 - ((index + .5) / Math.max(1, total)) * 2;
+  const ring = Math.sqrt(Math.max(0, 1 - y * y));
+  const angle = Math.PI * (3 - Math.sqrt(5)) * index;
+  return { x: Math.cos(angle) * ring * radius, y: y * radius, z: Math.sin(angle) * ring * radius };
+}
+
 export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest, onNodeClick, onNodeOpen, onEdgeClick }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -32,6 +45,8 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphMethods<Node3D, Link3D> | undefined>(undefined);
+  const autoFitTimerRef = useRef<number | undefined>(undefined);
+  const userInteractedRef = useRef(false);
   const [size, setSize] = useState({ width: 1, height: 1 });
   const [hoveredId, setHoveredId] = useState<string>();
   useEffect(() => {
@@ -41,30 +56,63 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
     update();
     const observer = new ResizeObserver(update);
     observer.observe(host);
-    return () => observer.disconnect();
+    const stopAutoFit = () => {
+      userInteractedRef.current = true;
+      if (autoFitTimerRef.current !== undefined) window.clearInterval(autoFitTimerRef.current);
+      autoFitTimerRef.current = undefined;
+    };
+    host.addEventListener("wheel", stopAutoFit, { passive: true });
+    host.addEventListener("pointerdown", stopAutoFit, { passive: true });
+    return () => {
+      observer.disconnect();
+      host.removeEventListener("wheel", stopAutoFit);
+      host.removeEventListener("pointerdown", stopAutoFit);
+    };
   }, []);
   useEffect(() => { if (fitRequest > 0) graphRef.current?.zoomToFit(500, 70); }, [fitRequest]);
   const data = useMemo<GraphData<Node3D, Link3D>>(() => {
     const degree = new Map<string, number>();
     edges.forEach(edge => { degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1); degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1); });
+    const isolatedTotal = nodes.reduce((total, node) => total + (degree.has(node.id) ? 0 : 1), 0);
+    let isolatedIndex = 0;
     return {
-      nodes: nodes.map(node => ({ ...node, id: node.id, relationCount: degree.get(node.id) ?? 0 })),
+      nodes: nodes.map(node => {
+        const relationCount = degree.get(node.id) ?? 0;
+        if (!relationCount) {
+          const shell = spherePoint(isolatedIndex++, isolatedTotal, 620 + seededUnit(node.id, 17) * 24);
+          return { ...node, id: node.id, relationCount, ...shell, fx: shell.x, fy: shell.y, fz: shell.z };
+        }
+        const y = seededUnit(node.id, 31) * 2 - 1;
+        const angle = seededUnit(node.id, 73) * Math.PI * 2;
+        const radius = 70 + seededUnit(node.id, 109) * 150;
+        const ring = Math.sqrt(Math.max(0, 1 - y * y));
+        return { ...node, id: node.id, relationCount, x: Math.cos(angle) * ring * radius, y: y * radius, z: Math.sin(angle) * ring * radius };
+      }),
       links: edges.map(edge => ({ ...edge, source: edge.from, target: edge.to })),
     };
   }, [nodes, edges]);
   useEffect(() => {
     if (!data.nodes.length) return;
+    userInteractedRef.current = false;
     const startRotation = window.setTimeout(() => {
       const controls = graphRef.current?.controls() as { autoRotate?: boolean; autoRotateSpeed?: number } | undefined;
       if (controls) { controls.autoRotate = true; controls.autoRotateSpeed = .38; }
     }, 400);
     let fitCount = 0;
-    const keepFramed = window.setInterval(() => {
+    autoFitTimerRef.current = window.setInterval(() => {
+      if (userInteractedRef.current) return;
       graphRef.current?.zoomToFit(450, 90);
       fitCount += 1;
-      if (fitCount >= 15) window.clearInterval(keepFramed);
+      if (fitCount >= 15 && autoFitTimerRef.current !== undefined) {
+        window.clearInterval(autoFitTimerRef.current);
+        autoFitTimerRef.current = undefined;
+      }
     }, 2000);
-    return () => { window.clearTimeout(startRotation); window.clearInterval(keepFramed); };
+    return () => {
+      window.clearTimeout(startRotation);
+      if (autoFitTimerRef.current !== undefined) window.clearInterval(autoFitTimerRef.current);
+      autoFitTimerRef.current = undefined;
+    };
   }, [data]);
   return <div ref={hostRef} className="force-graph-3d">
     <ForceGraph3D<Node3D, Link3D>
@@ -85,7 +133,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       warmupTicks={120}
       cooldownTime={30000}
       nodeLabel={node => `<div class="graph-3d-tooltip"><strong>${node.title}</strong>${node.author ? `<span>${node.author}</span>` : ""}<small>${node.category || "未分类"} · ${node.relationCount} 个关系</small></div>`}
-      nodeVal={node => node.id === focusId ? 2.8 : node.id === selectedId ? 2.3 : node.relationCount ? .3 + Math.min(1.25, Math.log2(node.relationCount + 1) * .16) : .035}
+      nodeVal={.12}
       nodeColor={node => node.id === focusId ? "#ff493d" : node.id === selectedId ? "#28231f" : node.relationCount ? categoryColor(node) : "#bdb6aa"}
       nodeOpacity={.86}
       nodeResolution={7}
@@ -97,9 +145,9 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
       linkWidth={link => {
         const source = endpointId(link.source);
         const target = endpointId(link.target);
-        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.25 : .035 + Math.min(.18, link.score * .28);
+        return hoveredId && (source === hoveredId || target === hoveredId) ? 1.1 : .11;
       }}
-      linkOpacity={.065}
+      linkOpacity={.18}
       linkResolution={2}
       linkDirectionalParticles={link => {
         const source = endpointId(link.source);
@@ -118,7 +166,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, fitRequest
         return hoveredId && (source === hoveredId || target === hoveredId) ? 2.2 : 1.15;
       }}
       linkDirectionalParticleColor={link => link.semanticRelation ? semanticColors[link.semanticRelation] ?? "#9c9284" : link.relation.includes("作者") ? "#587184" : "#b84b38"}
-      onEngineStop={() => graphRef.current?.zoomToFit(800, 90)}
+      onEngineStop={() => { if (!userInteractedRef.current) graphRef.current?.zoomToFit(800, 90); }}
       onNodeHover={node => setHoveredId(node ? String(node.id) : undefined)}
       onNodeClick={(node: NodeObject<Node3D>, event) => { const id = String(node.id); if (event.detail > 1) onNodeOpen(id); else onNodeClick(id); }}
       onLinkClick={(link: LinkObject<Node3D, Link3D>) => onEdgeClick(link.id)}
