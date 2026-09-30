@@ -32,6 +32,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | undefined>(undefined);
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
   const callbacksRef = useRef({ onNodeClick, onNodeOpen, onEdgeClick });
   callbacksRef.current = { onNodeClick, onNodeOpen, onEdgeClick };
   const data = useMemo(() => {
@@ -257,12 +258,25 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
     chartRef.current?.dispatchAction({ type: "restore" });
   }, [fitRequest]);
 
-  useEffect(() => setZoom(1), [selectedId]);
+  useEffect(() => { zoomRef.current = 1; setZoom(1); }, [selectedId]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * .0012);
+      changeZoom(zoomRef.current * factor);
+    };
+    host.addEventListener("wheel", handleWheel, { passive: false });
+    return () => host.removeEventListener("wheel", handleWheel);
+  }, [selectedId]);
 
   function changeZoom(nextValue: number) {
     const chart = chartRef.current;
     if (!chart) return;
     const next = Math.max(.35, Math.min(4, Number(nextValue.toFixed(2))));
+    zoomRef.current = next;
     setZoom(next);
     if (selectedId) chart.setOption({ series: [{ zoom: next }] } as never);
     else chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, zoom: next });
@@ -271,6 +285,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
   function resetView() {
     const chart = chartRef.current;
     if (!chart) return;
+    zoomRef.current = 1;
     setZoom(1);
     if (selectedId) chart.setOption({ series: [{ zoom: 1, center: undefined }] } as never);
     else chart.dispatchAction({ type: "graphGLRoam", seriesIndex: 1, zoom: 1, offset: [0, 0] });
