@@ -3,7 +3,24 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api/tauri";
 import type { SyncProgress } from "../types/domain";
 
-interface SyncState extends SyncProgress { run: () => Promise<void> }
+/** 同步成功后递增的单调版本号。页面订阅它来决定何时重新拉取数据。 */
+export const LIBRARY_UPDATED_EVENT = "library-updated";
+
+export interface LibraryUpdatedDetail {
+  source: string;
+  books: number;
+  highlights: number;
+  thoughts: number;
+  completedAt: number;
+}
+
+interface SyncState extends SyncProgress {
+  /** 最近一次成功同步的版本号。0 表示本次会话还没有成功同步过。 */
+  revision: number;
+  /** 最近一次成功同步完成的时间戳。 */
+  completedAt?: number;
+  run: () => Promise<void>;
+}
 
 function syncErrorMessage(error: unknown) {
   const message = typeof error === "string" ? error : error instanceof Error ? error.message : "同步失败";
@@ -12,8 +29,9 @@ function syncErrorMessage(error: unknown) {
     : message;
 }
 
-export const useSyncStore = create<SyncState>((set) => ({
+export const useSyncStore = create<SyncState>((set, get) => ({
   status: "idle", progress: 0, books: 0, highlights: 0, thoughts: 0, processedBooks: 0, totalBooks: 0,
+  revision: 0,
   run: async () => {
     set({ status: "reading", progress: 0, processedBooks: 0, totalBooks: 0, message: "正在读取微信读书…" });
     const unlisten = await listen<SyncProgress>("sync-progress", event => {
@@ -28,7 +46,22 @@ export const useSyncStore = create<SyncState>((set) => ({
       });
     });
     try {
-      set(await api.sync());
+      const result = await api.sync();
+      // 只有成功完成后才推进 revision 并广播事件，失败时保留上一次成功数据。
+      const completedAt = Date.now();
+      const revision = get().revision + 1;
+      set({ ...result, revision, completedAt });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent<LibraryUpdatedDetail>(LIBRARY_UPDATED_EVENT, {
+          detail: {
+            source: "weread",
+            books: result.books,
+            highlights: result.highlights,
+            thoughts: result.thoughts,
+            completedAt,
+          },
+        }));
+      }
     } catch (error) {
       set({ status: "failed", progress: 0, message: syncErrorMessage(error) });
     } finally {
@@ -36,4 +69,3 @@ export const useSyncStore = create<SyncState>((set) => ({
     }
   },
 }));
-

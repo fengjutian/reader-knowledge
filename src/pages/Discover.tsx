@@ -27,7 +27,7 @@ export function Discover() {
   const [selectedBook, setSelectedBook] = useState<RecommendedBook | null>(null);
 
   const load = useCallback(async (append = false) => {
-    append ? setLoadingMore(true) : setLoading(true);
+    if (append) setLoadingMore(true); else setLoading(true);
     setError("");
     try {
       const maxIdx = append && books.length ? numberOf(books[books.length - 1].searchIdx) : 0;

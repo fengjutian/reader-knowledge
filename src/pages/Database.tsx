@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Database as DatabaseIcon, HardDrive, Highlighter, Lightbulb, RefreshCw, Search, TableProperties } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { BookOpen, Database as DatabaseIcon, HardDrive, Highlighter, LibraryBig, Lightbulb, NotebookText, RefreshCw, Search, TableProperties } from "lucide-react";
 import { api } from "../api/tauri";
 import { Button } from "../components/ui/Button";
+import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import type { DatabaseOverview, DatabaseRows } from "../types/domain";
 
 const browsable = [
-  { id: "books", label: "书籍", icon: BookOpen },
+  { id: "books", label: "书架", icon: BookOpen },
   { id: "highlights", label: "划线", icon: Highlighter },
   { id: "thoughts", label: "想法", icon: Lightbulb },
+  { id: "book_metadata_sources", label: "书籍元数据", icon: LibraryBig },
+  { id: "glossary_terms", label: "名词库", icon: NotebookText },
   { id: "sync_sessions", label: "同步记录", icon: RefreshCw },
 ] as const;
+const sourceLabels: Record<string, string> = { weread: "微信读书", douban: "豆瓣", open_library: "Open Library", google_books: "Google Books", manual: "手动" };
 const formatBytes = (bytes: number) => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 export function DatabasePage() {
@@ -22,8 +26,8 @@ export function DatabasePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const limit = 40;
-  const loadOverview = () => api.databaseOverview().then(setOverview);
-  useEffect(() => { loadOverview().catch(reason => setError(String(reason))); }, []);
+  const loadOverview = useCallback(() => api.databaseOverview().then(setOverview), []);
+  useEffect(() => { loadOverview().catch(reason => setError(String(reason))); }, [loadOverview]);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -34,6 +38,15 @@ export function DatabasePage() {
     return () => { active = false; window.clearTimeout(timer); };
   }, [table, query, page]);
   useEffect(() => setPage(0), [table, query]);
+  // 同步完成后刷新概览；当前表格的重新拉取由 table/query/page 之外的一次显式触发完成。
+  const reloadCurrentTable = useCallback(() => {
+    api.databaseRows(table, query, limit, page * limit).then(setData).catch(reason => setError(String(reason)));
+  }, [table, query, page]);
+  useLibraryRevision(useCallback(() => {
+    loadOverview().catch(reason => setError(String(reason)));
+    reloadCurrentTable();
+  }, [loadOverview, reloadCurrentTable]));
+
   const maxCategory = useMemo(() => Math.max(1, ...(overview?.categories.map(item => item.count) ?? [])), [overview]);
   const activeLabel = browsable.find(item => item.id === table)?.label ?? "数据";
   const refresh = () => {
@@ -41,6 +54,7 @@ export function DatabasePage() {
     Promise.all([loadOverview(), api.databaseRows(table, query, limit, page * limit).then(setData)])
       .catch(reason => setError(String(reason))).finally(() => setLoading(false));
   };
+  const metadata = overview?.metadata;
 
   return <>
     <div className="database-topbar">
@@ -57,9 +71,16 @@ export function DatabasePage() {
       <article><span><HardDrive size={18}/></span><div><strong>{overview ? formatBytes(overview.sizeBytes) : "—"}</strong><small>数据库大小</small></div></article>
       <article><span><RefreshCw size={18}/></span><div><strong className="database-sync-time">{overview?.lastSyncedAt || "尚未同步"}</strong><small>最近同步</small></div></article>
     </section>
+    <section className="database-panel"><header><div><span className="eyebrow">Metadata</span><h2>元数据与向量状态</h2></div><LibraryBig size={18}/></header><div className="database-table-stats">
+      <div><span>微信读书元数据<code>source = weread</code></span><strong>{(metadata?.weread ?? 0).toLocaleString()}</strong></div>
+      <div><span>豆瓣元数据<code>source = douban</code></span><strong>{(metadata?.douban ?? 0).toLocaleString()}</strong></div>
+      <div><span>缺失元数据书籍<code>is_deleted = 0</code></span><strong>{(metadata?.missing ?? 0).toLocaleString()}</strong></div>
+      <div><span>向量索引<code>note_embeddings</code></span><strong>{(metadata?.vectors ?? 0).toLocaleString()}</strong></div>
+      <div><span>图谱分析缓存<code>relation_analysis_cache</code></span><strong>{(metadata?.relationCache ?? 0).toLocaleString()}</strong></div>
+    </div></section>
     <div className="database-insights">
       <section className="database-panel"><header><div><span className="eyebrow">SQLite tables</span><h2>数据表概览</h2></div><DatabaseIcon size={18}/></header><div className="database-table-stats">{overview?.tables.map(item => <div key={item.name}><span>{item.label}<code>{item.name}</code></span><strong>{item.rows.toLocaleString()}</strong></div>)}</div></section>
-      <section className="database-panel"><header><div><span className="eyebrow">Distribution</span><h2>书籍分类</h2></div></header><div className="database-bars">{overview?.categories.length ? overview.categories.map(item => <div key={item.label}><div><span>{item.label}</span><strong>{item.count}</strong></div><i><b style={{ width: `${Math.max(4, item.count / maxCategory * 100)}%` }}/></i></div>) : <p>同步书籍后显示分类分布</p>}</div></section>
+      <section className="database-panel"><header><div><span className="eyebrow">Distribution</span><h2>书架分类</h2></div></header><div className="database-bars">{overview?.categories.length ? overview.categories.map(item => <div key={item.label}><div><span>{item.label}</span><strong>{item.count}</strong></div><i><b style={{ width: `${Math.max(4, item.count / maxCategory * 100)}%` }}/></i></div>) : <p>同步书架后显示分类分布</p>}</div></section>
     </div>
     </div>}
     {module === "browser" && <div className="database-module">
@@ -67,10 +88,10 @@ export function DatabasePage() {
       <div className="database-browser__head"><div><span className="eyebrow">Data browser</span><h2>记录浏览</h2></div><label><Search size={15}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`搜索${activeLabel}…`}/></label></div>
       <nav>{browsable.map(item => <button key={item.id} className={table === item.id ? "active" : ""} onClick={() => setTable(item.id)}><item.icon size={15}/>{item.label}<span>{overview?.tables.find(stat => stat.name === item.id)?.rows ?? 0}</span></button>)}</nav>
       <div className="database-records">
-        <div className="database-records__header"><span>内容</span><span>来源 / 分类</span><span>章节 / 详情</span><span>时间</span></div>
+        <div className="database-records__header"><span>内容</span><span>来源 / 分类</span><span>作者 / 详情</span><span>时间</span></div>
         {loading && <div className="database-empty">正在读取数据…</div>}
         {!loading && !data.rows.length && <div className="database-empty">没有找到记录</div>}
-        {!loading && data.rows.map(row => <div className="database-record" key={row.id}><strong title={row.primary}>{row.primary}</strong><span title={row.secondary}>{row.secondary || "—"}</span><span title={row.detail}>{row.detail || "—"}</span><time>{row.createdAt || "—"}</time></div>)}
+        {!loading && data.rows.map(row => <div className="database-record" key={row.id}><strong title={row.primary}>{row.primary}</strong><span title={row.secondary}>{sourceLabels[row.secondary] ?? (row.secondary || "—")}</span><span title={row.detail}>{row.detail || "—"}</span><time>{row.createdAt || "—"}</time></div>)}
       </div>
       <footer><span>共 {data.total.toLocaleString()} 条，第 {data.total ? page + 1 : 0} / {Math.ceil(data.total / limit)} 页</span><div><button disabled={page === 0 || loading} onClick={() => setPage(value => value - 1)}>上一页</button><button disabled={(page + 1) * limit >= data.total || loading} onClick={() => setPage(value => value + 1)}>下一页</button></div></footer>
     </section>

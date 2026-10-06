@@ -1,11 +1,13 @@
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Eraser, Focus, GitCompareArrows, Globe2, Link2, Maximize2, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/tauri";
 import { KnowledgeGraphCanvas } from "../components/graph/KnowledgeGraphCanvas";
 import { KnowledgeGraph3D } from "../components/graph/KnowledgeGraph3D";
+import { Button } from "../components/ui/Button";
+import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import { useAppStore } from "../stores/app";
-import { clearGraphCache, graphCacheKey, readGraphCache, writeGraphCache } from "../utils/graphCache";
-import type { Book, Note, RelationAnalysis, RelationKind } from "../types/domain";
+import { clearGraphCache, clearLocalGraphCache, clearSemanticGraphCache, graphCacheKey, readGraphCache, semanticCacheKey as buildSemanticCacheKey, writeGraphCache } from "../utils/graphCache";
+import type { Book, Note, RelationAnalysis, RelationKind, SemanticRelation } from "../types/domain";
 
 type Node = Book & { x: number; y: number };
 type Evidence = { bookId: string; text: string; noteId: string };
@@ -16,15 +18,18 @@ type WorkerStrength = Exclude<Strength, "standard">;
 type RelationFilter = "all" | "content" | "author" | "analyzable";
 type RelationSource = "all" | "local" | "semantic" | "weread" | "douban";
 const W = 1000, H = 650;
-const SEMANTIC_RELATIONS_CACHE_PREFIX = "semantic-relations:v3";
 const short = (value: string, size: number) => value.length > size ? `${value.slice(0, size)}…` : value;
 const relationLabels: Record<RelationKind, string> = { same_concept: "同义概念", agreement: "观点一致", conflict: "观点冲突", complementary: "观点互补", causal: "因果关系", application: "理论与应用", uncertain: "证据不足" };
 const workerStrength = (strength: Strength): WorkerStrength => strength === "standard" ? "all" : strength;
+/** 元数据关系目前只支持微信读书与豆瓣，图谱中据此明确说明。 */
+const METADATA_SOURCES = ["weread", "douban"] as const;
 
 export function KnowledgeGraph() {
   const [books, setBooks] = useState<Book[]>([]), [notes, setNotes] = useState<Note[]>([]), [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false), [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
-  const [semanticLoading, setSemanticLoading] = useState(false), [semanticEnabled, setSemanticEnabled] = useState(false);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [embeddingReady, setEmbeddingReady] = useState(false);
   const [semanticError, setSemanticError] = useState("");
   const [error, setError] = useState(""), [query, setQuery] = useState(""), [strength, setStrength] = useState<Strength>("all");
   const [relationFilter, setRelationFilter] = useState<RelationFilter>("all");
@@ -61,19 +66,95 @@ export function KnowledgeGraph() {
     }
     wasActiveRef.current = isActivePage;
   }, [isActivePage]);
-  function mergeExternalEdges(edges: Edge[]) {
+  const mergeExternalEdges = useCallback((edges: Edge[]) => {
     const merged = new Map((semanticEdgesRef.current ?? []).map(edge => [edge.id, edge]));
     edges.forEach(edge => merged.set(edge.id, edge));
     const values = [...merged.values()];
     semanticEdgesRef.current = values.length ? values : null;
     setGraph(current => ({ ...current, edges: combinedEdges(values.length ? values : null) }));
-  }
-  const semanticCacheKey = (currentBooks = books, currentNotes = notes) => `${SEMANTIC_RELATIONS_CACHE_PREFIX}:${graphCacheKey(currentBooks, currentNotes)}`;
-  function refreshSemanticRelations(showError = false) { setSemanticLoading(true); setSemanticError(""); Promise.allSettled([api.semanticRelations(), api.metadataRelations("weread"), api.metadataRelations("douban")]).then(results => { const [semanticResult, wereadResult, doubanResult] = results; const semantic = semanticResult.status === "fulfilled" ? semanticResult.value : []; const weread = wereadResult.status === "fulfilled" ? wereadResult.value : []; const douban = doubanResult.status === "fulfilled" ? doubanResult.value : []; semanticEdgesRef.current = null; mergeExternalEdges([...semantic, ...weread, ...douban]); setSemanticEnabled(semantic.length > 0); if (semantic.length) void writeGraphCache(semanticCacheKey(), semantic); const failures = results.filter(result => result.status === "rejected"); if (showError && failures.length) setSemanticError(`${failures.length} 个关系来源刷新失败，已保留其他来源结果`); }).finally(() => setSemanticLoading(false)); }
-  useEffect(() => {
-    Promise.all([api.books(), api.notes()]).then(async ([b, n]) => { const cachedEdges = await readGraphCache<Edge[]>(semanticCacheKey(b, n)); if (cachedEdges?.length) { mergeExternalEdges(cachedEdges); setSemanticEnabled(true); } setBooks(b); setNotes(n); }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
-    Promise.all([api.metadataRelations("weread").catch(() => []), api.metadataRelations("douban").catch(() => [])]).then(([weread, douban]) => mergeExternalEdges([...weread, ...douban]));
   }, []);
+  /**
+   * 重新拉取语义关系与元数据关系。
+   * 只有本地 Embedding 已安装时才请求向量关系，否则只拉取元数据关系，
+   * 避免同步后无谓地触发远程 Embedding。
+   */
+  const refreshSemanticRelations = useCallback((showError = false) => {
+    // 从 ref 读取，保证事件处理器里拿到的是最新状态而不是闭包快照。
+    const ready = embeddingStateRef.current.ready;
+    setSemanticLoading(true); setSemanticError("");
+    const metadataCalls = METADATA_SOURCES.map(source => api.metadataRelations(source));
+    const requests = ready ? [api.semanticRelations(), ...metadataCalls] : metadataCalls;
+    Promise.allSettled(requests)
+      .then(results => {
+        const [semanticResult, ...metadataResults] = ready ? results : [];
+        const semantic = semanticResult && semanticResult.status === "fulfilled" ? semanticResult.value.map(toEdge) : [];
+        const metadata = (ready ? metadataResults : results).flatMap(result => (result.status === "fulfilled" ? result.value.map(toEdge) : []));
+        // 语义关系来自后端全新计算，替换旧的语义缓存内容；元数据关系与本地词法关系保持不变。
+        const kept = (semanticEdgesRef.current ?? []).filter(edge => edge.id.startsWith("metadata:"));
+        semanticEdgesRef.current = null;
+        const mergedAll = new Map([...kept, ...metadata, ...semantic].map(edge => [edge.id, edge]));
+        const values = [...mergedAll.values()];
+        semanticEdgesRef.current = values.length ? values : null;
+        setGraph(current => ({ ...current, edges: combinedEdges(semanticEdgesRef.current) }));
+        if (semantic.length) void writeGraphCache(buildSemanticCacheKey({ books, notes }, embeddingStateRef.current.model, [...METADATA_SOURCES]), semantic);
+        else void clearSemanticGraphCache();
+        const failures = results.filter(result => result.status === "rejected").length;
+        setSemanticError(failures ? `${failures} 个关系来源刷新失败，已保留其他来源结果` : "");
+        if (!failures && !showError) setSemanticError("");
+      })
+      .finally(() => setSemanticLoading(false));
+  }, [books, notes]);
+  /** SemanticRelation（后端 camelCase）与图谱 Edge 结构一致，转换保持显式以防后端结构变化。 */
+  function toEdge(relation: SemanticRelation): Edge {
+    return {
+      id: relation.id, from: relation.from, to: relation.to, score: relation.score,
+      keywords: relation.keywords ?? [], relation: relation.relation,
+      evidence: (relation.evidence ?? []).map(item => ({ bookId: item.bookId, noteId: item.noteId, text: item.text })),
+    };
+  }
+  // 用 ref 读取 embedding 状态：让 loadLibrary 保持稳定引用，
+  // 避免 embeddingReady 变化时重复拉取书籍与笔记。
+  const embeddingStateRef = useRef({ ready: false, model: "" });
+  useEffect(() => { embeddingStateRef.current = { ready: embeddingReady, model: embeddingModel }; }, [embeddingReady, embeddingModel]);
+  const loadLibrary = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [b, n] = await Promise.all([api.books(), api.notes()]);
+      const { ready, model } = embeddingStateRef.current;
+      if (ready) {
+        const cachedEdges = await readGraphCache<Edge[]>(buildSemanticCacheKey({ books: b, notes: n }, model, [...METADATA_SOURCES]));
+        if (cachedEdges?.length) mergeExternalEdges(cachedEdges);
+      }
+      setBooks(b); setNotes(n);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally { setLoading(false); }
+  }, [mergeExternalEdges]);
+  useEffect(() => {
+    // 先读取本地 Embedding 状态，决定后续是否生成语义关系。
+    let active = true;
+    void api.localEmbeddingStatus().then(status => {
+      if (!active) return;
+      embeddingStateRef.current = { ready: status.installed, model: status.model };
+      setEmbeddingReady(status.installed);
+      setEmbeddingModel(status.model);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  useEffect(() => { void loadLibrary(); }, [loadLibrary]);
+  // 首屏拉取一次元数据关系；已配置本地 Embedding 时同时生成语义关系。
+  useEffect(() => {
+    let active = true;
+    setSemanticLoading(true); setSemanticError("");
+    const metadataCalls = METADATA_SOURCES.map(source => api.metadataRelations(source));
+    Promise.allSettled(metadataCalls).then(results => {
+      if (!active) return;
+      const edges = results.flatMap(result => (result.status === "fulfilled" ? result.value.map(toEdge) : []));
+      if (edges.length) mergeExternalEdges(edges);
+      setSemanticLoading(false);
+    });
+    return () => { active = false; };
+  }, [mergeExternalEdges]);
   useEffect(() => {
     if (books.length) setFocusId(current => current ?? books[0].id);
   }, [books]);
@@ -93,7 +174,51 @@ export function KnowledgeGraph() {
     setEdgeId(current => current && edgeIds.has(current) ? current : undefined);
     setCompareIds(current => current.filter(id => nodeIds.has(id)));
   }, [graph.nodes, graph.edges]);
-  useEffect(() => { const removed = () => { semanticEdgesRef.current = null; setSemanticEnabled(false); workerRef.current?.postMessage({ type: "filter", strength: workerStrength(strength) }); }; window.addEventListener("local-embedding-removed", removed); return () => window.removeEventListener("local-embedding-removed", removed); }, [strength]);
+  // refreshSemanticRelations 依赖 books/notes，会随数据变化重建。
+  // 用 ref 持有最新引用，让事件监听和 revision 回调保持稳定绑定。
+  const refreshSemanticRef = useRef(refreshSemanticRelations);
+  useEffect(() => { refreshSemanticRef.current = refreshSemanticRelations; }, [refreshSemanticRelations]);
+  useEffect(() => {
+    // 本地 Embedding 下载完成：自动生成语义关系并写入对应版本的缓存。
+    let active = true;
+    const ready = () => {
+      if (!active) return;
+      // 先同步写入 ref，refreshSemanticRelations 才会走语义关系分支。
+      embeddingStateRef.current = { ready: true, model: embeddingStateRef.current.model };
+      setEmbeddingReady(true);
+      setSemanticError("");
+      setCacheNotice("本地模型已就绪，正在生成语义关系…");
+      void api.localEmbeddingStatus().then(status => {
+        if (!active) return;
+        embeddingStateRef.current = { ready: true, model: status.model };
+        setEmbeddingModel(status.model);
+      }).catch(() => undefined);
+      refreshSemanticRef.current(true);
+    };
+    // 删除模型：移除内存中的语义边并清空语义缓存，保留本地词法关系与元数据关系。
+    const removed = () => {
+      if (!active) return;
+      embeddingStateRef.current = { ready: false, model: embeddingStateRef.current.model };
+      setEmbeddingReady(false);
+      const kept = (semanticEdgesRef.current ?? []).filter(edge => edge.id.startsWith("metadata:"));
+      semanticEdgesRef.current = kept.length ? kept : null;
+      setGraph(current => ({ ...current, edges: combinedEdges(semanticEdgesRef.current) }));
+      void clearSemanticGraphCache();
+      setCacheNotice("本地模型已删除，语义关系已移除");
+      window.setTimeout(() => setCacheNotice(""), 2200);
+      workerRef.current?.postMessage({ type: "filter", strength: workerStrength(strength) });
+    };
+    window.addEventListener("local-embedding-ready", ready);
+    window.addEventListener("local-embedding-removed", removed);
+    return () => { active = false; window.removeEventListener("local-embedding-ready", ready); window.removeEventListener("local-embedding-removed", removed); };
+  }, [strength]);
+  // 同步成功后重新拉取书籍与笔记，并刷新元数据/语义关系
+  // （本地图谱缓存 key 随数据变化自动失效旧缓存）。
+  useLibraryRevision(useCallback(() => {
+    lexicalEdgesRef.current = [];
+    void loadLibrary();
+    refreshSemanticRef.current(true);
+  }, [loadLibrary]));
   useEffect(() => {
     const worker = new Worker(new URL("../workers/knowledgeGraph.worker.ts", import.meta.url), { type: "module" });
     workerRef.current = worker;
@@ -117,12 +242,14 @@ export function KnowledgeGraph() {
   useEffect(() => {
     if (loading || error || !workerRef.current) return;
     let cancelled = false;
-    const key = graphCacheKey(books, notes); cacheKeyRef.current = key; setAnalyzing(true);
+    const key = graphCacheKey({ books, notes }); cacheKeyRef.current = key; setAnalyzing(true);
     void readGraphCache<Analysis>(key).then(cached => {
       const usableCached = cached?.nodes?.length ? cached : undefined;
       if (!cancelled) workerRef.current?.postMessage({ type: "init", books, notes: notes.map(({ id, type, bookId, chapter, content, bookTitle, createdAt }) => ({ id, type, bookId, chapter, content, bookTitle, createdAt })), strength: workerStrength(strength), cached: usableCached });
     });
     return () => { cancelled = true; };
+    // strength 刻意不参与：切换强度只通过下面的 filter 消息生效，不触发全量重算。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [books, notes, loading, error]);
   useEffect(() => { if (!loading && books.length) workerRef.current?.postMessage({ type: "filter", strength: workerStrength(strength) }); }, [strength, loading, books.length]);
   useEffect(() => { const close = (event: MouseEvent) => { if (!pickerRef.current?.contains(event.target as globalThis.Node)) setPickerOpen(false); }; document.addEventListener("mousedown", close); return () => document.removeEventListener("mousedown", close); }, []);
@@ -208,17 +335,19 @@ export function KnowledgeGraph() {
     finally { setDeepLoading(false); }
   }
   async function clearCaches() {
+    // 用户手动清理时才清空全部图谱缓存；其他失效场景按命名空间删除。
     await clearGraphCache();
     setRelationAnalyses({}); setDeepAnalysis(undefined); setCacheNotice("缓存已清理");
     window.setTimeout(() => setCacheNotice(""), 2200);
   }
   async function recomputeLocalRelations() {
     if (!workerRef.current || analyzing) return;
-    await clearGraphCache();
+    // 只清本地图谱分析缓存，保留语义关系缓存。
+    await clearLocalGraphCache();
     lexicalEdgesRef.current = [];
     recomputingRef.current = true;
     setAnalyzing(true); setCacheNotice("正在重新计算本地关系…");
-    const key = graphCacheKey(books, notes); cacheKeyRef.current = key;
+    const key = graphCacheKey({ books, notes }); cacheKeyRef.current = key;
     workerRef.current.postMessage({ type: "init", books, notes: notes.map(({ id, type, bookId, chapter, content, bookTitle, createdAt }) => ({ id, type, bookId, chapter, content, bookTitle, createdAt })), strength: workerStrength(strength) });
   }
   const q = query.trim().toLowerCase();
@@ -227,7 +356,13 @@ export function KnowledgeGraph() {
   return <div className="knowledge-graph-page">
     <div className="graph-source-toolbar"><label><span>关系来源</span><select value={relationSource} onChange={e => { setRelationSource(e.target.value as RelationSource); setEdgeId(undefined); }}><option value="all">全部来源</option><option value="local">本地笔记</option><option value="semantic">语义向量</option><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></label><label className="graph-score-filter"><span>最低关联度</span><input type="range" min="0" max="90" step="5" value={Math.round(minimumScore * 100)} onChange={event => { setMinimumScore(Number(event.target.value) / 100); setEdgeId(undefined); }}/><strong>{Math.round(minimumScore * 100)}%</strong></label><button type="button" onClick={() => void clearCaches()}><Eraser size={14}/>清理缓存</button><button type="button" disabled={analyzing} onClick={() => void recomputeLocalRelations()}><RotateCw className={analyzing ? "spin" : ""} size={14}/>重新计算本地关系</button>{cacheNotice && <em>{cacheNotice}</em>}</div>
     <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { navigateToBook(book.id); setQuery(""); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}>{strength === "all" && <option value="all" disabled>全局预览</option>}<option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="standard">12 个关联</option><option value="broad">20 个关联</option></select></label><label className="graph-strength"><span>关系</span><select value={relationFilter} onChange={e => { setRelationFilter(e.target.value as RelationFilter); setEdgeId(undefined); }}><option value="all">全部</option><option value="content">内容关联</option><option value="author">共同作者</option><option value="analyzable">可深度分析</option></select></label><label className="graph-connected-filter"><input type="checkbox" checked={connectedOnly} onChange={event => setConnectedOnly(event.target.checked)}/><span>仅显示有关联</span></label><div className="graph-nav"><button onClick={goBack} disabled={!backStack.length} title="返回上一本中心书" aria-label="返回"><ArrowLeft size={15}/></button><button onClick={goForward} disabled={!forwardStack.length} title="前进到下一本中心书" aria-label="前进"><ArrowRight size={15}/></button><button onClick={resetToGlobal} disabled={!graph.nodes.length} title="重置到全局视图" aria-label="重置到全局视图"><Globe2 size={15}/></button><button onClick={() => setFitRequest(value => value + 1)} disabled={!viewGraph.nodes.length} title="适应画布" aria-label="适应画布"><Maximize2 size={15}/></button><button onClick={() => refreshSemanticRelations(true)} disabled={semanticLoading} title="刷新语义关系" aria-label="刷新语义关系"><RotateCw className={semanticLoading ? "spin" : ""} size={15}/></button></div><span>{semanticLoading ? "正在刷新关系…" : `${viewGraph.edges.length} 个关系`}</span></div>
-    <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}{!loading && !analyzing && !error && !graph.nodes.length && <div className="graph-state"><Share2/><strong>还没有发现可靠的书籍关系</strong><span>更多划线与想法会让关联分析更加准确。</span></div>}
+    <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}
+      {/* 空状态分级：没有任何书籍 / 有书籍无笔记 / 有节点无关系 / Embedding 未配置 */}
+      {!loading && !error && !graph.nodes.length && !analyzing && books.length === 0 && <div className="graph-state"><Share2/><strong>书架里还没有书籍</strong><span>先在首页同步微信读书，同步完成后这里会出现节点。</span><div className="graph-state__actions"><Button variant="secondary" onClick={() => useAppStore.getState().setPage("books")}>前往书籍页</Button></div></div>}
+      {!loading && !error && !analyzing && books.length > 0 && notes.length === 0 && <div className="graph-state"><Share2/><strong>还没有笔记，无法计算内容关系</strong><span>{books.length} 本书已同步。添加划线或想法后，节点和关系会自动出现。</span><div className="graph-state__actions"><Button variant="secondary" onClick={() => useAppStore.getState().setPage("notes")}>前往笔记页</Button></div></div>}
+      {!loading && !error && !analyzing && books.length > 0 && notes.length > 0 && !graph.nodes.length && !graph.edges.length && <div className="graph-state"><Share2/><strong>暂时没有发现书籍之间的关系</strong><span>共同作者、相同主题或相似的笔记内容会生成关系；也可以在书籍元数据页补全元数据来增加关系来源。</span><div className="graph-state__actions"><Button variant="secondary" onClick={() => void recomputeLocalRelations()}>重新计算本地关系</Button><Button variant="secondary" onClick={() => useAppStore.getState().setPage("metadata")}>前往书籍元数据</Button></div></div>}
+      {!loading && !error && !analyzing && books.length > 0 && notes.length > 0 && !!graph.nodes.length && !viewGraph.edges.length && connectedOnly && <div className="graph-refresh-hint">当前"仅显示有关联"已开启，但这些书籍之间还没有找到关系。关闭该选项可以查看全部书籍，或前往书籍元数据补全共同作者与主题。</div>}
+      {!!graph.nodes.length && !embeddingReady && !semanticLoading && <div className="graph-embedding-hint"><Sparkles size={13}/>尚未配置 Embedding，语义关系不可用。本地关系与元数据关系仍然有效。</div>}
       {isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId} showIsolated={!connectedOnly}
         fitRequest={fitRequest}

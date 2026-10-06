@@ -3,7 +3,7 @@ use crate::http::{limited_json, MAX_API_RESPONSE_BYTES};
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
 use serde_json::Value;
-use std::{collections::{HashMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, future::Future, pin::Pin, task::Poll, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -37,7 +37,7 @@ pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError
 #[tauri::command]
 pub fn get_database_overview(db: State<'_, Database>) -> Result<DatabaseOverview, AppError> {
     let c = db.connect()?;
-    let table_specs = [("books", "书籍"), ("chapters", "章节"), ("highlights", "划线"), ("thoughts", "想法"), ("weread_raw", "原始数据"), ("sync_sessions", "同步记录"), ("note_embeddings", "向量索引"), ("relation_analysis_cache", "关系分析缓存")];
+    let table_specs = [("books", "书籍"), ("chapters", "章节"), ("highlights", "划线"), ("thoughts", "想法"), ("weread_raw", "原始数据"), ("sync_sessions", "同步记录"), ("note_embeddings", "向量索引"), ("relation_analysis_cache", "关系分析缓存"), ("book_metadata_sources", "书籍元数据"), ("book_metadata_extras", "元数据扩展"), ("glossary_terms", "名词库")];
     let mut tables = Vec::with_capacity(table_specs.len());
     for (name, label) in table_specs {
         let rows = c.query_row(&format!("SELECT count(*) FROM {name}"), [], |row| row.get(0))?;
@@ -45,8 +45,49 @@ pub fn get_database_overview(db: State<'_, Database>) -> Result<DatabaseOverview
     }
     let mut query = c.prepare("SELECT CASE WHEN trim(coalesce(category,''))='' THEN '未分类' ELSE category END, count(*) FROM books WHERE is_deleted=0 GROUP BY 1 ORDER BY 2 DESC LIMIT 8")?;
     let categories = query.query_map([], |row| Ok(DatabaseCategoryStat { label: row.get(0)?, count: row.get(1)? }))?.collect::<Result<Vec<_>, _>>()?;
+    // 表名与统计口径都写死在代码里，全部走参数绑定，外部无法传入任意 SQL。
+    let metadata = MetadataOverview {
+        weread: c.query_row("SELECT count(*) FROM book_metadata_sources WHERE source='weread'", [], |row| row.get(0))?,
+        douban: c.query_row("SELECT count(*) FROM book_metadata_sources WHERE source='douban'", [], |row| row.get(0))?,
+        missing: c.query_row("SELECT count(*) FROM books b WHERE b.is_deleted=0 AND NOT EXISTS(SELECT 1 FROM book_metadata_sources m WHERE m.book_id=b.book_id)", [], |row| row.get(0))?,
+        vectors: c.query_row("SELECT count(*) FROM note_embeddings", [], |row| row.get(0))?,
+        relation_cache: c.query_row("SELECT count(*) FROM relation_analysis_cache", [], |row| row.get(0))?,
+    };
     let last_synced_at = c.query_row("SELECT datetime(last_synced_at,'unixepoch','localtime') FROM sync_state WHERE source='weread'", [], |row| row.get(0)).optional()?;
-    Ok(DatabaseOverview { size_bytes: db.size_bytes(), tables, categories, last_synced_at })
+    Ok(DatabaseOverview { size_bytes: db.size_bytes(), tables, categories, metadata, last_synced_at })
+}
+
+/// 数据表浏览白名单：只有命中这里的数据表才会拼出 SQL，
+/// 任何未登记的表名（含注入尝试）都拿不到语句，是唯一的入口防线。
+pub(crate) fn database_row_query(table: &str) -> Option<(&'static str, &'static str)> {
+    match table {
+        "books" => Some((
+            "SELECT count(*) FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1)",
+            "SELECT book_id,title,coalesce(author,''),coalesce(category,''),coalesce(datetime(read_update_time,'unixepoch','localtime'),'') FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1) ORDER BY read_update_time DESC LIMIT ?2 OFFSET ?3",
+        )),
+        "highlights" => Some((
+            "SELECT count(*) FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)",
+            "SELECT h.bookmark_id,h.mark_text,coalesce(b.title,''),coalesce(h.chapter_title,''),coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY h.create_time DESC LIMIT ?2 OFFSET ?3",
+        )),
+        "thoughts" => Some((
+            "SELECT count(*) FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)",
+            "SELECT t.review_id,t.content,coalesce(b.title,''),coalesce(t.chapter_name,''),coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY t.create_time DESC LIMIT ?2 OFFSET ?3",
+        )),
+        "sync_sessions" => Some((
+            "SELECT count(*) FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1",
+            "SELECT id,status,source,printf('书籍 %d · 划线 %d · 想法 %d',books_fetched,highlights_fetched,thoughts_fetched),coalesce(datetime(started_at,'unixepoch','localtime'),'') FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
+        )),
+        // 元数据来源：书名从 books 联表取得，出版社为空时用作者数组兜底当详情展示。
+        "book_metadata_sources" => Some((
+            "SELECT count(*) FROM book_metadata_sources m LEFT JOIN books b ON b.book_id=m.book_id WHERE coalesce(b.title,'') LIKE ?1 OR m.source LIKE ?1 OR coalesce(m.publisher,'') LIKE ?1 OR coalesce(m.authors_json,'') LIKE ?1 OR m.book_id LIKE ?1",
+            "SELECT m.book_id,coalesce(b.title,m.title,m.book_id),m.source,coalesce(nullif(m.publisher,''),m.authors_json,''),coalesce(datetime(m.fetched_at,'unixepoch','localtime'),'') FROM book_metadata_sources m LEFT JOIN books b ON b.book_id=m.book_id WHERE coalesce(b.title,'') LIKE ?1 OR m.source LIKE ?1 OR coalesce(m.publisher,'') LIKE ?1 OR coalesce(m.authors_json,'') LIKE ?1 OR m.book_id LIKE ?1 ORDER BY m.fetched_at DESC LIMIT ?2 OFFSET ?3",
+        )),
+        "glossary_terms" => Some((
+            "SELECT count(*) FROM glossary_terms WHERE term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1",
+            "SELECT cast(id AS TEXT),term,canonical_name,substr(definition,1,200),coalesce(datetime(updated_at,'unixepoch','localtime'),'') FROM glossary_terms WHERE term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1 ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
+        )),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -55,12 +96,8 @@ pub fn list_database_rows(db: State<'_, Database>, table: String, query: String,
     let pattern = format!("%{}%", query.trim());
     let limit = limit.clamp(1, 100);
     let offset = offset.max(0);
-    let (count_sql, rows_sql) = match table.as_str() {
-        "books" => ("SELECT count(*) FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1)", "SELECT book_id,title,coalesce(author,''),coalesce(category,''),coalesce(datetime(read_update_time,'unixepoch','localtime'),'') FROM books WHERE is_deleted=0 AND (title LIKE ?1 OR coalesce(author,'') LIKE ?1 OR book_id LIKE ?1) ORDER BY read_update_time DESC LIMIT ?2 OFFSET ?3"),
-        "highlights" => ("SELECT count(*) FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)", "SELECT h.bookmark_id,h.mark_text,coalesce(b.title,''),coalesce(h.chapter_title,''),coalesce(datetime(h.create_time,'unixepoch','localtime'),'') FROM highlights h LEFT JOIN books b ON b.book_id=h.book_id WHERE h.is_deleted=0 AND (h.mark_text LIKE ?1 OR coalesce(h.chapter_title,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY h.create_time DESC LIMIT ?2 OFFSET ?3"),
-        "thoughts" => ("SELECT count(*) FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1)", "SELECT t.review_id,t.content,coalesce(b.title,''),coalesce(t.chapter_name,''),coalesce(datetime(t.create_time,'unixepoch','localtime'),'') FROM thoughts t LEFT JOIN books b ON b.book_id=t.book_id WHERE t.is_deleted=0 AND (t.content LIKE ?1 OR coalesce(t.chapter_name,'') LIKE ?1 OR coalesce(b.title,'') LIKE ?1) ORDER BY t.create_time DESC LIMIT ?2 OFFSET ?3"),
-        "sync_sessions" => ("SELECT count(*) FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1", "SELECT id,status,source,printf('书籍 %d · 划线 %d · 想法 %d',books_fetched,highlights_fetched,thoughts_fetched),coalesce(datetime(started_at,'unixepoch','localtime'),'') FROM sync_sessions WHERE source LIKE ?1 OR status LIKE ?1 OR coalesce(error_message,'') LIKE ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3"),
-        _ => return Err(AppError::Message("不支持浏览该数据表".into())),
+    let Some((count_sql, rows_sql)) = database_row_query(table.as_str()) else {
+        return Err(AppError::Message("不支持浏览该数据表".into()));
     };
     let total = c.query_row(count_sql, [&pattern], |row| row.get(0))?;
     let mut statement = c.prepare(rows_sql)?;
@@ -276,18 +313,77 @@ pub async fn fetch_douban_book_metadata(db: State<'_, Database>, book_id: String
     crate::metadata::fetch_douban_url(&db, &book_id, &url).await
 }
 
+/// 单次批量补全的书籍数量上限。
+pub(crate) const METADATA_BATCH_LIMIT: usize = 20;
+/// 批量补全的最大并发路数，避免把上游接口打挂。
+const METADATA_BATCH_CONCURRENCY: usize = 3;
+/// 相邻两本之间的节流间隔。
+const METADATA_BATCH_INTERVAL: Duration = Duration::from_millis(300);
+
+pub(crate) type MetadataBatchFuture<'a> = Pin<Box<dyn Future<Output = Result<MetadataFetchResult, AppError>> + Send + 'a>>;
+
+/// 逐本补全书籍元数据：有限并发 + 固定节流，单本失败只影响它自己，
+/// 返回顺序始终与传入的 `book_ids` 一致。
+pub(crate) async fn run_batched<'a, F>(
+    book_ids: &[String],
+    max_batch: usize,
+    source: &'a str,
+    interval: Duration,
+    mut op: F,
+) -> Result<Vec<MetadataFetchResult>, AppError>
+where
+    F: FnMut(String) -> MetadataBatchFuture<'a>,
+{
+    if book_ids.len() > max_batch {
+        return Err(AppError::Message(format!("单次最多补全 {max_batch} 本书")));
+    }
+    let total = book_ids.len();
+    let mut slots: Vec<Option<MetadataFetchResult>> = (0..total).map(|_| None).collect();
+    let mut in_flight: Vec<(usize, MetadataBatchFuture<'a>)> = Vec::new();
+    let mut next = 0usize;
+    while next < total || !in_flight.is_empty() {
+        while next < total && in_flight.len() < METADATA_BATCH_CONCURRENCY {
+            if next > 0 && !interval.is_zero() {
+                tokio::time::sleep(interval).await;
+            }
+            in_flight.push((next, op(book_ids[next].clone())));
+            next += 1;
+        }
+        if in_flight.is_empty() {
+            break;
+        }
+        // 就地驱动并发中的请求，谁先完成就先收谁，不额外引入 runtime 或新依赖。
+        let (position, outcome) = std::future::poll_fn(|context| {
+            for (position, (_, task)) in in_flight.iter_mut().enumerate() {
+                if let Poll::Ready(outcome) = task.as_mut().poll(context) {
+                    return Poll::Ready((position, outcome));
+                }
+            }
+            Poll::Pending
+        })
+        .await;
+        let (index, _) = in_flight.remove(position);
+        slots[index] = Some(match outcome {
+            Ok(result) => result,
+            Err(error) => MetadataFetchResult {
+                book_id: book_ids[index].clone(),
+                source: source.to_owned(),
+                status: "failed".into(),
+                message: error.to_string(),
+            },
+        });
+    }
+    Ok(slots.into_iter().flatten().collect())
+}
+
 #[tauri::command]
 pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>, source: String, force: bool) -> Result<Vec<MetadataFetchResult>, AppError> {
-    if book_ids.len() > 100 { return Err(AppError::Message("单次最多补全 100 本书".into())); }
-    let mut results=Vec::with_capacity(book_ids.len());
-    for (index,book_id) in book_ids.iter().enumerate() {
-        match crate::metadata::fetch(&db,book_id,&source,force).await {
-            Ok(value)=>results.push(value),
-            Err(error)=>results.push(MetadataFetchResult{book_id:book_id.clone(),source:source.clone(),status:"failed".into(),message:error.to_string()}),
-        }
-        if index+1<book_ids.len(){tokio::time::sleep(std::time::Duration::from_millis(1200)).await;}
-    }
-    Ok(results)
+    let db = db.inner();
+    run_batched(&book_ids, METADATA_BATCH_LIMIT, &source, METADATA_BATCH_INTERVAL, |book_id| -> MetadataBatchFuture<'_> {
+        let source = source.clone();
+        Box::pin(async move { crate::metadata::fetch(db, &book_id, &source, force).await })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -551,6 +647,46 @@ pub fn has_secret(kind: String) -> Result<bool, AppError> {
         Err(error) => Err(AppError::Credential(error)),
     }
 }
+/// Google Books 连接测试的判定逻辑，纯函数便于单测。
+/// 返回的文案里只出现 HTTP 状态码，绝不包含 API Key。
+pub(crate) fn classify_google_books_status(status: u16) -> Result<bool, String> {
+    match status {
+        200..=299 => Ok(true),
+        401 | 403 => Err("Google Books API Key 无效或已被拒绝".into()),
+        429 => Err("Google Books 请求已限流，请稍后重试或更换 API Key".into()),
+        other => Err(format!("Google Books 接口返回异常状态码：{other}")),
+    }
+}
+
+/// 用最小请求验证 Google Books Key 是否可用，只返回 HTTP 状态码。
+/// 传输层错误统一改写成不含 URL 的文案，避免 API Key 随错误信息外泄。
+async fn probe_google_books(secret: &str) -> Result<u16, AppError> {
+    let client = reqwest::Client::builder().user_agent("ReadFlow/0.1 personal metadata client").timeout(Duration::from_secs(12)).build()?;
+    let response = client
+        .get("https://books.googleapis.com/books/v1/volumes")
+        .query(&[("q", "flowers"), ("maxResults", "1"), ("key", secret)])
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                AppError::Message("Google Books 连接测试超时，请稍后重试".into())
+            } else if error.is_connect() {
+                AppError::Message("无法连接 Google Books 接口，请检查网络".into())
+            } else {
+                AppError::Message("Google Books 连接测试失败".into())
+            }
+        })?;
+    let status = response.status();
+    if status.is_success() {
+        // 成功时也要真正解析一次响应体，确认返回结构可用并限制响应大小。
+        let value: Value = limited_json(response, MAX_API_RESPONSE_BYTES, "Google Books").await?;
+        if value.get("totalItems").is_none() && value.get("items").is_none() {
+            return Err(AppError::Message("Google Books 返回结构异常".into()));
+        }
+    }
+    Ok(status.as_u16())
+}
+
 #[tauri::command]
 pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool, AppError> {
     validate_secret_kind(&kind)?;
@@ -562,6 +698,10 @@ pub async fn test_connection(kind: String, value: Option<String>) -> Result<bool
         crate::weread::client::WeReadClient::new(secret)?
             .test()
             .await?;
+    } else if kind == "google_books" {
+        // Google Books 必须真正请求一次，Key 错了要当场暴露，不能默认通过。
+        let status = probe_google_books(&secret).await?;
+        classify_google_books_status(status).map_err(AppError::Message)?;
     }
     Ok(true)
 }
@@ -1453,7 +1593,183 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fts_query, normalize_recommendations, parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id};
+    use super::{
+        classify_google_books_status, database_row_query, fts_query, normalize_recommendations,
+        parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id,
+        MetadataBatchFuture, MetadataFetchResult, AppError,
+    };
+    use std::{
+        future::Future,
+        sync::{Arc, Mutex},
+        task::{Context, Poll, Waker},
+        time::Duration,
+    };
+
+    /// 最小执行器：tokio 没有开启 macros feature，用不了 `#[tokio::test]`；
+    /// 这里喂进去的假请求都是立刻就绪的 future，直接轮询即可。
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(&waker);
+        let mut future = std::pin::pin!(future);
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                return output;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    fn updated_result(book_id: String) -> MetadataFetchResult {
+        MetadataFetchResult {
+            book_id,
+            source: "weread".into(),
+            status: "updated".into(),
+            message: "已更新".into(),
+        }
+    }
+
+    #[test]
+    fn batched_metadata_fetch_keeps_other_results_when_one_book_fails() {
+        let book_ids = vec!["bk-1".to_string(), "bk-2".to_string(), "bk-3".to_string()];
+        let results = block_on(super::run_batched(
+            &book_ids,
+            super::METADATA_BATCH_LIMIT,
+            "weread",
+            Duration::ZERO,
+            |book_id| -> MetadataBatchFuture<'static> {
+                Box::pin(async move {
+                    if book_id == "bk-2" {
+                        return Err(AppError::Message("这一本抓取失败".into()));
+                    }
+                    Ok(updated_result(book_id))
+                })
+            },
+        ))
+        .unwrap();
+
+        // 单本失败不能吞掉其他结果，且顺序必须与传入的 book_ids 一致
+        assert_eq!(results.len(), 3);
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.book_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bk-1", "bk-2", "bk-3"]
+        );
+        assert_eq!(results[0].status, "updated");
+        assert_eq!(results[1].status, "failed");
+        assert_eq!(results[1].book_id, "bk-2");
+        assert_eq!(results[1].source, "weread");
+        assert!(results[1].message.contains("这一本抓取失败"));
+        assert_eq!(results[2].status, "updated");
+    }
+
+    #[test]
+    fn batched_metadata_fetch_keeps_input_order_when_requests_finish_out_of_order() {
+        let book_ids = vec!["bk-1".to_string(), "bk-2".to_string(), "bk-3".to_string()];
+        let finished = Arc::new(Mutex::new(Vec::new()));
+        let recorder = finished.clone();
+        let results = block_on(super::run_batched(
+            &book_ids,
+            super::METADATA_BATCH_LIMIT,
+            "weread",
+            Duration::ZERO,
+            move |book_id| -> MetadataBatchFuture<'static> {
+                let recorder = recorder.clone();
+                Box::pin(async move {
+                    if book_id == "bk-1" {
+                        // 让出两轮再就绪，模拟最后完成的那一个
+                        let mut pending = 2u8;
+                        std::future::poll_fn(|context| {
+                            if pending > 0 {
+                                pending -= 1;
+                                context.waker().wake_by_ref();
+                                Poll::Pending
+                            } else {
+                                Poll::Ready(())
+                            }
+                        })
+                        .await;
+                    }
+                    recorder.lock().expect("完成顺序记录锁可用").push(book_id.clone());
+                    Ok(updated_result(book_id))
+                })
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(
+            finished.lock().expect("完成顺序记录锁可用").as_slice(),
+            ["bk-2", "bk-3", "bk-1"]
+        );
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.book_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bk-1", "bk-2", "bk-3"]
+        );
+    }
+
+    #[test]
+    fn batched_metadata_fetch_rejects_more_than_twenty_books() {
+        assert_eq!(super::METADATA_BATCH_LIMIT, 20);
+        let book_ids = (0..21).map(|index| format!("bk-{index}")).collect::<Vec<_>>();
+        let outcome = block_on(super::run_batched(
+            &book_ids,
+            super::METADATA_BATCH_LIMIT,
+            "weread",
+            Duration::ZERO,
+            |book_id| -> MetadataBatchFuture<'static> { Box::pin(async move { Ok(updated_result(book_id)) }) },
+        ));
+        let error = match outcome {
+            Ok(results) => panic!("超过 20 本时应当被拒绝，实际返回 {} 条结果", results.len()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("单次最多补全 20 本书"));
+    }
+
+    #[test]
+    fn google_books_connection_test_fails_on_bad_status() {
+        assert_eq!(classify_google_books_status(200), Ok(true));
+        assert_eq!(classify_google_books_status(206), Ok(true));
+        assert!(classify_google_books_status(401).is_err());
+        assert!(classify_google_books_status(401).unwrap_err().contains("无效"));
+        assert!(classify_google_books_status(403).unwrap_err().contains("无效"));
+        assert!(classify_google_books_status(429).unwrap_err().contains("限流"));
+        assert!(classify_google_books_status(500).is_err());
+        assert!(classify_google_books_status(404).unwrap_err().contains("404"));
+    }
+
+    #[test]
+    fn database_row_browser_only_accepts_whitelisted_tables() {
+        for table in [
+            "books",
+            "highlights",
+            "thoughts",
+            "sync_sessions",
+            "book_metadata_sources",
+            "glossary_terms",
+        ] {
+            let (count_sql, rows_sql) = database_row_query(table)
+                .unwrap_or_else(|| panic!("{table} 应当在白名单内"));
+            assert!(count_sql.contains("count(*)"));
+            // 行语句必须按 id/主/次/详情/时间五列返回
+            assert!(rows_sql.contains("LIMIT ?2 OFFSET ?3"));
+        }
+        for table in [
+            "sqlite_master",
+            "book_metadata_sources; DROP TABLE books",
+            "glossary_terms'",
+            "books--",
+            "",
+        ] {
+            assert!(
+                database_row_query(table).is_none(),
+                "{table} 不应当拿到任何 SQL"
+            );
+        }
+    }
 
     #[test]
     fn normalizes_nested_recommendation_metrics_and_numeric_strings() {

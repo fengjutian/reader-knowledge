@@ -1,7 +1,7 @@
 use crate::{
     database::Database, error::AppError, models::SyncProgress, weread::client::WeReadClient,
 };
-use rusqlite::{params, Transaction};
+use rusqlite::{params, Connection, Transaction};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -204,12 +204,27 @@ fn persist(
     })
 }
 
-fn upsert_weread_metadata(
-    tx: &Transaction<'_>,
-    book_id: &str,
-    value: &Value,
-    fetched_at: i64,
-) -> Result<(), AppError> {
+/// 微信读书书籍元数据的解析结果，只包含落库前的纯数据，不接触数据库和网络。
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct WereadMetadataFields {
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub subjects: Vec<String>,
+    pub isbn10: Option<String>,
+    pub isbn13: Option<String>,
+    pub publisher: Option<String>,
+    pub published_date: Option<String>,
+    pub page_count: Option<i64>,
+    pub cover_url: Option<String>,
+    pub description: Option<String>,
+    pub rating: Option<f64>,
+    pub rating_count: Option<i64>,
+    pub source_url: Option<String>,
+    pub raw_json: String,
+}
+
+/// 从微信读书返回的书籍 JSON 中提取元数据字段，便于脱离同步流程单独测试。
+pub(crate) fn weread_metadata_fields(value: &Value) -> Result<WereadMetadataFields, AppError> {
     let author = string(value, "author").unwrap_or_default();
     let authors = if author.trim().is_empty() {
         Vec::new()
@@ -229,8 +244,34 @@ fn upsert_weread_metadata(
         13 => (None, Some(isbn)),
         _ => (None, None),
     };
-    let raw = serde_json::to_string(value)?;
-    tx.execute(
+    Ok(WereadMetadataFields {
+        title: string(value, "title"),
+        authors,
+        subjects,
+        isbn10,
+        isbn13,
+        publisher: string(value, "publisher"),
+        published_date: string(value, "publishTime"),
+        page_count: integer(value, "pageCount"),
+        cover_url: string(value, "cover"),
+        description: string(value, "intro"),
+        rating: number(value, "newRating"),
+        rating_count: integer(value, "newRatingCount"),
+        source_url: string(value, "deepLink"),
+        raw_json: serde_json::to_string(value)?,
+    })
+}
+
+/// 写入微信读书元数据。`coalesce` 与 `CASE WHEN ...='[]'` 保证精简的同步结果
+/// 不会覆盖已有的详细字段，因此重复同步始终只保留一行。
+fn upsert_weread_metadata(
+    conn: &Connection,
+    book_id: &str,
+    value: &Value,
+    fetched_at: i64,
+) -> Result<(), AppError> {
+    let fields = weread_metadata_fields(value)?;
+    conn.execute(
         "INSERT INTO book_metadata_sources(
             book_id,source,source_id,source_url,isbn10,isbn13,title,authors_json,
             publisher,published_date,page_count,subjects_json,cover_url,description,
@@ -255,20 +296,20 @@ fn upsert_weread_metadata(
             fetched_at=excluded.fetched_at",
         params![
             book_id,
-            string(value, "deepLink"),
-            isbn10,
-            isbn13,
-            string(value, "title"),
-            serde_json::to_string(&authors)?,
-            string(value, "publisher"),
-            string(value, "publishTime"),
-            integer(value, "pageCount"),
-            serde_json::to_string(&subjects)?,
-            string(value, "cover"),
-            string(value, "intro"),
-            number(value, "newRating"),
-            integer(value, "newRatingCount"),
-            raw,
+            fields.source_url,
+            fields.isbn10,
+            fields.isbn13,
+            fields.title,
+            serde_json::to_string(&fields.authors)?,
+            fields.publisher,
+            fields.published_date,
+            fields.page_count,
+            serde_json::to_string(&fields.subjects)?,
+            fields.cover_url,
+            fields.description,
+            fields.rating,
+            fields.rating_count,
+            fields.raw_json,
             fetched_at,
         ],
     )?;
@@ -349,8 +390,48 @@ fn mark_failed(db: &Database, id: &str, error: &AppError) {
 
 #[cfg(test)]
 mod tests {
-    use super::{chapter_map, integer, json_text, string};
+    use super::{
+        chapter_map, integer, json_text, string, upsert_weread_metadata, weread_metadata_fields,
+    };
+    use rusqlite::{params, Connection};
     use serde_json::json;
+
+    /// 内存库：跑同一份建表脚本，既覆盖外键约束也避免写出真实数据文件。
+    fn test_connection() -> Connection {
+        let connection = Connection::open_in_memory().expect("应能创建内存数据库");
+        connection
+            .execute_batch(include_str!("../database/schema.sql"))
+            .expect("建表脚本应能在内存库执行");
+        connection
+    }
+
+    fn insert_book(connection: &Connection, book_id: &str, title: &str, deleted: i64) {
+        connection
+            .execute(
+                "INSERT INTO books(book_id,title,author,cover,category,deep_link,created_at,synced_at,is_deleted,last_seen_sync_id)
+                 VALUES(?1,?2,'尤瓦尔·赫拉利','https://cover/1.jpg','历史/文化','wxlink://book',1000,1000,?3,'sync-1')",
+                params![book_id, title, deleted],
+            )
+            .expect("书籍应能插入");
+    }
+
+    fn weread_book_json() -> serde_json::Value {
+        json!({
+            "bookId": "bk-1",
+            "title": "人类简史",
+            "author": "尤瓦尔·赫拉利",
+            "category": "历史 / 文化、随笔",
+            "isbn": "9787508647357",
+            "publisher": "中信出版社",
+            "publishTime": "2014-11",
+            "pageCount": 440,
+            "cover": "https://cover/1.jpg",
+            "intro": "人类从哪里来",
+            "newRating": 9.1,
+            "newRatingCount": 12345,
+            "deepLink": "wxlink://book/bk-1"
+        })
+    }
 
     #[test]
     fn maps_chapters_by_official_uid() {
@@ -372,5 +453,213 @@ mod tests {
             json_text(value.get("range")).as_deref(),
             Some("{\"start\":1}")
         );
+    }
+
+    #[test]
+    fn extracts_weread_fields_without_touching_the_database() {
+        let fields = weread_metadata_fields(&weread_book_json()).unwrap();
+        assert_eq!(fields.title.as_deref(), Some("人类简史"));
+        assert_eq!(fields.authors, vec!["尤瓦尔·赫拉利".to_string()]);
+        assert_eq!(
+            fields.subjects,
+            vec!["历史".to_string(), "文化".to_string(), "随笔".to_string()]
+        );
+        // 13 位 ISBN 归位到 isbn13，10 位归位到 isbn10
+        assert_eq!(fields.isbn13.as_deref(), Some("9787508647357"));
+        assert_eq!(fields.isbn10, None);
+        assert_eq!(fields.publisher.as_deref(), Some("中信出版社"));
+        assert_eq!(fields.published_date.as_deref(), Some("2014-11"));
+        assert_eq!(fields.page_count, Some(440));
+        assert_eq!(fields.rating, Some(9.1));
+        assert_eq!(fields.rating_count, Some(12345));
+        assert_eq!(fields.source_url.as_deref(), Some("wxlink://book/bk-1"));
+
+        let ten = weread_metadata_fields(&json!({"isbn":"7508647357","author":"  "})).unwrap();
+        assert_eq!(ten.isbn10.as_deref(), Some("7508647357"));
+        assert!(ten.authors.is_empty());
+        assert!(ten.subjects.is_empty());
+    }
+
+    #[test]
+    fn first_sync_writes_one_weread_metadata_row() {
+        let connection = test_connection();
+        insert_book(&connection, "bk-1", "人类简史", 0);
+        upsert_weread_metadata(&connection, "bk-1", &weread_book_json(), 1_700_000_000).unwrap();
+
+        let total: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM book_metadata_sources WHERE source='weread'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 1);
+
+        let (title, authors_json, subjects_json, cover_url, page_count) = connection
+            .query_row(
+                "SELECT title,authors_json,subjects_json,cover_url,page_count FROM book_metadata_sources WHERE book_id='bk-1' AND source='weread'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(title, "人类简史");
+        assert_eq!(cover_url, "https://cover/1.jpg");
+        assert_eq!(page_count, 440);
+        // authors_json / subjects_json 必须是能解析成数组的 JSON 文本，而不是裸字符串
+        let authors: Vec<String> = serde_json::from_str(&authors_json).unwrap();
+        assert_eq!(authors, vec!["尤瓦尔·赫拉利".to_string()]);
+        let subjects: Vec<String> = serde_json::from_str(&subjects_json).unwrap();
+        assert_eq!(
+            subjects,
+            vec!["历史".to_string(), "文化".to_string(), "随笔".to_string()]
+        );
+    }
+
+    #[test]
+    fn repeated_sync_does_not_duplicate_metadata_rows() {
+        let connection = test_connection();
+        insert_book(&connection, "bk-1", "人类简史", 0);
+        upsert_weread_metadata(&connection, "bk-1", &weread_book_json(), 1_700_000_000).unwrap();
+        upsert_weread_metadata(&connection, "bk-1", &weread_book_json(), 1_700_000_500).unwrap();
+
+        let total: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM book_metadata_sources WHERE book_id='bk-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn slim_shelf_data_keeps_existing_detailed_fields() {
+        let connection = test_connection();
+        insert_book(&connection, "bk-1", "人类简史", 0);
+        upsert_weread_metadata(&connection, "bk-1", &weread_book_json(), 1_000).unwrap();
+        // 第二次同步只带回书名和作者
+        upsert_weread_metadata(
+            &connection,
+            "bk-1",
+            &json!({"title": "人类简史", "author": "尤瓦尔·赫拉利"}),
+            2_000,
+        )
+        .unwrap();
+
+        let (publisher, page_count, rating, fetched_at) = connection
+            .query_row(
+                "SELECT publisher,page_count,rating,fetched_at FROM book_metadata_sources WHERE book_id='bk-1' AND source='weread'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(publisher, "中信出版社");
+        assert_eq!(page_count, 440);
+        assert_eq!(rating, 9.1);
+        // 抓取时间仍然要推进，界面才能看出数据是新的
+        assert_eq!(fetched_at, 2_000);
+    }
+
+    #[test]
+    fn legacy_database_backfill_is_idempotent() {
+        let connection = test_connection();
+        insert_book(&connection, "bk-1", "人类简史", 0);
+        insert_book(&connection, "bk-2", "未来简史", 0);
+        insert_book(&connection, "bk-3", "已删除的书", 1);
+        let active: i64 = connection
+            .query_row("SELECT count(*) FROM books WHERE is_deleted=0", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // 老库启动时会重跑建表脚本，其中的回填语句应为首次补齐
+        connection
+            .execute_batch(include_str!("../database/schema.sql"))
+            .unwrap();
+        let after_first: i64 = connection
+            .query_row("SELECT count(*) FROM book_metadata_sources", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(after_first, active);
+
+        // 再次执行不应产生新行
+        connection
+            .execute_batch(include_str!("../database/schema.sql"))
+            .unwrap();
+        let after_second: i64 = connection
+            .query_row("SELECT count(*) FROM book_metadata_sources", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(after_second, active);
+
+        let (title, authors_json) = connection
+            .query_row(
+                "SELECT title,authors_json FROM book_metadata_sources WHERE book_id='bk-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "人类简史");
+        let authors: Vec<String> = serde_json::from_str(&authors_json).unwrap();
+        assert_eq!(authors, vec!["尤瓦尔·赫拉利".to_string()]);
+    }
+
+    #[test]
+    fn douban_metadata_survives_weread_sync() {
+        let connection = test_connection();
+        insert_book(&connection, "bk-1", "人类简史", 0);
+        connection
+            .execute(
+                "INSERT INTO book_metadata_sources(book_id,source,source_id,title,authors_json,publisher,raw_json,fetched_at)
+                 VALUES('bk-1','douban','25976985','人类简史： unimaginable','[\"尤瓦尔·赫拉利\"]','江苏凤凰文艺出版社','{}',500)",
+                [],
+            )
+            .unwrap();
+        upsert_weread_metadata(&connection, "bk-1", &weread_book_json(), 2_000).unwrap();
+
+        let (title, publisher, raw_json, fetched_at): (String, String, String, i64) = connection
+            .query_row(
+                "SELECT title,publisher,raw_json,fetched_at FROM book_metadata_sources WHERE book_id='bk-1' AND source='douban'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(title, "人类简史： unimaginable");
+        assert_eq!(publisher, "江苏凤凰文艺出版社");
+        assert_eq!(raw_json, "{}");
+        assert_eq!(fetched_at, 500);
+
+        let weread_rows: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM book_metadata_sources WHERE book_id='bk-1' AND source='weread'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(weread_rows, 1);
     }
 }

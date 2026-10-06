@@ -36,6 +36,8 @@ function noteMatches(notes: Note[], keywords: string[]) {
 
 function titleKey(title: string) {
   return title.toLowerCase()
+    // [] 内的 \[ \] 是必需的：方括号在字符类中间仍需转义，否则会提前闭合。
+    // eslint-disable-next-line no-useless-escape
     .replace(/[《》〈〉「」『』【】()（）\[\]\s·:：,，.。!！?？\-—_]/g, "")
     .replace(/第?[一二三四五六七八九十百千万\d]+[册卷部]?/g, "")
     .replace(/全[一二三四五六七八九十百千万\d]+册|全集|全本|珍藏版|典藏版|精装版|新版|修订版|插图版|青少版|少儿版|人民文学版|电子书/g, "");

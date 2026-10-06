@@ -26,12 +26,17 @@ export function Notes() {
   const refreshBatch = Math.floor(sync.processedBooks / 5);
 
   useEffect(() => {
+    // 多个状态变化会先后触发请求，用序号丢弃过期响应，避免旧结果覆盖新结果。
+    let active = true;
     setLoading(true);
     setError("");
     const timer = window.setTimeout(() => {
-      api.notes().then(setNotes).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
+      api.notes()
+        .then(value => { if (active) setNotes(value); })
+        .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); })
+        .finally(() => { if (active) setLoading(false); });
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [sync.status, refreshBatch]);
 
   const counts = useMemo(() => ({ all: notes.length, highlight: notes.filter(note => note.type === "highlight").length, thought: notes.filter(note => note.type === "thought").length }), [notes]);

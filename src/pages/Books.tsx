@@ -24,7 +24,7 @@ export function Books() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const openBook = useAppStore(state => state.openBook);
-  const syncStatus = useSyncStore(state => state.status);
+  const revision = useSyncStore(state => state.revision);
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   useEffect(() => { setPage(0); }, [query, category, readingStatus, withHighlights, withThoughts, sortBy]);
@@ -38,7 +38,7 @@ export function Books() {
         .finally(() => setLoading(false));
     }, query ? 250 : 0);
     return () => window.clearTimeout(timer);
-  }, [page, query, category, readingStatus, withHighlights, withThoughts, sortBy, syncStatus]);
+  }, [page, query, category, readingStatus, withHighlights, withThoughts, sortBy, revision]);
 
   return <>
     <PageHeader title="书籍" subtitle={`${total} 本书，承载你的阅读轨迹。`}/>

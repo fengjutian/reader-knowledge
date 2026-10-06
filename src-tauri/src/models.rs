@@ -16,7 +16,21 @@ pub struct DatabaseTableStat { pub name: String, pub label: String, pub rows: i6
 pub struct DatabaseCategoryStat { pub label: String, pub count: i64 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DatabaseOverview { pub size_bytes: u64, pub tables: Vec<DatabaseTableStat>, pub categories: Vec<DatabaseCategoryStat>, pub last_synced_at: Option<String> }
+pub struct MetadataOverview {
+    /// 已有微信读书元数据的书籍数
+    pub weread: i64,
+    /// 已有豆瓣元数据的书籍数
+    pub douban: i64,
+    /// 仍未补全任何元数据的在架书籍数
+    pub missing: i64,
+    /// 向量索引条数
+    pub vectors: i64,
+    /// 关系分析缓存条数
+    pub relation_cache: i64,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseOverview { pub size_bytes: u64, pub tables: Vec<DatabaseTableStat>, pub categories: Vec<DatabaseCategoryStat>, pub metadata: MetadataOverview, pub last_synced_at: Option<String> }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseRow { pub id: String, pub primary: String, pub secondary: String, pub detail: String, pub created_at: String }

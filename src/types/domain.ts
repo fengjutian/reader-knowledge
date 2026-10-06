@@ -68,7 +68,8 @@ export interface DashboardStats {
 }
 export interface DatabaseTableStat { name: string; label: string; rows: number }
 export interface DatabaseCategoryStat { label: string; count: number }
-export interface DatabaseOverview { sizeBytes: number; tables: DatabaseTableStat[]; categories: DatabaseCategoryStat[]; lastSyncedAt?: string }
+export interface MetadataOverview { weread: number; douban: number; missing: number; vectors: number; relationCache: number }
+export interface DatabaseOverview { sizeBytes: number; tables: DatabaseTableStat[]; categories: DatabaseCategoryStat[]; lastSyncedAt?: string; metadata: MetadataOverview }
 export interface DatabaseRow { id: string; primary: string; secondary: string; detail: string; createdAt: string }
 export interface DatabaseRows { total: number; rows: DatabaseRow[] }
 

@@ -1,9 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUp, BookOpen, ChevronRight, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/tauri";
+import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiMode, AiTurn, Book } from "../types/domain";
 
@@ -85,7 +86,10 @@ export function AI() {
     useAppStore.getState().clearAiDraft();
   }, [aiDraft]);
   useEffect(() => { localStorage.setItem(historyKey, JSON.stringify(history)); }, [history]);
-  useEffect(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
+  const loadBooks = useCallback(() => { api.books().then(setBooks).catch(() => setBooks([])); }, []);
+  useEffect(() => { loadBooks(); }, [loadBooks]);
+  // 同步后刷新选书列表，但不清除已有对话记录和当前问题。
+  useLibraryRevision(loadBooks);
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
