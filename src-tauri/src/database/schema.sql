@@ -89,6 +89,20 @@ CREATE TABLE IF NOT EXISTS book_metadata_sources (
     FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_book_metadata_sources_source ON book_metadata_sources(source, fetched_at DESC);
+-- Backfill installations that synced books before WeRead metadata was persisted.
+-- Richer fields are filled on the next sync or an explicit metadata refresh.
+INSERT OR IGNORE INTO book_metadata_sources(
+    book_id,source,source_id,source_url,title,authors_json,subjects_json,cover_url,raw_json,fetched_at
+)
+SELECT
+    book_id,'weread',book_id,deep_link,title,
+    CASE WHEN trim(coalesce(author,''))='' THEN '[]' ELSE json_array(author) END,
+    CASE WHEN trim(coalesce(category,''))='' THEN '[]' ELSE json_array(category) END,
+    cover,
+    json_object('bookId',book_id,'title',title,'author',author,'category',category,'cover',cover,'deepLink',deep_link),
+    synced_at
+FROM books
+WHERE is_deleted=0;
 CREATE TABLE IF NOT EXISTS book_metadata_extras (
     book_id TEXT NOT NULL,
     source TEXT NOT NULL,

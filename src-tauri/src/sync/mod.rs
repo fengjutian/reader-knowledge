@@ -96,6 +96,8 @@ fn persist(
              ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=excluded.deep_link,read_update_time=excluded.read_update_time,finish_reading=excluded.finish_reading,update_time=excluded.update_time,synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
             params![book.book_id,book.title,book.author,book.cover,book.category,book.deep_link,book.read_update_time,book.finish_reading,book.update_time,started_at,session_id],
             )?;
+            let raw = serde_json::to_value(book)?;
+            upsert_weread_metadata(&tx, &book.book_id, &raw, started_at)?;
         }
     }
 
@@ -108,6 +110,7 @@ fn persist(
                  ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=coalesce(excluded.deep_link,books.deep_link),synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
                 params![item.book_id,title,string(book,"author"),string(book,"cover"),string(book,"category"),string(book,"deepLink"),started_at,session_id],
             )?;
+            upsert_weread_metadata(&tx, &item.book_id, book, started_at)?;
             save_raw(&tx, "notebook", &item.book_id, book, started_at)?;
         }
         save_raw(
@@ -201,6 +204,77 @@ fn persist(
     })
 }
 
+fn upsert_weread_metadata(
+    tx: &Transaction<'_>,
+    book_id: &str,
+    value: &Value,
+    fetched_at: i64,
+) -> Result<(), AppError> {
+    let author = string(value, "author").unwrap_or_default();
+    let authors = if author.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![author]
+    };
+    let category = string(value, "category").unwrap_or_default();
+    let subjects = category
+        .split(['/', ',', '、', '·'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let isbn = string(value, "isbn").unwrap_or_default();
+    let (isbn10, isbn13) = match isbn.len() {
+        10 => (Some(isbn), None),
+        13 => (None, Some(isbn)),
+        _ => (None, None),
+    };
+    let raw = serde_json::to_string(value)?;
+    tx.execute(
+        "INSERT INTO book_metadata_sources(
+            book_id,source,source_id,source_url,isbn10,isbn13,title,authors_json,
+            publisher,published_date,page_count,subjects_json,cover_url,description,
+            rating,rating_count,raw_json,fetched_at
+         ) VALUES(?1,'weread',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+         ON CONFLICT(book_id,source) DO UPDATE SET
+            source_id=excluded.source_id,
+            source_url=coalesce(excluded.source_url,book_metadata_sources.source_url),
+            isbn10=coalesce(excluded.isbn10,book_metadata_sources.isbn10),
+            isbn13=coalesce(excluded.isbn13,book_metadata_sources.isbn13),
+            title=coalesce(excluded.title,book_metadata_sources.title),
+            authors_json=CASE WHEN excluded.authors_json='[]' THEN book_metadata_sources.authors_json ELSE excluded.authors_json END,
+            publisher=coalesce(excluded.publisher,book_metadata_sources.publisher),
+            published_date=coalesce(excluded.published_date,book_metadata_sources.published_date),
+            page_count=coalesce(excluded.page_count,book_metadata_sources.page_count),
+            subjects_json=CASE WHEN excluded.subjects_json='[]' THEN book_metadata_sources.subjects_json ELSE excluded.subjects_json END,
+            cover_url=coalesce(excluded.cover_url,book_metadata_sources.cover_url),
+            description=coalesce(excluded.description,book_metadata_sources.description),
+            rating=coalesce(excluded.rating,book_metadata_sources.rating),
+            rating_count=coalesce(excluded.rating_count,book_metadata_sources.rating_count),
+            raw_json=excluded.raw_json,
+            fetched_at=excluded.fetched_at",
+        params![
+            book_id,
+            string(value, "deepLink"),
+            isbn10,
+            isbn13,
+            string(value, "title"),
+            serde_json::to_string(&authors)?,
+            string(value, "publisher"),
+            string(value, "publishTime"),
+            integer(value, "pageCount"),
+            serde_json::to_string(&subjects)?,
+            string(value, "cover"),
+            string(value, "intro"),
+            number(value, "newRating"),
+            integer(value, "newRatingCount"),
+            raw,
+            fetched_at,
+        ],
+    )?;
+    Ok(())
+}
+
 fn save_raw(
     tx: &Transaction<'_>,
     kind: &str,
@@ -244,6 +318,9 @@ fn string(value: &Value, key: &str) -> Option<String> {
 }
 fn integer(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
+}
+fn number(value: &Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(Value::as_f64)
 }
 fn json_text(value: Option<&Value>) -> Option<String> {
     value.filter(|v| !v.is_null()).map(|v| {
