@@ -188,13 +188,13 @@ pub struct LocalModelStatus {
     pub model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Citation {
     pub index: usize,
     pub note: Note,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GlossaryCitation {
     pub index: usize,
@@ -204,7 +204,7 @@ pub struct GlossaryCitation {
     pub source_url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AiAnswer {
     pub content: String,

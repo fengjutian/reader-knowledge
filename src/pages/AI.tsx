@@ -1,9 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUp, BookOpen, ChevronRight, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, BookOpen, ChevronRight, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Search, Sparkles, Square, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api } from "../api/tauri";
+import { api, startAiStream } from "../api/tauri";
+import type { AiStreamSession } from "../api/tauri";
+import { aiStreamReducer, initialAiStreamState, isStreaming } from "./aiStream";
 import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiMode, AiTurn, Book } from "../types/domain";
@@ -18,6 +20,16 @@ interface AiConversation {
   mode: AiMode;
   bookIds: string[];
   createdAt: number;
+}
+
+/** 提交那一刻的上下文。流式回答在几秒后才结束，用快照而不是闭包里的旧 state。 */
+interface PendingAsk {
+  requestId: string;
+  question: string;
+  mode: AiMode;
+  bookIds: string[];
+  turns: AiTurn[];
+  conversationId?: string;
 }
 
 function loadHistory(): AiConversation[] {
@@ -70,11 +82,25 @@ export function AI() {
   const [turns, setTurns] = useState<AiTurn[]>(initialConversation?.turns ?? []);
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>(initialConversation?.id);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [stream, dispatch] = useReducer(aiStreamReducer, initialAiStreamState);
   const [error, setError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const sessionRef = useRef<AiStreamSession | null>(null);
+  const pendingRef = useRef<PendingAsk | null>(null);
+  const committedRef = useRef<string | null>(null);
   const openBook = useAppStore(state => state.openBook);
+  const streaming = isStreaming(stream);
+
+  function releaseStream() {
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    if (!session) return;
+    session.cancel();
+    session.dispose();
+  }
+
   useEffect(() => {
     if (!aiDraft) return;
     setQuestion(aiDraft.question);
@@ -96,7 +122,35 @@ export function AI() {
     textarea.style.height = "0";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [question]);
-  useEffect(() => { requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })); }, [turns, loading]);
+  // 用户手动往上翻时不要把视图拽回底部。
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const frame = requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }));
+    return () => cancelAnimationFrame(frame);
+  }, [turns, stream.draft, stream.status]);
+
+  // 卸载时收尾：取消后端请求并解除事件监听。
+  useEffect(() => () => { releaseStream(); }, []);
+
+  // 流结束后只入库一次：同一个 requestId 的 completed 事件即使重复到达也只写一条历史。
+  useEffect(() => {
+    if (stream.status !== "completed" || !stream.answer) return;
+    const pending = pendingRef.current;
+    const requestId = stream.requestId;
+    if (!requestId || committedRef.current === requestId) return;
+    committedRef.current = requestId;
+    const answer = stream.answer;
+    dispatch({ type: "reset" });
+    sessionRef.current?.dispose();
+    sessionRef.current = null;
+    if (!pending || pending.requestId !== requestId) return;
+    const nextTurns = [...pending.turns, { question: pending.question, answer }].slice(-50);
+    const id = pending.conversationId || crypto.randomUUID();
+    const conversation: AiConversation = { id, title: pending.turns[0]?.question || pending.question, turns: nextTurns, mode: pending.mode, bookIds: [...pending.bookIds], createdAt: Date.now() };
+    setTurns(nextTurns); setActiveConversationId(id);
+    setHistory(current => [conversation, ...current.filter(item => item.id !== id)].slice(0, 30));
+  }, [stream]);
+
   const selectedBooks = useMemo(() => bookIds.map(id => books.find(book => book.id === id)).filter((book): book is Book => Boolean(book)), [bookIds, books]);
   const visibleBooks = useMemo(() => {
     const query = bookQuery.trim().toLocaleLowerCase();
@@ -106,14 +160,43 @@ export function AI() {
       .sort((a, b) => (b.highlightCount + b.thoughtCount) - (a.highlightCount + a.thoughtCount))
       .slice(0, 100);
   }, [bookQuery, books]);
+
+  function stopStream() {
+    const requestId = stream.requestId;
+    if (!requestId) return;
+    dispatch({ type: "stop", requestId });
+    releaseStream();
+  }
+
+  function beginStream(submitted: string) {
+    const requestId = crypto.randomUUID();
+    pendingRef.current = { requestId, question: submitted, mode, bookIds: [...bookIds], turns, conversationId: activeConversationId };
+    dispatch({ type: "start", requestId, question: submitted });
+    const session = startAiStream(
+      { question: submitted, mode, bookIds, history: turns.map(turn => ({ question: turn.question, answer: turn.answer.content })) },
+      requestId,
+      event => dispatch({ type: "event", event }),
+    );
+    sessionRef.current = session;
+    session.ready.catch(reason => {
+      if (pendingRef.current?.requestId !== requestId) return;
+      dispatch({ type: "event", event: { requestId, type: "failed", message: reason instanceof Error ? reason.message : String(reason) } });
+      session.dispose();
+      sessionRef.current = null;
+    });
+  }
+
   function changeMode(next: AiMode) {
+    releaseStream(); dispatch({ type: "reset" }); pendingRef.current = null;
     setMode(next); setTurns([]); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
     setQuestion(next === "summary" ? "请总结这本书的核心观点，并区分原文与我的想法。" : next === "compare" ? "请比较这些书对同一主题的观点、共识与分歧。" : "");
   }
   function newConversation() {
+    releaseStream(); dispatch({ type: "reset" }); pendingRef.current = null;
     setQuestion(""); setTurns([]); setActiveConversationId(undefined); setError(""); setBookIds([]); setBookQuery("");
   }
   function openConversation(conversation: AiConversation) {
+    releaseStream(); dispatch({ type: "reset" }); pendingRef.current = null;
     setActiveConversationId(conversation.id); setQuestion(""); setTurns(conversation.turns);
     setMode(conversation.mode); setBookIds(conversation.bookIds); setError("");
   }
@@ -153,18 +236,19 @@ export function AI() {
     if (mode === "summary" && bookIds.length !== 1) { setError("请选择一本书进行总结"); return; }
     if (mode === "compare" && bookIds.length < 2) { setError("请至少选择两本书进行跨书分析"); return; }
     const submitted = question.trim();
-    setLoading(true); setError(""); setQuestion("");
-    try {
-      const nextAnswer = await api.ask({ question: submitted, mode, bookIds, history: turns.map(turn => ({ question: turn.question, answer: turn.answer.content })) });
-      const nextTurns = [...turns, { question: submitted, answer: nextAnswer }].slice(-50);
-      const id = activeConversationId || crypto.randomUUID();
-      const conversation: AiConversation = { id, title: turns[0]?.question || submitted, turns: nextTurns, mode, bookIds: [...bookIds], createdAt: Date.now() };
-      setTurns(nextTurns); setActiveConversationId(id);
-      setHistory(current => [conversation, ...current.filter(item => item.id !== id)].slice(0, 30));
-    }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setLoading(false); }
+    setError(""); setQuestion("");
+    beginStream(submitted);
   }
+
+  // 失败后重试：沿用原问题与选书范围，但生成新的 request ID。
+  function retry() {
+    const pending = pendingRef.current;
+    releaseStream();
+    dispatch({ type: "reset" });
+    setError("");
+    beginStream(pending?.question ?? stream.question);
+  }
+
   return <div className="ai-page">
     <div className={`ai-layout${historyCollapsed ? " ai-layout--history-collapsed" : ""}`}>
       <aside className={`ai-history${historyCollapsed ? " is-collapsed" : ""}`}>

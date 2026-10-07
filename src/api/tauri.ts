@@ -1,10 +1,64 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AiAnswer, AiRequest, AiSettings, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
+import { listen } from "@tauri-apps/api/event";
+import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return invoke<T>(command, args);
   throw new Error("此功能仅在 wereader 桌面应用中可用");
+}
+
+const AI_STREAM_EVENT = "ai-stream";
+
+export interface AiStreamSession {
+  requestId: string;
+  /** 监听器注册完成并且后端已接受这次请求后 resolve；被拒绝时 reject。 */
+  ready: Promise<void>;
+  /** 让后端停止生成。 */
+  cancel(): void;
+  /** 解除事件监听。组件卸载或请求结束时必须调用。 */
+  dispose(): void;
+}
+
+/**
+ * 发起一次流式问答。
+ *
+ * 监听器必须在 `ask_ai_stream` 之前注册好：后端一收到请求就会立刻发 `started`，
+ * 先 invoke 再 listen 会丢掉第一段内容。
+ */
+export function startAiStream(request: AiRequest, requestId: string, onEvent: (event: AiStreamEvent) => void): AiStreamSession {
+  if (!isTauri()) {
+    const failed = Promise.reject(new Error("此功能仅在 wereader 桌面应用中可用"));
+    failed.catch(() => undefined);
+    return { requestId, ready: failed, cancel: () => undefined, dispose: () => undefined };
+  }
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  const ready = (async () => {
+    const off = await listen<AiStreamEvent>(AI_STREAM_EVENT, ({ payload }) => {
+      if (!disposed) onEvent(payload);
+    });
+    if (disposed) {
+      off();
+      return;
+    }
+    unlisten = off;
+    await invoke<string>("ask_ai_stream", { request, requestId });
+  })();
+  return {
+    requestId,
+    ready,
+    cancel: () => {
+      if (disposed) return;
+      invoke<boolean>("cancel_ai_stream", { requestId }).catch(() => undefined);
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      unlisten?.();
+      unlisten = null;
+    },
+  };
 }
 
 export const api = {

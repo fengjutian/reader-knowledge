@@ -117,6 +117,13 @@ export interface AiAnswer { content: string; citations: Citation[]; glossaryCita
 export type AiMode = "ask" | "summary" | "compare";
 export interface AiTurn { question: string; answer: AiAnswer }
 export interface AiRequest { question: string; mode: AiMode; bookIds: string[]; history?: { question: string; answer: string }[] }
+/** 后端 `ai-stream` 事件的 TS 形态，与 `src-tauri/src/ai/provider.rs` 的 `AiStreamEvent` 一一对应。 */
+export type AiStreamEvent =
+  | { requestId: string; type: "started"; notice?: string }
+  | { requestId: string; type: "delta"; content: string }
+  | { requestId: string; type: "completed"; answer: AiAnswer }
+  | { requestId: string; type: "failed"; message: string }
+  | { requestId: string; type: "cancelled" };
 export interface AiSettings { provider: string; endpoint: string; model: string }
 export interface EmbeddingSettings { provider: string; endpoint: string; model: string }
 export interface SemanticRelation { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: { bookId: string; noteId: string; text: string }[] }

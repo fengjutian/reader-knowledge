@@ -3,7 +3,7 @@ use crate::http::{limited_json, MAX_API_RESPONSE_BYTES};
 use crate::{database::Database, error::AppError, models::*};
 use rusqlite::OptionalExtension;
 use serde_json::Value;
-use std::{collections::{HashMap, HashSet}, future::Future, pin::Pin, task::Poll, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, future::Future, pin::Pin, sync::Arc, task::Poll, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -1049,9 +1049,16 @@ pub async fn test_ai(db: State<'_, Database>, api_key: Option<String>) -> Result
     Ok(true)
 }
 
-#[tauri::command]
-pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAnswer, AppError> {
-    let question = request.question;
+/// RAG 检索 + Prompt 组装的结果。
+/// `ask_ai` 与 `ask_ai_stream` 共用这一份准备逻辑，保证两条路径的证据完全一致。
+struct PreparedAsk {
+    messages: Vec<ChatMessage>,
+    results: Vec<SearchResult>,
+    glossary_matches: Vec<GlossaryCitation>,
+}
+
+fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppError> {
+    let question = &request.question;
     if !matches!(request.mode.as_str(), "ask" | "summary" | "compare") {
         return Err(AppError::Message("不支持的 AI 分析模式".into()));
     }
@@ -1067,7 +1074,7 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
     if question.trim().is_empty() {
         return Err(AppError::Message("问题不能为空".into()));
     }
-    let results = rag_search(&db, &question, &request.mode, &request.book_ids)?;
+    let results = rag_search(db, question, &request.mode, &request.book_ids)?;
     let mut context = String::new();
     for (index, result) in results.iter().enumerate() {
         let source = if result.note.note_type == "thought" {
@@ -1097,8 +1104,8 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         ));
     }
     let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
-    let metadata = metadata_context(&db, &metadata_book_ids)?;
-    let (glossary, glossary_matches) = glossary_context(&db,&format!("{}\n{}",question,context))?;
+    let metadata = metadata_context(db, &metadata_book_ids)?;
+    let (glossary, glossary_matches) = glossary_context(db,&format!("{}\n{}",question,context))?;
     if results.is_empty() && glossary.is_empty() {
         return Err(AppError::Message(
             "没有检索到相关笔记或名词解释，无法生成有依据的回答".into(),
@@ -1118,14 +1125,18 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         context,
         question.trim()
     );
-    let provider = ai_provider(&db)?;
     let mut messages = vec![ChatMessage { role: "system".into(), content: system.into() }];
     for turn in request.history.iter().rev().take(8).rev() {
         messages.push(ChatMessage { role: "user".into(), content: turn.question.chars().take(1200).collect() });
         messages.push(ChatMessage { role: "assistant".into(), content: turn.answer.chars().take(5000).collect() });
     }
     messages.push(ChatMessage { role: "user".into(), content: prompt });
-    let content = provider.chat(&messages).await?;
+    Ok(PreparedAsk { messages, results, glossary_matches })
+}
+
+/// 正文固定下来之后再决定引用哪些笔记，所以两条路径共用这一个收尾函数。
+fn finalize_answer(prepared: PreparedAsk, content: String) -> AiAnswer {
+    let PreparedAsk { results, glossary_matches, .. } = prepared;
     let sources_considered = results.len();
     let citations = results
         .into_iter()
@@ -1140,12 +1151,119 @@ pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAns
         .into_iter()
         .filter(|citation| content.contains(&format!("[W{}]", citation.index)))
         .collect();
-    Ok(AiAnswer {
+    AiAnswer {
         content,
         citations,
         glossary_citations,
         sources_considered,
-    })
+    }
+}
+
+#[tauri::command]
+pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAnswer, AppError> {
+    let prepared = prepare_ask(&db, &request)?;
+    let provider = ai_provider(&db)?;
+    let content = provider.chat(&prepared.messages).await?;
+    Ok(finalize_answer(prepared, content))
+}
+
+/// 流式问答。命令立刻返回 `requestId`，正文通过 `ai-stream` 事件推送。
+///
+/// 参数校验和 RAG 检索在返回前完成，检索失败直接当错误返回；
+/// 之后的网络与解析失败都通过 `failed` 事件上报，不会被当成正常结束。
+#[tauri::command]
+pub async fn ask_ai_stream(
+    app: AppHandle,
+    db: State<'_, Database>,
+    registry: State<'_, Arc<crate::ai::stream::StreamRegistry>>,
+    request: AiRequest,
+    request_id: Option<String>,
+) -> Result<String, AppError> {
+    let request_id = request_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if request_id.len() > 128 {
+        return Err(AppError::Message("请求标识过长".into()));
+    }
+    let prepared = prepare_ask(&db, &request)?;
+    let provider = ai_provider(&db)?;
+    let token = registry.register(&request_id)?;
+    let cancel_token = Arc::clone(&token);
+
+    let emit_app = app.clone();
+    let task_id = request_id.clone();
+    let task_registry = registry.inner().clone();
+    let mut handle = tokio::spawn(async move {
+        let emit = |event: crate::ai::provider::AiStreamEvent| {
+            let _ = emit_app.emit(crate::ai::provider::AI_STREAM_EVENT, event);
+        };
+        let started = crate::ai::provider::AiStreamEvent::started(&task_id);
+        emit(started.clone());
+        let outcome = provider
+            .chat_stream(&prepared.messages, &cancel_token, |delta| {
+                emit(crate::ai::provider::AiStreamEvent::delta(&task_id, delta));
+            })
+            .await;
+        match outcome {
+            Ok((crate::ai::providers::StreamOutcome::Completed(content), notice)) => {
+                if let Some(notice) = notice {
+                    emit(started.with_notice(notice));
+                }
+                let answer = finalize_answer(prepared, content);
+                emit(crate::ai::provider::AiStreamEvent::completed(&task_id, answer));
+            }
+            Ok((crate::ai::providers::StreamOutcome::Cancelled, _)) => {
+                emit(crate::ai::provider::AiStreamEvent::cancelled(&task_id));
+            }
+            Err(error) => {
+                emit(crate::ai::provider::AiStreamEvent::failed(&task_id, error.to_string()));
+            }
+        }
+        task_registry.finish(&task_id);
+    });
+
+    // 用户取消时直接中止整个读取任务：响应体在 future 被丢弃时关闭连接，
+    // 不需要处理「半读状态」。
+    tokio::select! {
+        _ = &mut handle => {}
+        _ = wait_for_cancel(&token) => {
+            handle.abort();
+            registry.finish(&request_id);
+            let _ = app.emit(
+                crate::ai::provider::AI_STREAM_EVENT,
+                crate::ai::provider::AiStreamEvent::cancelled(&request_id),
+            );
+        }
+    }
+    Ok(request_id)
+}
+
+/// 每 60ms 采样一次取消标记。
+async fn wait_for_cancel(token: &Arc<std::sync::atomic::AtomicBool>) {
+    loop {
+        if token.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+}
+
+/// 取消指定 `requestId` 的流式请求。请求已结束或从未存在时返回 `false`。
+#[tauri::command]
+pub fn cancel_ai_stream(
+    app: AppHandle,
+    registry: State<'_, Arc<crate::ai::stream::StreamRegistry>>,
+    request_id: String,
+) -> Result<bool, AppError> {
+    let cancelled = registry.cancel(&request_id);
+    if cancelled {
+        let _ = app.emit(
+            crate::ai::provider::AI_STREAM_EVENT,
+            crate::ai::provider::AiStreamEvent::cancelled(&request_id),
+        );
+    }
+    Ok(cancelled)
 }
 
 #[derive(serde::Deserialize)]

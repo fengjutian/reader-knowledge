@@ -8,6 +8,7 @@ mod metadata;
 mod sync;
 mod weread;
 
+use std::sync::Arc;
 use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
@@ -18,6 +19,7 @@ pub fn run() {
                 database::Database::open(path)
                     .map_err(|e| Box::<dyn std::error::Error>::from(e))?,
             );
+            app.manage(Arc::new(ai::stream::StreamRegistry::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -52,6 +54,8 @@ pub fn run() {
             commands::save_ai_settings,
             commands::test_ai,
             commands::ask_ai,
+            commands::ask_ai_stream,
+            commands::cancel_ai_stream,
             commands::analyze_book_relation,
             commands::get_cached_relation_analysis
             ,commands::get_embedding_settings
