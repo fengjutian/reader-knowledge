@@ -89,6 +89,8 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
         // 网页用 url 重新抓取；PDF / EPUB 用本地文件路径重新读取
         url: preview.sourceType === "web" ? url.trim() : undefined,
         path: preview.sourceType === "web" ? undefined : path.trim() || undefined,
+        // 本地文件把预览时的指纹带回去：文件在这期间被换掉时后端会拒绝
+        fileFingerprint: preview.sourceType === "web" ? undefined : preview.fileFingerprint,
       });
       if (result.duplicate) {
         // 重复内容不重复入库，把已有资料指回去

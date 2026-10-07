@@ -2616,8 +2616,11 @@ fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
     app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))
 }
 
-fn cover_file_name(extension: &str) -> String {
-    format!("cover.{}", extension.trim_start_matches('.').to_lowercase())
+fn cover_file_name(source_id: &str, extension: &str) -> String {
+    // 文件名带 source id：所有 EPUB 的封面都叫 cover.jpg 的话，
+    // 删掉任意一份资料都会连带删掉别人的封面。
+    let suffix: String = source_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(36).collect();
+    format!("cover-{}.{}", if suffix.is_empty() { "unknown".to_string() } else { suffix }, extension.trim_start_matches('.').to_lowercase())
 }
 
 /// 把解析结果写库。
@@ -2637,7 +2640,7 @@ fn persist_source(
         (Some(bytes), Some(extension)) => {
             let directory = app_data_dir(app)?.join("imports");
             std::fs::create_dir_all(&directory).map_err(|error| AppError::Message(error.to_string()))?;
-            let name = cover_file_name(extension);
+            let name = cover_file_name(&source_id, extension);
             std::fs::write(directory.join(&name), bytes).map_err(|error| AppError::Message(format!("保存封面失败：{error}")))?;
             Some(name)
         }
@@ -2714,6 +2717,7 @@ pub async fn preview_web_import(db: State<'_, Database>, request: PreviewWebRequ
         warnings: parsed.warnings.clone(),
         duplicate: duplicate_of.is_some(),
         duplicate_of,
+        file_fingerprint: None,
     })
 }
 
@@ -3032,21 +3036,45 @@ pub fn delete_library_source(db: State<'_, Database>, source_id: String) -> Resu
 }
 
 /// 彻底删除本地副本。删表由 CASCADE 完成，封面文件也要一起清掉。
+///
+/// 顺序是「先删库、再删文件」：数据库失败时提前 return，不会出现
+/// 文件已经没了但记录还在的中间态。封面文件不存在（比如用户手动清过）
+/// 不算失败 —— 数据已经删掉了，文件清理只是尽力而为。
 #[tauri::command]
 pub fn purge_library_source(app: AppHandle, db: State<'_, Database>, source_id: String) -> Result<(), AppError> {
     let cover: Option<String> = db
         .connect()?
         .query_row("SELECT cover_path FROM library_sources WHERE id=?1", [&source_id], |r| r.get(0))
         .optional()?;
-    db.connect()?.execute("DELETE FROM library_sources WHERE id=?1", [&source_id])?;
+    let changed = db.connect()?.execute("DELETE FROM library_sources WHERE id=?1", [&source_id])?;
+    if changed == 0 {
+        return Err(AppError::Message("资料不存在".into()));
+    }
     if let Some(name) = cover.filter(|value| !value.is_empty()) {
-        // 只删除我们自己生成的文件名，避免被传入任意路径
-        let safe = std::path::Path::new(&name);
-        if safe.file_name().and_then(|value| value.to_str()) == Some(name.as_str()) {
-            let _ = std::fs::remove_file(app_data_dir(&app)?.join("imports").join(&name));
+        let directory = app_data_dir(&app)?.join("imports");
+        // 只删除我们自己生成的文件名：数据库里的 cover_path 绝不能被当成任意路径使用
+        if is_own_cover_file(&name) {
+            let _ = std::fs::remove_file(directory.join(&name));
         }
     }
     Ok(())
+}
+
+/// cover_path 是否是我们自己写进去的文件名。
+///
+/// 拒绝绝对路径、盘符、`..`、子目录分隔符：即使数据库被改坏，
+/// 也只能删到 `imports/` 目录下的那一个文件。
+fn is_own_cover_file(name: &str) -> bool {
+    if name.is_empty() || name.len() > 128 {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return false;
+    }
+    if name.contains(':') {
+        return false;
+    }
+    name.starts_with("cover-")
 }
 
 /// 流式问答。命令立刻返回 `requestId`，正文通过 `ai-stream` 事件推送。
@@ -3704,9 +3732,10 @@ mod tests {
         content_hash, correct_entity_impl, database_row_query, fts_match_expression, fts_query, global_search_impl,
         known_entity_names, list_concept_graph_impl, maybe_rerank, merge_entities_impl, normalize_recommendations,
         normalize_scores, notes_grouped_by_book, parse_extraction, parse_relation_analysis, persist_extraction,
-        cover_file_name, find_duplicate, list_sources_impl, relevance_from_bm25, reranker_settings_from_db,
-        request_default, save_reranker_settings_impl, search_terms, snippet_of, source_detail_impl, unchanged_notes,
-        validate_secret_kind, weread_reader_id,
+        cover_file_name, find_duplicate, is_own_cover_file, list_sources_impl, read_local_file,
+        relevance_from_bm25, reranker_settings_from_db, request_default, save_reranker_settings_impl, search_terms,
+        snippet_of, source_candidates, source_detail_impl, unchanged_notes, validate_secret_kind, weread_reader_id,
+        MAX_LOCAL_FILE_BYTES,
         MetadataBatchFuture, MetadataFetchResult, AppError, GLOBAL_SEARCH_SNIPPET_CHARS,
     };
     use crate::{
@@ -4655,8 +4684,218 @@ mod tests {
     #[test]
     fn 导入资料_封面文件名必须清洗() {
         // 只允许自己生成的文件名，避免 purge 时被传入任意路径
-        assert_eq!(cover_file_name("JPG"), "cover.jpg");
-        assert_eq!(cover_file_name(".png"), "cover.png");
+        assert_eq!(cover_file_name("s1", "JPG"), "cover-s1.jpg");
+        assert_eq!(cover_file_name("s1", ".png"), "cover-s1.png");
+        // 不同资料的封面不能重名，否则删一份会带走别人的封面
+        assert_ne!(cover_file_name("s1", "jpg"), cover_file_name("s2", "jpg"));
+    }
+
+    #[test]
+    fn 导入资料_恶意_cover_path_不能通过校验() {
+        for evil in [
+            "../../secret.txt",
+            "..\\..\\secret.txt",
+            "/etc/passwd",
+            "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "imports/cover-s1.jpg",
+            "cover-s1.jpg.txt",
+            "",
+            "other-file.jpg",
+        ] {
+            assert!(!is_own_cover_file(evil), "不该被放行：{evil}");
+        }
+        assert!(is_own_cover_file("cover-abc123.jpg"));
+        assert!(is_own_cover_file("cover-abc123.png"));
+    }
+
+    // ---------- 本地文件校验 ----------
+
+    /// 写一个临时文件，返回其路径。
+    fn write_temp(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// 最小可解析 PDF：有对象表、页面、内容流、标题。
+    fn sample_pdf_bytes() -> Vec<u8> {
+        let content = "BT /F1 12 Tf 72 720 Td (Hello imported body) Tj ET";
+        let mut bytes = b"%PDF-1.4\n".to_vec();
+        let mut offsets: Vec<usize> = Vec::new();
+        let objects: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /MediaBox [0 0 612 792] >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Title (Sample Doc) /Producer (test) >>".to_string(),
+        ];
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref_start = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in &offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref_start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn 导入资料_空路径被拒绝() {
+        assert!(read_local_file("   ").unwrap_err().to_string().contains("请选择"));
+    }
+
+    #[test]
+    fn 导入资料_不存在的路径被拒绝() {
+        let (dir, _db) = search_test_db();
+        let path = dir.path().join("nope.pdf");
+        let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("文件不存在或无法读取"), "实际：{error}");
+    }
+
+    #[test]
+    fn 导入资料_目录路径被拒绝() {
+        let (dir, _db) = search_test_db();
+        let folder = dir.path().join("folder.pdf");
+        std::fs::create_dir_all(&folder).unwrap();
+        let error = read_local_file(folder.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("文件夹"), "实际：{error}");
+    }
+
+    #[test]
+    fn 导入资料_不支持的扩展名被拒绝() {
+        let (dir, _db) = search_test_db();
+        for name in ["book.txt", "book.mobi", "book", "book.pdf.zip"] {
+            let path = write_temp(dir.path(), name, b"whatever");
+            let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+            assert!(error.contains("请选择 PDF 或 EPUB 文件"), "{name} 实际：{error}");
+        }
+    }
+
+    #[test]
+    fn 导入资料_大写扩展名可以识别() {
+        let (dir, _db) = search_test_db();
+        for name in ["book.PDF", "book.Pdf"] {
+            let path = write_temp(dir.path(), name, &sample_pdf_bytes());
+            let (parsed, fingerprint) = read_local_file(path.to_str().unwrap()).unwrap();
+            assert_eq!(parsed.kind, Some(crate::import::SourceKind::Pdf), "{name} 应当识别为 PDF");
+            assert!(!fingerprint.is_empty());
+        }
+    }
+
+    #[test]
+    fn 导入资料_改名的假文件被拒绝() {
+        let (dir, _db) = search_test_db();
+        // ZIP 改名 .pdf
+        let path = write_temp(dir.path(), "fake.pdf", b"PK\x03\x04\x14\x00\x00\x00rest");
+        let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("扩展名是 PDF"), "实际：{error}");
+
+        // HTML 改名 .pdf
+        let path = write_temp(dir.path(), "page.pdf", b"<!DOCTYPE html><html><body>hi</body></html>");
+        let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("扩展名是 PDF"), "实际：{error}");
+
+        // PDF 改名 .epub
+        let path = write_temp(dir.path(), "book.epub", &sample_pdf_bytes());
+        let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("扩展名是 EPUB"), "实际：{error}");
+    }
+
+    #[test]
+    fn 导入资料_中文与空格路径可以读取() {
+        let (dir, _db) = search_test_db();
+        let path = write_temp(dir.path(), "我的 资料/测试 书.pdf", &sample_pdf_bytes());
+        let (parsed, _) = read_local_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(parsed.title, "Sample Doc");
+        assert_eq!(parsed.origin.as_deref(), Some(path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn 导入资料_超限文件在完整读取前被拒绝() {
+        let (dir, _db) = search_test_db();
+        let path = dir.path().join("huge.pdf");
+        // set_len 只是把文件长度标大，不写内容：能验证「先看 metadata 再读」
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_LOCAL_FILE_BYTES + 1).unwrap();
+        drop(file);
+        let error = read_local_file(path.to_str().unwrap()).unwrap_err().to_string();
+        assert!(error.contains("体积超过"), "实际：{error}");
+    }
+
+    #[test]
+    fn 导入资料_指纹只跟内容有关() {
+        let (dir, _db) = search_test_db();
+        let bytes = sample_pdf_bytes();
+        let first = write_temp(dir.path(), "a.pdf", &bytes);
+        let second = write_temp(dir.path(), "b.pdf", &bytes);
+        let (_, fingerprint_a) = read_local_file(first.to_str().unwrap()).unwrap();
+        let (_, fingerprint_b) = read_local_file(second.to_str().unwrap()).unwrap();
+        assert_eq!(fingerprint_a, fingerprint_b, "同一份内容在不同路径下指纹必须相同");
+
+        let mut changed = bytes.clone();
+        changed.extend_from_slice(b"\n% edited\n");
+        let third = write_temp(dir.path(), "c.pdf", &changed);
+        let (_, fingerprint_c) = read_local_file(third.to_str().unwrap()).unwrap();
+        assert_ne!(fingerprint_a, fingerprint_c, "内容变了指纹必须变");
+    }
+
+    // ---------- 删除与清理 ----------
+
+    #[test]
+    fn 导入资料_软删除保留正文但不参与搜索() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "可被搜到的原始词汇", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "可被搜到的原始词汇", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+
+        let changed = db
+            .connect()
+            .unwrap()
+            .execute("UPDATE library_sources SET is_deleted=1 WHERE id='s1'", [])
+            .unwrap();
+        assert_eq!(changed, 1);
+        // 数据库正文还在
+        let docs: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM source_documents WHERE source_id='s1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(docs, 1, "软删除不能删正文");
+        // 但列表与搜索都看不到
+        assert!(list_sources_impl(&db, false).unwrap().is_empty());
+        let hits = source_candidates(&db, Some("原始词汇"), None, 10).unwrap();
+        assert!(hits.is_empty(), "软删除的资料不该出现在搜索里");
+    }
+
+    #[test]
+    fn 导入资料_永久删除清掉文档与索引() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "待彻底删除的词汇", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "待彻底删除的词汇", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+        assert_eq!(source_candidates(&db, Some("待彻底删除"), None, 10).unwrap().len(), 1);
+
+        let removed = db.connect().unwrap().execute("DELETE FROM library_sources WHERE id='s1'", []).unwrap();
+        assert_eq!(removed, 1);
+
+        let exists: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM library_sources WHERE id='s1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(exists, 0);
+        let docs: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM source_documents WHERE source_id='s1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(docs, 0, "外键级联必须清掉文档块");
+        let fts: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM source_docs_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(fts, 0, "FTS 索引必须清掉");
+        assert!(source_candidates(&db, Some("待彻底删除"), None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 导入资料_软删除默认不出现在列表里() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "书", false);
+        assert_eq!(list_sources_impl(&db, false).unwrap().len(), 1);
+        assert_eq!(list_sources_impl(&db, true).unwrap().len(), 1);
+        db.connect().unwrap().execute("UPDATE library_sources SET is_deleted=1 WHERE id='s1'", []).unwrap();
+        assert!(list_sources_impl(&db, false).unwrap().is_empty());
+        assert_eq!(list_sources_impl(&db, true).unwrap().len(), 1, "显式请求时仍能看到已移除的资料");
     }
 
     // ---------- 概念级知识图谱 ----------

@@ -256,6 +256,29 @@ describe("LibrarySources", () => {
     expect(api.confirmImport).toHaveBeenCalledWith(expect.objectContaining({ sourceType: "pdf", path: "C:\\book.pdf" }));
   });
 
+  it("确认导入时把文件指纹回传，防止预览后文件被换掉", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.previewFileImport).mockResolvedValue(preview({ fileFingerprint: "abc123" }));
+    render(<LibrarySources />);
+    await importViaDialog(user);
+    await screen.findByText("第一页的正文内容");
+    await user.click(screen.getByRole("button", { name: /确认导入/ }));
+
+    await waitFor(() => expect(api.confirmImport).toHaveBeenCalledWith(expect.objectContaining({ fileFingerprint: "abc123" })));
+  });
+
+  it("文件在预览之后变化时后端拒绝导入", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.previewFileImport).mockResolvedValue(preview({ fileFingerprint: "abc123" }));
+    vi.mocked(api.confirmImport).mockRejectedValue(new Error("这个文件在预览之后发生了变化，请重新预览后再导入"));
+    render(<LibrarySources />);
+    await importViaDialog(user);
+    await screen.findByText("第一页的正文内容");
+    await user.click(screen.getByRole("button", { name: /确认导入/ }));
+
+    expect(await screen.findByText(/在预览之后发生了变化/)).toBeInTheDocument();
+  });
+
   it("导入失败时展示错误且不写库", async () => {
     const user = userEvent.setup();
     vi.mocked(api.previewFileImport).mockRejectedValue(new Error("这份 PDF 没有可提取的文字，可能是扫描版；暂不支持 OCR，已跳过导入"));

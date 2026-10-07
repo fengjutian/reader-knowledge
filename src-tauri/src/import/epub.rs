@@ -477,4 +477,206 @@ mod tests {
         assert_eq!(chapter_heading("<html><head><title>文档标题</title></head><body><p>正文</p></body></html>").as_deref(), Some("文档标题"));
         assert_eq!(chapter_heading("<body><p>无标题</p></body>"), None);
     }
+
+    // ---------- 真实样本：自己拼出来的最小 EPUB ----------
+
+    /// 拼一个 EPUB 样本。
+    ///
+    /// `mimetype` 缺失 / 写错、`container.xml` 缺失这些都是真实世界会遇到的坏文件，
+    /// 测试自己构造比找外部样本可靠，也不依赖开发机上的任何文件。
+    struct EpubBuilder {
+        mimetype: Option<&'static str>,
+        container: Option<&'static str>,
+        opf: Option<String>,
+        extra: Vec<(String, Vec<u8>)>,
+    }
+
+    impl EpubBuilder {
+        fn new() -> Self {
+            Self { mimetype: Some(EPUB_MIMETYPE), container: Some(CONTAINER_XML), opf: None, extra: Vec::new() }
+        }
+
+        fn build(self) -> Vec<u8> {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            // 规范要求 mimetype 是第一个条目且不压缩
+            if let Some(value) = self.mimetype {
+                writer.start_file("mimetype", stored_options()).unwrap();
+                std::io::Write::write_all(&mut writer, value.as_bytes()).unwrap();
+            }
+            if let Some(value) = self.container {
+                writer.start_file("META-INF/container.xml", deflated_options()).unwrap();
+                std::io::Write::write_all(&mut writer, value.as_bytes()).unwrap();
+            }
+            for (name, bytes) in self.extra {
+                writer.start_file(name, deflated_options()).unwrap();
+                std::io::Write::write_all(&mut writer, &bytes).unwrap();
+            }
+            if let Some(opf) = self.opf {
+                writer.start_file(OPF_PATH, deflated_options()).unwrap();
+                std::io::Write::write_all(&mut writer, opf.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap().into_inner()
+        }
+    }
+
+    const CONTAINER_XML: &str = r#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    const OPF_PATH: &str = "OEBPS/content.opf";
+
+    /// mimetype 必须不压缩，其余条目用 deflate。
+    fn stored_options() -> zip::write::FileOptions<'static, ()> {
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored)
+    }
+
+    fn deflated_options() -> zip::write::FileOptions<'static, ()> {
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated)
+    }
+
+    fn opf_xml(version: &str, cover: bool) -> String {
+        let cover_item = if cover { r#"<item id="cover" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>"# } else { "" };
+        let cover_meta = if cover { r#"<meta name="cover" content="cover"/>"# } else { "" };
+        format!(
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>测试书名</dc:title><dc:creator>测试作者</dc:creator>{cover_meta}
+  </metadata>
+  <manifest>{cover_item}
+    <item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c2"/><itemref idref="c1"/></spine>
+</package>"#
+        )
+    }
+
+    fn chapter(title: &str, body: &str) -> Vec<u8> {
+        format!("<html><head><title>文档标题</title></head><body><h1>{title}</h1><p>{body}</p></body></html>").into_bytes()
+    }
+
+    /// 一个内容完整、格式合法的 EPUB。
+    fn sample_epub(version: &str, cover: bool) -> Vec<u8> {
+        EpubBuilder {
+            opf: Some(opf_xml(version, cover)),
+            ..EpubBuilder::new()
+        }
+        .extra(vec![
+            ("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，用来凑够最短长度门槛。")),
+            ("OEBPS/text/ch2.xhtml".to_string(), chapter("第二章", "第二章的正文内容，同样要够长才不会被跳过。")),
+            ("OEBPS/images/cover.jpg".to_string(), vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]),
+        ])
+        .build()
+    }
+
+    impl EpubBuilder {
+        fn extra(mut self, entries: Vec<(String, Vec<u8>)>) -> Self {
+            self.extra = entries;
+            self
+        }
+    }
+
+    #[test]
+    fn 标准_epub_按_spine_顺序导入() {
+        let parsed = parse(sample_epub("2.0", false)).unwrap();
+        assert_eq!(parsed.title, "测试书名");
+        assert_eq!(parsed.author.as_deref(), Some("测试作者"));
+        // spine 里 c2 在前，章节号要跟着 spine 走而不是文件名
+        assert_eq!(parsed.chunks[0].locator.chapter, Some(1));
+        assert!(parsed.chunks.iter().all(|chunk| chunk.locator.chapter.is_some()));
+        assert!(parsed.chunks[0].content.contains("第二章"));
+    }
+
+    #[test]
+    fn epub_3_同样能导入并复制封面() {
+        let parsed = parse(sample_epub("3.0", true)).unwrap();
+        assert_eq!(parsed.chunks.len() >= 2, true);
+        assert_eq!(parsed.cover.as_ref().map(|bytes| bytes.len()), Some(6));
+        assert_eq!(parsed.cover_extension.as_deref(), Some("jpg"));
+    }
+
+    #[test]
+    fn 没有封面的_epub_不报错() {
+        let parsed = parse(sample_epub("3.0", false)).unwrap();
+        assert!(parsed.cover.is_none());
+    }
+
+    #[test]
+    fn 普通_zip_改名_epub_被拒绝() {
+        // 只有 container 和 opf，缺 mimetype —— 就是一个改名的 ZIP
+        let bytes = EpubBuilder { mimetype: None, ..EpubBuilder::new() }
+            .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，凑长度用的填充文字。"))])
+            .build();
+        let error = parse(bytes).unwrap_err().to_string();
+        assert!(error.contains("缺少 mimetype"), "实际：{error}");
+    }
+
+    #[test]
+    fn mimetype_内容错误被拒绝() {
+        for wrong in ["application/zip", "text/plain", "application/epub+xml"] {
+            let bytes = EpubBuilder { mimetype: Some(wrong), ..EpubBuilder::new() }
+                .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，凑长度用的填充文字。"))])
+                .build();
+            let error = parse(bytes).unwrap_err().to_string();
+            assert!(error.contains("不是标准 EPUB"), "实际：{error}");
+        }
+    }
+
+    #[test]
+    fn mimetype_结尾多一个换行仍然接受() {
+        // 有些打包工具会在 mimetype 后面补一个换行，不能因此把正常书拒掉
+        assert!(validate_mimetype(b"application/epub+zip\n").is_ok());
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file("mimetype", stored_options()).unwrap();
+        std::io::Write::write_all(&mut writer, b"application/epub+zip\n").unwrap();
+        writer.start_file("META-INF/container.xml", deflated_options()).unwrap();
+        std::io::Write::write_all(&mut writer, CONTAINER_XML.as_bytes()).unwrap();
+        writer.start_file(OPF_PATH, deflated_options()).unwrap();
+        std::io::Write::write_all(&mut writer, opf_xml("2.0", false).as_bytes()).unwrap();
+        writer.start_file("OEBPS/text/ch1.xhtml", deflated_options()).unwrap();
+        std::io::Write::write_all(&mut writer, &chapter("第一章", "第一章的正文内容，凑长度用的填充文字。")).unwrap();
+        writer.start_file("OEBPS/text/ch2.xhtml", deflated_options()).unwrap();
+        std::io::Write::write_all(&mut writer, &chapter("第二章", "第二章的正文内容，凑长度用的填充文字。")).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        assert!(parse(bytes).is_ok());
+    }
+
+    #[test]
+    fn 缺少_container_被拒绝() {
+        let bytes = EpubBuilder { container: None, opf: Some(opf_xml("2.0", false)), ..EpubBuilder::new() }
+            .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，凑长度用的填充文字。"))])
+            .build();
+        let error = parse(bytes).unwrap_err().to_string();
+        assert!(error.contains("缺少条目"), "实际：{error}");
+    }
+
+    #[test]
+    fn 缺少_opf_被拒绝() {
+        let bytes = EpubBuilder { opf: None, ..EpubBuilder::new() }
+            .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，凑长度用的填充文字。"))])
+            .build();
+        assert!(parse(bytes).is_err());
+    }
+
+    #[test]
+    fn zip_slip_恶意条目被拒绝() {
+        // 条目名带 .. ，解压后会写到 ZIP 之外
+        let bytes = EpubBuilder { opf: Some(opf_xml("2.0", false)), ..EpubBuilder::new() }
+            .extra(vec![("OEBPS/../../evil.xhtml".to_string(), chapter("恶意", "这段内容不应该被写出来。"))])
+            .build();
+        // OPF 本身在合法路径上，恶意条目只是多出来的，应当被静默忽略或拒绝，但不能写到外面
+        let outcome = parse(bytes);
+        if let Ok(parsed) = outcome {
+            assert!(parsed.chunks.iter().all(|chunk| !chunk.content.contains("不应该")), "越界条目被读进来了");
+        }
+        assert!(is_safe_entry_name("OEBPS/../../evil.xhtml") == false);
+    }
+
+    #[test]
+    fn 高压缩比条目超过上限被拒绝() {
+        let bomb = vec![b'A'; (MAX_ENTRY_BYTES + 1024) as usize];
+        let bytes = EpubBuilder { opf: Some(opf_xml("2.0", false)), ..EpubBuilder::new() }
+            .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), bomb)])
+            .build();
+        let error = parse(bytes).unwrap_err().to_string();
+        assert!(error.contains("过大") || error.contains("正文过短"), "实际：{error}");
+    }
 }

@@ -517,7 +517,7 @@ fn is_cjk_punctuation(value: char) -> bool {
 /// 从 lopdf 的文档信息字典里取标题。
 fn lopdf_title(doc: &lopdf::Document) -> Option<String> {
     let Ok(lopdf::Object::Reference(info_id)) = doc.trailer.get(b"Info") else { return None };
-    let Ok(lopdf::Object::Dictionary(info)) = doc.get(info_id).ok()? else { return None };
+    let Ok(lopdf::Object::Dictionary(info)) = doc.get_object(*info_id) else { return None };
     let Ok(lopdf::Object::String(raw, _)) = info.get(b"Title") else { return None };
     let text = decode_pdf_string(raw);
     let text = text.trim();
@@ -536,6 +536,7 @@ fn parse_with_primary_engine(bytes: &[u8]) -> Result<ParsedSource, AppError> {
         return Err(AppError::Message(ENCRYPTED_MESSAGE.into()));
     }
     let pages = doc.get_pages();
+    let page_count = pages.len();
     if pages.is_empty() {
         return Err(AppError::Message("PDF 里没有找到任何页面，文件可能已损坏".into()));
     }
@@ -547,7 +548,7 @@ fn parse_with_primary_engine(bytes: &[u8]) -> Result<ParsedSource, AppError> {
         kind: Some(SourceKind::Pdf),
         cover: None,
         cover_extension: None,
-        page_count: pages.len() as u32,
+        page_count: page_count as u32,
         chunks: Vec::new(),
         warnings: Vec::new(),
     };
@@ -583,7 +584,7 @@ fn parse_with_primary_engine(bytes: &[u8]) -> Result<ParsedSource, AppError> {
         position += chunks.len();
         parsed.chunks.extend(chunks);
         if position >= crate::import::MAX_DOCUMENTS_PER_SOURCE {
-            parsed.add_warning("页数过多，只导入了前一部分".into());
+            parsed.add_warning("页数过多，只导入了前一部分");
             break;
         }
     }
@@ -672,7 +673,7 @@ fn parse_with_legacy_fallback(bytes: &[u8]) -> Result<ParsedSource, AppError> {
     if pages_with_text < page_numbers.len() {
         parsed.add_warning(format!("共 {} 页，其中 {} 页没有文字层（可能是图片页）", page_numbers.len(), page_numbers.len() - pages_with_text));
     }
-    parsed.add_warning("这份 PDF 用的是兼容解析路径，部分页面可能不完整".into());
+    parsed.add_warning("这份 PDF 用的是兼容解析路径，部分页面可能不完整");
     Ok(parsed)
 }
 
@@ -680,14 +681,20 @@ fn page_index_of(page_numbers: &[u32], number: u32) -> u32 {
     page_numbers.iter().position(|value| *value == number).map(|index| index as u32 + 1).unwrap_or(1)
 }
 
-/// 解析 PDF 并按页生成文档块。
-pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
-    if bytes.len() as u64 > MAX_PDF_BYTES {
+/// 体积闸门。抽成函数是为了能直接测「超限被拒」，而不必真的造一个 200 MB 文件。
+pub fn check_size(len: u64) -> Result<(), AppError> {
+    if len > MAX_PDF_BYTES {
         return Err(AppError::Message(format!(
             "PDF 体积超过 {} MB 的导入上限",
             MAX_PDF_BYTES / 1024 / 1024
         )));
     }
+    Ok(())
+}
+
+/// 解析 PDF 并按页生成文档块。
+pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
+    check_size(bytes.len() as u64)?;
     crate::import::check_file_signature(SourceKind::Pdf, &bytes)?;
 
     // 主路径优先；只有主路径失败才退回手写解析器。
@@ -850,5 +857,209 @@ mod tests {
             locator: Locator::default(),
         }];
         assert_eq!(first_line_title(&chunks), "第一行标题");
+    }
+
+    #[test]
+    fn 页眉页脚不当书名() {
+        let chunks = vec![crate::import::DocumentChunk {
+            position: 0,
+            heading: "第 3 页".into(),
+            // 页码行先出现，真正的书名在后面
+            content: "12\n第 3 页\n深入理解计算机系统\n正文内容".into(),
+            locator: Locator::default(),
+        }];
+        assert_eq!(first_line_title(&chunks), "深入理解计算机系统");
+    }
+
+    #[test]
+    fn 只有页码也没有标题时给出兜底名() {
+        let chunks = vec![crate::import::DocumentChunk {
+            position: 0,
+            heading: "第 1 页".into(),
+            content: "1\n2\n3".into(),
+            locator: Locator::default(),
+        }];
+        assert_eq!(first_line_title(&chunks), "未命名 PDF");
+    }
+
+    // ---------- 文本质量 ----------
+
+    #[test]
+    fn 正常文本不算乱码() {
+        let text = "The quick brown fox jumps over the lazy dog. 中文段落也应该是可读的。";
+        assert!(!assess_text_quality(text).is_garbled());
+    }
+
+    #[test]
+    fn 替换字符过多判为乱码() {
+        let text = "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}正常字";
+        assert!(assess_text_quality(text).is_garbled());
+    }
+
+    #[test]
+    fn 控制字符过多判为乱码() {
+        let text = "\u{0001}\u{0002}\u{0003}\u{0004}\u{0005}\u{0006}\u{0007}文字";
+        assert!(assess_text_quality(text).is_garbled());
+    }
+
+    #[test]
+    fn 清理中文之间的排版空格() {
+        // lopdf 逐个算子拼接，中文之间常留下对齐用的空格
+        assert_eq!(clean_extracted_text("读 书 的 艺 术"), "读书的艺术");
+        assert_eq!(clean_extracted_text("他说 ： 你 好"), "他说：你好");
+        // 英文单词之间的空格必须保留
+        assert_eq!(clean_extracted_text("hello   world"), "hello world");
+    }
+
+    #[test]
+    fn 清理不会删掉中文标点() {
+        assert_eq!(clean_extracted_text("第一句。第二句！第三句？"), "第一句。第二句！第三句？");
+    }
+
+    // ---------- 真实样本 ----------
+
+    /// 拼一个多页 PDF：每页一条内容流，`info` 里带 /Title。
+    fn build_pdf(version: &str, pages: &[&str], title: Option<&str>) -> Vec<u8> {
+        let mut bytes = format!("%PDF-{version}\n").into_bytes();
+        let mut offsets: Vec<usize> = Vec::new();
+        // 1: Catalog, 2: Pages, 3: Font, 4: Info
+        let mut objects: Vec<(usize, String)> = vec![
+            (1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()),
+            (2, format!("<< /Type /Pages /Count {} /Kids [{}] >>", pages.len(), (0..pages.len()).map(|i| format!("{} 0 R", 5 + i * 2)).collect::<Vec<_>>().join(" "))),
+            (3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()),
+        ];
+        let info = match title {
+            Some(value) => format!("<< /Title ({value}) /Producer (test) >>"),
+            None => "<< /Producer (test) >>".to_string(),
+        };
+        objects.push((4, info));
+        for (index, content) in pages.iter().enumerate() {
+            let content_id = 6 + index * 2;
+            objects.push((5 + index * 2, format!("<< /Type /Page /Parent 2 0 R /Contents {content_id} 0 R /MediaBox [0 0 612 792] >>")));
+            objects.push((content_id, format!("STREAM:<< /Length {} >>\n{content}", content.len())));
+        }
+        objects.sort_by_key(|(id, _)| *id);
+        for (id, body) in &objects {
+            offsets.push(bytes.len());
+            if let Some(content) = body.strip_prefix("STREAM:") {
+                bytes.extend_from_slice(format!("{id} 0 obj\n{content}\nendstream\nendobj\n").as_bytes());
+            } else {
+                bytes.extend_from_slice(format!("{id} 0 obj\n{body}\nendobj\n").as_bytes());
+            }
+        }
+        let xref_start = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in &offsets {
+            bytes.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 4 0 R >>\nstartxref\n{xref_start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        bytes
+    }
+
+    fn simple_page(text: &str) -> String {
+        format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET")
+    }
+
+    #[test]
+    fn 简单英文_pdf_按页导入且页码从一开始() {
+        let pdf = build_pdf(
+            "1.4",
+            &[&simple_page("Page one body"), &simple_page("Page two body")],
+            Some("Sample Book"),
+        );
+        let parsed = parse(pdf).unwrap();
+        assert_eq!(parsed.title, "Sample Book");
+        assert_eq!(parsed.page_count, 2);
+        assert_eq!(parsed.chunks[0].locator.page, Some(1));
+        assert!(parsed.chunks[0].content.contains("Page one body"));
+        // 第二页的块必须带第 2 页，不能沿用第 1 页
+        assert!(parsed.chunks.iter().any(|chunk| chunk.locator.page == Some(2)));
+    }
+
+    #[test]
+    fn 多页_每页都带正确页码_locator() {
+        let pages: Vec<String> = (1..=5).map(|index| simple_page(&format!("Body of page {index}"))).collect();
+        let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+        let parsed = parse(build_pdf("1.4", &refs, Some("Multi"))).unwrap();
+        let mut seen: Vec<u32> = parsed.chunks.iter().filter_map(|chunk| chunk.locator.page).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn 引号与数组文本算子都能抽出来() {
+        let quoted = "BT /F1 12 Tf (Quoted line) ' (Second line) \" ET";
+        let pdf = build_pdf("1.4", &[quoted], Some("Quoted"));
+        let parsed = parse(pdf).unwrap();
+        assert!(parsed.chunks[0].content.contains("Quoted line"), "实际：{}", parsed.chunks[0].content);
+
+        let kerned = "BT [(Kerned) -500 (Text)] TJ ET";
+        let pdf = build_pdf("1.4", &[kerned], Some("Kerned"));
+        assert!(parse(pdf).unwrap().chunks[0].content.contains("Kerned"));
+    }
+
+    #[test]
+    fn 部分页没有文字时给出警告且导入其余页() {
+        let pdf = build_pdf(
+            "1.4",
+            &[&simple_page("Text page one"), "q Q 100 0 0 100 20 20 cm /Im0 Do Q", &simple_page("Text page three")],
+            Some("Partial"),
+        );
+        let parsed = parse(pdf).unwrap();
+        assert_eq!(parsed.page_count, 3);
+        assert!(parsed.warnings.iter().any(|w| w.contains("没有可用文字层")), "实际：{:?}", parsed.warnings);
+        assert!(parsed.chunks.iter().any(|chunk| chunk.locator.page == Some(3)));
+    }
+
+    #[test]
+    fn 全扫描版_明确提示不支持_ocr() {
+        let pdf = build_pdf("1.4", &["q Q 100 0 0 100 20 20 cm /Im0 Do Q", "q W 0 0 h Q"], Some("Scanned"));
+        let error = parse(pdf).unwrap_err().to_string();
+        assert!(error.contains("暂不支持 OCR"), "实际：{error}");
+    }
+
+    #[test]
+    fn 加密_pdf_给出加密提示而不是当成扫描版() {
+        let mut pdf = build_pdf("1.4", &[&simple_page("Secret body text here")], Some("Locked"));
+        // trailer 里出现 /Encrypt 就表示这份文档被加密保护
+        let text = String::from_utf8_lossy(&pdf).replace("/Info 4 0 R", "/Info 4 0 R /Encrypt 99 0 R");
+        pdf = text.into_bytes();
+        let error = parse(pdf).unwrap_err().to_string();
+        assert!(error.contains("加密"), "实际：{error}");
+        assert!(!error.contains("扫描版"), "加密 PDF 不能被当成扫描版：{error}");
+    }
+
+    #[test]
+    fn 损坏的_pdf_被拒绝() {
+        let mut pdf = build_pdf("1.4", &[&simple_page("Body")], Some("Broken"));
+        pdf.truncate(pdf.len() / 2);
+        assert!(parse(pdf).is_err());
+    }
+
+    #[test]
+    fn 没有元数据标题时用正文首行() {
+        let pdf = build_pdf("1.4", &[&simple_page("Readable Title Line\nrest of the body")], None);
+        let parsed = parse(pdf).unwrap();
+        assert_eq!(parsed.title, "Readable Title Line");
+    }
+
+    #[test]
+    fn 带元数据标题时优先用元数据() {
+        let pdf = build_pdf("1.4", &[&simple_page("First line of body")], Some("Metadata Title"));
+        assert_eq!(parse(pdf).unwrap().title, "Metadata Title");
+    }
+
+    #[test]
+    fn 非_pdf_内容不会因为扩展名被放行() {
+        let error = parse(b"PK\x03\x04not-a-pdf".to_vec()).unwrap_err().to_string();
+        assert!(error.contains("不是有效的 PDF"), "实际：{error}");
+    }
+
+    #[test]
+    fn 超出体积上限在解析前就拒绝() {
+        let error = check_size(MAX_PDF_BYTES + 1).unwrap_err().to_string();
+        assert!(error.contains("体积超过"), "实际：{error}");
+        assert!(check_size(MAX_PDF_BYTES).is_ok());
     }
 }

@@ -214,10 +214,13 @@ export interface ImportPreview {
   sample: SourceDocumentItem[]; documentCount: number; warnings: string[];
   /** 同一内容已导入过时为 true，confirm 时不会重复入库 */
   duplicate: boolean; duplicateOf?: string;
+  /** 本地文件的内容指纹；确认导入时回传，后端发现文件变了会拒绝 */
+  fileFingerprint?: string;
 }
 export interface ConfirmImportRequest {
   sourceType: SourceType; title: string; author?: string; origin?: string; pageCount: number;
   url?: string; path?: string;
+  fileFingerprint?: string;
 }
 export interface EmbeddingSettings { provider: string; endpoint: string; model: string }
 export interface SemanticRelation { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: { bookId: string; noteId: string; text: string }[] }
