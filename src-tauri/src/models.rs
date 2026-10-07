@@ -483,6 +483,10 @@ pub struct ImportPreview {
     pub duplicate: bool,
     /// 重复时指向已有资料
     pub duplicate_of: Option<String>,
+    /// 本地文件的指纹（内容 hash）。确认导入时回传，后端重新读文件比对，
+    /// 内容变了就拒绝，避免「预览 A、导入 B」。网页导入为 null。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -502,6 +506,9 @@ pub struct ConfirmImportRequest {
     /// 网页导入时重新抓取；本地文件导入时读这个路径
     pub url: Option<String>,
     pub path: Option<String>,
+    /// 预览时拿到的本地文件指纹；与重新读取的内容不一致就拒绝导入
+    #[serde(default)]
+    pub file_fingerprint: Option<String>,
 }
 
 impl ConfirmImportRequest {

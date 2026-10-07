@@ -8,7 +8,7 @@ import type { AiStreamSession } from "../api/tauri";
 import { aiStreamReducer, initialAiStreamState, isStreaming } from "./aiStream";
 import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import { useAppStore } from "../stores/app";
-import type { AiAnswer, AiMode, AiTurn, Book } from "../types/domain";
+import type { AiAnswer, AiMode, AiTurn, Book, SourceLocator } from "../types/domain";
 
 const modeLabels: Record<AiMode, string> = { ask: "全库提问", summary: "单书总结", compare: "跨书分析" };
 const historyKey = "readflow-ai-history";
@@ -40,7 +40,7 @@ function loadHistory(): AiConversation[] {
   catch { return []; }
 }
 
-function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void; openSource: (sourceId: string) => void }) {
+function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void; openSource: (sourceId: string, locator?: SourceLocator) => void }) {
   const markdown = answer.content
     .replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)")
     .replace(/(?<!\\)\[W(\d+)\]/g, "[[W$1]](glossary:$1)");
@@ -55,7 +55,7 @@ function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; op
           const index = Number(href.slice("citation:".length));
           // 编号接在笔记之后，先找资料引用再找笔记引用
           const source = sourceCitations.find(item => item.index === index);
-          if (source) return <button type="button" className="answer__source-link answer__source-link--imported" onClick={() => openSource(source.sourceId)}>{children}</button>;
+          if (source) return <button type="button" className="answer__source-link answer__source-link--imported" onClick={() => openSource(source.sourceId, source.locator)}>{children}</button>;
           const citation = answer.citations.find(item => item.index === index);
           return citation ? <button type="button" className="answer__source-link" onClick={() => openBook(citation.note.bookId, citation.note.id)}>{children}</button> : <>{children}</>;
         }
@@ -67,7 +67,7 @@ function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; op
         return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
       },
     }}
-  >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}{sourceCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>引用的导入资料</h3><span>引用 {sourceCitations.length} 条</span></div>{sourceCitations.map(citation => <button type="button" className="glossary-citation glossary-citation--source" key={citation.index} onClick={() => openSource(citation.sourceId)}><span>{citation.index}</span><div><strong>{citation.title}<small>{citation.locator.page !== undefined ? `第 ${citation.locator.page} 页` : citation.locator.chapter !== undefined ? `第 ${citation.locator.chapter} 章` : "导入资料"}</small></strong><p>“{citation.quote}”</p></div></button>)}</div>}</>;
+  >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}{sourceCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>引用的导入资料</h3><span>引用 {sourceCitations.length} 条</span></div>{sourceCitations.map(citation => <button type="button" className="glossary-citation glossary-citation--source" key={citation.index} onClick={() => openSource(citation.sourceId, citation.locator)}><span>{citation.index}</span><div><strong>{citation.title}<small>{citation.locator.page !== undefined ? `第 ${citation.locator.page} 页` : citation.locator.chapter !== undefined ? `第 ${citation.locator.chapter} 章` : "导入资料"}</small></strong><p>“{citation.quote}”</p></div></button>)}</div>}</>;
 }
 
 export function AI() {
@@ -97,9 +97,10 @@ export function AI() {
   const openBook = useAppStore(state => state.openBook);
   const setSourceDetail = useAppStore(state => state.setSourceDetail);
   const setPage = useAppStore(state => state.setPage);
-  // 引用导入资料时跳到资料页并展开对应资料
-  const openSource = useCallback((sourceId: string) => {
-    setSourceDetail(sourceId);
+  // 引用导入资料时跳到资料页并展开对应资料，同时把页码 / 章节 locator 带过去。
+  // locator 复制一份再传：重复点同一条引用时对象身份也会变，详情面板才能重新滚动定位。
+  const openSource = useCallback((sourceId: string, locator?: SourceLocator) => {
+    setSourceDetail(sourceId, locator ? { ...locator } : undefined);
     setPage("import");
   }, [setSourceDetail, setPage]);
   const streaming = isStreaming(stream);

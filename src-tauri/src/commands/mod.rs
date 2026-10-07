@@ -2798,7 +2798,7 @@ async fn fetch_web_source(input: &str) -> Result<crate::import::ParsedSource, Ap
 /// 预览本地文件（PDF / EPUB）。先校验再解析。
 #[tauri::command]
 pub fn preview_file_import(db: State<'_, Database>, request: PreviewFileRequest) -> Result<ImportPreview, AppError> {
-    let parsed = read_local_file(&request.path)?;
+    let (parsed, fingerprint) = read_local_file(&request.path)?;
     let duplicate_of = find_duplicate(&db, parsed.kind.unwrap_or(crate::import::SourceKind::Web), &parsed.title, &parsed_body(&parsed))?;
     Ok(ImportPreview {
         source_type: parsed.kind.map(|kind| kind.as_str().to_owned()).unwrap_or_default(),
@@ -2811,7 +2811,68 @@ pub fn preview_file_import(db: State<'_, Database>, request: PreviewFileRequest)
         warnings: parsed.warnings.clone(),
         duplicate: duplicate_of.is_some(),
         duplicate_of,
+        file_fingerprint: Some(fingerprint),
     })
+}
+
+/// 本地文件（压缩后）的体积上限。解压后的规模另算，见 `epub::MAX_TOTAL_UNCOMPRESSED`。
+pub const MAX_LOCAL_FILE_BYTES: u64 = 200 * 1024 * 1024;
+
+/// 读本地文件并按类型分派，返回解析结果与内容指纹。
+///
+/// 校验顺序是刻意的：先看扩展名决定解析器 → 但真正能不能读，要等
+/// 「存在 / 是普通文件 / 体积超限 / 内容签名对得上」全部过一遍才解析。
+/// 大小检查放在 `read` 之前，否则一个 2 GB 的文件会先被整个读进内存。
+fn read_local_file(input: &str) -> Result<(crate::import::ParsedSource, String), AppError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Message("请选择要导入的 PDF 或 EPUB 文件".into()));
+    }
+    let path = std::path::Path::new(trimmed);
+
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        // 不把原始 io 错误抛给用户，也不泄漏调用栈
+        let _ = error;
+        AppError::Message("文件不存在或无法读取，请重新选择".into())
+    })?;
+    if !metadata.is_file() {
+        return Err(AppError::Message("这是一个文件夹，请选择具体的 PDF 或 EPUB 文件".into()));
+    }
+
+    let kind = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .and_then(crate::import::kind_from_extension)
+        .ok_or_else(|| AppError::Message("请选择 PDF 或 EPUB 文件".into()))?;
+
+    if metadata.len() > MAX_LOCAL_FILE_BYTES {
+        return Err(AppError::Message(format!(
+            "{} 体积超过 {} MB 的导入上限",
+            kind.label(),
+            MAX_LOCAL_FILE_BYTES / 1024 / 1024
+        )));
+    }
+
+    let bytes = std::fs::read(path).map_err(|_| AppError::Message("文件不存在或无法读取，请重新选择".into()))?;
+    // 读进来之后再确认一次大小：metadata 可能是符号链接或被换过的文件
+    if bytes.len() as u64 > MAX_LOCAL_FILE_BYTES {
+        return Err(AppError::Message(format!(
+            "{} 体积超过 {} MB 的导入上限",
+            kind.label(),
+            MAX_LOCAL_FILE_BYTES / 1024 / 1024
+        )));
+    }
+    crate::import::check_file_signature(kind, &bytes)?;
+
+    let fingerprint = crate::import::file_fingerprint(&bytes);
+    let mut parsed = match kind {
+        crate::import::SourceKind::Pdf => crate::import::pdf::parse(bytes)?,
+        crate::import::SourceKind::Epub => crate::import::epub::parse(bytes)?,
+        crate::import::SourceKind::Web => return Err(AppError::Message("网页不能作为本地文件导入".into())),
+    };
+    parsed.origin = Some(path.to_string_lossy().to_string());
+    crate::import::validate_size(kind, &parsed.chunks)?;
+    Ok((parsed, fingerprint))
 }
 
 /// 读本地文件并按扩展名分派。

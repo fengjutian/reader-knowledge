@@ -12,6 +12,11 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(async () => undefined),
 }));
 
+// 系统文件对话框在 jsdom 里不存在；默认表现成「用户取消」，用例自己再 mock 成选中。
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(async () => null),
+}));
+
 afterEach(() => {
   cleanup();
 });

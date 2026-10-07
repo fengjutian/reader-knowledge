@@ -12,7 +12,7 @@ const typeIcons: Record<SourceType, typeof Globe2> = { web: Globe2, pdf: FileTex
 const readError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function LibrarySources() {
-  const { sourceDetailId, setSourceDetail } = useAppStore();
+  const { sourceDetailId, sourceDetailLocator, setSourceDetail } = useAppStore();
   const [sources, setSources] = useState<LibrarySource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,6 +27,15 @@ export function LibrarySources() {
     catch (reason) { setError(readError(reason)); }
     finally { setLoading(false); }
   }, []);
+
+  /**
+   * 关闭详情。必须同时清掉 store 里的 id 和 locator：
+   * 只 setDetail(null) 会把旧 locator 留在 store 里，下次打开别的资料会误定位。
+   */
+  const closeDetail = useCallback(() => {
+    setDetail(null);
+    setSourceDetail(undefined);
+  }, [setSourceDetail]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -48,7 +57,7 @@ export function LibrarySources() {
 
   async function softDelete(source: LibrarySource) {
     setBusy(true); setError("");
-    try { await api.deleteLibrarySource(source.id); setDetail(null); await load(); }
+    try { await api.deleteLibrarySource(source.id); closeDetail(); await load(); }
     catch (reason) { setError(readError(reason)); }
     finally { setBusy(false); }
   }
@@ -58,7 +67,7 @@ export function LibrarySources() {
     setBusy(true); setError("");
     try {
       await api.purgeLibrarySource(confirmPurge.id);
-      setConfirmPurge(null); setDetail(null);
+      setConfirmPurge(null); closeDetail();
       await load();
     } catch (reason) { setError(readError(reason)); }
     finally { setBusy(false); }
@@ -66,12 +75,16 @@ export function LibrarySources() {
 
   async function openDetail(source: LibrarySource) {
     setError("");
-    try { setDetail(await api.librarySource(source.id)); setSourceDetail(source.id); }
+    try {
+      setDetail(await api.librarySource(source.id));
+      // 列表点进来的资料没有 locator，显式覆盖成 undefined
+      setSourceDetail(source.id, undefined);
+    }
     catch (reason) { setError(readError(reason)); }
   }
 
   return <>
-    <PageHeader title="导入资料" subtitle="网页、PDF 与 EPUB 的本地副本，可被搜索与 AI 引用。" />
+    <PageHeader title="导入资料" subtitle="网页、PDF 与 EPUB 的本地副本，可被搜索和 AI 引用。" />
     <div className="library-sources">
       <div className="library-sources__toolbar">
         <Button variant="primary" onClick={() => setImportOpen(true)}><Import size={15} />导入资料</Button>
@@ -82,7 +95,7 @@ export function LibrarySources() {
       {error && <div className="graph-refresh-error">操作失败：{error}</div>}
 
       {loading && !sources.length && <div className="graph-state">正在加载资料列表…</div>}
-      {!loading && !sources.length && !error && <div className="graph-state"><FileText size={22} /><strong>还没有导入任何资料</strong><span>点击「导入资料」，把常读的网页、PDF 或 EPUB 收进本地，之后就能在搜索与 AI 回答里找到它们。</span></div>}
+      {!loading && !sources.length && !error && <div className="graph-state"><FileText size={22} /><strong>还没有导入任何资料</strong><span>点击「导入资料」，把常读的网页、PDF 或 EPUB 收进本地，之后能在搜索与 AI 回答里找到它们。</span></div>}
 
       <div className="library-sources__list">
         {sources.map(source => {
@@ -116,8 +129,8 @@ export function LibrarySources() {
       </div>}
 
       {detail && <>
-        <div className="library-source__reader" onClick={() => setDetail(null)} />
-        <SourceDetailPanel source={detail} onClose={() => setDetail(null)} />
+        <div className="library-source__reader" onClick={closeDetail} />
+        <SourceDetailPanel source={detail} locator={sourceDetailLocator} onClose={closeDetail} />
       </>}
 
       <ImportSourceDialog open={importOpen} onOpenChange={setImportOpen} />

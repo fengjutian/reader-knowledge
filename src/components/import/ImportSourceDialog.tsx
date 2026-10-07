@@ -1,12 +1,17 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { AlertTriangle, FileText, Globe2, Loader2, Search, X } from "lucide-react";
+import { AlertTriangle, FileText, FolderOpen, Globe2, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+// 组件本身有个 `open` prop（控制对话框开关），这里必须取别名，
+// 否则函数体里的 `open(...)` 会解析到那个布尔值上。
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../../api/tauri";
 import { Button } from "../ui/Button";
-import type { ImportPreview, SourceDetail, SourceType } from "../../types/domain";
+import type { ImportPreview, SourceDetail, SourceDocumentItem, SourceLocator, SourceType } from "../../types/domain";
 
 const typeLabels: Record<SourceType, string> = { web: "网页", pdf: "PDF", epub: "EPUB" };
 const readError = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** 文件选择器只接受这两种，其余文件在系统对话框里就看不到。 */
+const IMPORT_FILE_FILTERS = [{ name: "支持的资料", extensions: ["pdf", "epub"] }];
 
 /**
  * 导入资料对话框。
@@ -40,13 +45,34 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
     finally { setBusy(false); }
   }
 
-  async function previewFile() {
-    if (!path.trim()) { setError("请选择文件路径"); return; }
+  async function previewFile(selectedPath = path) {
+    const target = selectedPath.trim();
+    if (!target) { setError("请先选择要导入的 PDF 或 EPUB 文件"); return; }
     setBusy(true); setError(""); setDone("");
     try {
-      const result = await api.previewFileImport(path.trim());
+      const result = await api.previewFileImport(target);
       setPreview(result); setTitle(result.title); setAuthor(result.author ?? "");
     } catch (reason) { setError(readError(reason)); setPreview(null); }
+    finally { setBusy(false); }
+  }
+
+  /**
+   * 调起系统原生文件选择框。
+   *
+   * `open()` 在用户取消时返回 null（不是抛错），这时什么都不做：
+   * 不能弹错误，更不能把上一次的预览清掉。
+   */
+  async function chooseFile() {
+    setBusy(true); setError(""); setDone("");
+    try {
+      const selected = await openFileDialog({ multiple: false, directory: false, filters: IMPORT_FILE_FILTERS });
+      if (selected === null || selected === undefined) return;
+      const picked = typeof selected === "string" ? selected : String(selected);
+      // 换文件就是换内容：先清掉旧预览，避免拿着 A 的标题导入 B
+      setPreview(null); setTitle(""); setAuthor("");
+      setPath(picked);
+      await previewFile(picked);
+    } catch (reason) { setError(readError(reason)); }
     finally { setBusy(false); }
   }
 
@@ -107,15 +133,17 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
             <small>出于安全考虑，不支持抓取本机与内网地址；跟随重定向时也会逐跳校验。</small>
           </label>
         ) : (
-          <label className="import-dialog__field">
+          <div className="import-dialog__field">
             <span>本地文件（PDF / EPUB）</span>
             <div className="import-dialog__url">
               <FileText size={15} />
-              <input value={path} onChange={event => setPath(event.target.value)} placeholder="C:\\Users\\you\\book.epub" onKeyDown={event => { if (event.key === "Enter") void previewFile(); }} />
-              <Button variant="secondary" onClick={() => void previewFile()} disabled={busy || !path.trim()}>{busy ? <Loader2 size={14} className="spin" /> : "预览"}</Button>
+              <input value={path} readOnly placeholder="点击「选择文件」挑选要导入的 PDF 或 EPUB" tabIndex={-1} />
+              <Button variant="secondary" onClick={() => void chooseFile()} disabled={busy} aria-busy={busy}>
+                {busy ? <Loader2 size={14} className="spin" /> : <FolderOpen size={14} />}选择文件
+              </Button>
             </div>
             <small>扫描版 PDF 没有文字层，会明确提示暂不支持 OCR，不会导入空资料。</small>
-          </label>
+          </div>
         )}
 
         {error && <div className="import-dialog__error"><AlertTriangle size={14} />{error}</div>}
@@ -150,7 +178,59 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
   </Dialog.Root>;
 }
 
-export function SourceDetailPanel({ source, onClose }: { source: SourceDetail; onClose: () => void }) {
+/** 高亮持续的毫秒数：看得清，但不至于让人以为界面卡住。 */
+const HIGHLIGHT_MS = 2_600;
+
+/**
+ * 按 locator 找出该定位到的文档块。
+ *
+ * 规则：页码优先 → 章节 → 标题（先精确后规范化）。同一页拆成多块时取第一块。
+ * 定位不到就返回 undefined：定位是锦上添花，不能因为它让资料打不开。
+ */
+export function findLocatorTarget(documents: SourceDocumentItem[], locator?: SourceLocator): SourceDocumentItem | undefined {
+  if (!locator) return undefined;
+  if (locator.page !== undefined) {
+    const byPage = documents.find(item => item.locator.page === locator.page);
+    if (byPage) return byPage;
+  }
+  if (locator.chapter !== undefined) {
+    const byChapter = documents.find(item => item.locator.chapter === locator.chapter);
+    if (byChapter) return byChapter;
+  }
+  if (locator.heading) {
+    const heading = locator.heading;
+    const exact = documents.find(item => item.heading === heading || item.locator.heading === heading);
+    if (exact) return exact;
+    const normalized = normalizeHeading(heading);
+    if (normalized) return documents.find(item => normalizeHeading(item.heading) === normalized || normalizeHeading(item.locator.heading) === normalized);
+  }
+  return undefined;
+}
+
+/** 标题比对用的宽松形式：去掉空白与常见的装饰符号，忽略大小写。 */
+function normalizeHeading(value?: string): string {
+  return (value ?? "").toLowerCase().replace(/[\s·・—\-–_、。，,.:：!！?？"'“”‘’()（）《》【】]/g, "");
+}
+
+export function SourceDetailPanel({ source, locator, onClose }: { source: SourceDetail; locator?: SourceLocator; onClose: () => void }) {
+  const [targetId, setTargetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const target = findLocatorTarget(source.documents, locator);
+    if (!target) { setTargetId(null); return; }
+    setTargetId(target.id);
+    // 渲染完成后再滚动：详情是异步取回的，直接滚会滚到一个还没画出来的元素
+    const raf = requestAnimationFrame(() => {
+      // 用 getElementById 而不是选择器拼接：文档 id 来自后端，拼进选择器要额外处理转义
+      const node = document.getElementById(`source-document-${target.id}`);
+      if (!node) return;
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      node.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+    });
+    const timer = window.setTimeout(() => setTargetId(null), HIGHLIGHT_MS);
+    return () => { cancelAnimationFrame(raf); clearTimeout(timer); };
+  }, [source.documents, locator, source.id]);
+
   return <div className="source-detail">
     <div className="source-detail__head">
       <div>
@@ -162,7 +242,14 @@ export function SourceDetailPanel({ source, onClose }: { source: SourceDetail; o
       <button type="button" className="icon-button" aria-label="关闭资料详情" onClick={onClose}><X size={17} /></button>
     </div>
     <div className="source-detail__docs">
-      {source.documents.map(item => <article key={item.id}>
+      {source.documents.map(item => <article
+        key={item.id}
+        id={`source-document-${item.id}`}
+        data-page={item.locator.page}
+        data-chapter={item.locator.chapter}
+        data-heading={item.locator.heading}
+        className={item.id === targetId ? "source-detail__document--target" : undefined}
+      >
         <strong>
           {item.heading || "正文"}
           {item.locator.page !== undefined && <em>第 {item.locator.page} 页</em>}

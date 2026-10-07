@@ -15,6 +15,8 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // 只用于本地文件导入时弹出系统文件选择框；能力清单里只开放 open 权限。
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let path = app.path().app_data_dir()?.join("readflow.db");
             app.manage(

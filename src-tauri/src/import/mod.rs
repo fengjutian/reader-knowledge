@@ -168,6 +168,57 @@ pub fn validate_size(kind: SourceKind, chunks: &[DocumentChunk]) -> Result<(), A
     Ok(())
 }
 
+/// 从扩展名判断资料类型，大小写不敏感。
+///
+/// 只看扩展名是不够的，真正的类型校验在 [`check_file_signature`]：
+/// 这里只是决定「用哪个解析器」，两道校验一起才能挡住改名的文件。
+pub fn kind_from_extension(extension: &str) -> Option<SourceKind> {
+    match extension.trim().trim_start_matches('.').to_lowercase().as_str() {
+        "pdf" => Some(SourceKind::Pdf),
+        "epub" => Some(SourceKind::Epub),
+        _ => None,
+    }
+}
+
+/// 文件的魔数签名。
+pub fn file_signature(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"%PDF-") {
+        "pdf"
+    } else if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") || bytes.starts_with(b"PK\x07\x08") {
+        "zip"
+    } else {
+        "unknown"
+    }
+}
+
+/// 校验文件内容确实是该类型，而不是改过扩展名。
+///
+/// 扩展名说是 PDF、内容其实是 ZIP / HTML / 纯文本时必须拒绝，
+/// 否则解析器会给出「结构无法解析」这种对用户毫无意义的错误。
+pub fn check_file_signature(kind: SourceKind, bytes: &[u8]) -> Result<(), AppError> {
+    if bytes.is_empty() {
+        return Err(AppError::Message("文件是空的，请重新选择".into()));
+    }
+    match kind {
+        SourceKind::Pdf if file_signature(bytes) != "pdf" => Err(AppError::Message(
+            "文件扩展名是 PDF，但内容不是有效的 PDF".into(),
+        )),
+        SourceKind::Epub if file_signature(bytes) != "zip" => Err(AppError::Message(
+            "文件扩展名是 EPUB，但内容不是有效的 EPUB（EPUB 是一种 ZIP 格式）".into(),
+        )),
+        SourceKind::Web => Err(AppError::Message("网页不能作为本地文件导入".into())),
+        _ => Ok(()),
+    }
+}
+
+/// 本地文件的内容指纹。
+///
+/// 预览和确认之间文件可能被改写（甚至整个换掉），确认时重新算一遍就能发现。
+/// 只用内容算，不用大小 + 修改时间：大小和 mtime 都能被轻易伪造或精度丢失。
+pub fn file_fingerprint(bytes: &[u8]) -> String {
+    format!("{:x}", md5::compute(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +297,43 @@ mod tests {
         }];
         let error = validate_size(SourceKind::Web, &chunks).unwrap_err();
         assert!(error.to_string().contains("内容过大"));
+    }
+
+    #[test]
+    fn 扩展名大小写不敏感() {
+        assert_eq!(kind_from_extension("PDF"), Some(SourceKind::Pdf));
+        assert_eq!(kind_from_extension(".pdf"), Some(SourceKind::Pdf));
+        assert_eq!(kind_from_extension("EPUB"), Some(SourceKind::Epub));
+        assert_eq!(kind_from_extension(" .Epub "), Some(SourceKind::Epub));
+        assert_eq!(kind_from_extension("txt"), None);
+        assert_eq!(kind_from_extension(""), None);
+    }
+
+    #[test]
+    fn 假_pdf_扩展名会被签名校验拒绝() {
+        for fake in [
+            &b"PK\x03\x04rest-of-a-zip"[..],
+            b"<!DOCTYPE html><html></html>".as_slice(),
+            b"just plain text".as_slice(),
+            b"",
+        ] {
+            let error = check_file_signature(SourceKind::Pdf, fake).unwrap_err().to_string();
+            assert!(error.contains("不是有效的 PDF"), "实际：{error}");
+        }
+        assert!(check_file_signature(SourceKind::Pdf, b"%PDF-1.7\nrest").is_ok());
+    }
+
+    #[test]
+    fn 非_zip_冒充_epub_会被拒绝() {
+        let error = check_file_signature(SourceKind::Epub, b"%PDF-1.7\n").unwrap_err().to_string();
+        assert!(error.contains("不是有效的 EPUB"), "实际：{error}");
+        assert!(check_file_signature(SourceKind::Epub, b"PK\x03\x04rest").is_ok());
+        assert!(check_file_signature(SourceKind::Epub, b"PK\x05\x06").is_ok());
+    }
+
+    #[test]
+    fn 指纹随内容变化而变化() {
+        assert_eq!(file_fingerprint(b"%PDF-1.4"), file_fingerprint(b"%PDF-1.4"));
+        assert_ne!(file_fingerprint(b"%PDF-1.4"), file_fingerprint(b"%PDF-1.7"));
     }
 }
