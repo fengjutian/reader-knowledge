@@ -19,6 +19,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 keyring = { version = "3", features = ["windows-native"] }
 tempfile = "3"
+# 导入 EPUB：只用 deflate，避开需要 C 编译的压缩算法。
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# 导入 PDF：解析 FlateDecode 内容流。
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 md5 = "0.7"

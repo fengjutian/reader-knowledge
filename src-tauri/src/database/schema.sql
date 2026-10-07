@@ -193,3 +193,109 @@ SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),
 FROM books b
 WHERE b.is_deleted=0 AND (SELECT value FROM app_meta WHERE key='books_fts_version')<>'1';
 UPDATE app_meta SET value='1' WHERE key='books_fts_version' AND value<>'1';
+-- Reranker 配置。API Key 不入库，存到系统凭据库的 reranker:{provider}。
+CREATE TABLE IF NOT EXISTS reranker_settings (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    provider TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    model TEXT NOT NULL,
+    top_n INTEGER NOT NULL DEFAULT 8,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+-- 概念级知识图谱。与 books 无关，独立成表，避免概念节点混进书籍图。
+CREATE TABLE IF NOT EXISTS knowledge_entities (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'suggested',
+    source_hash TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entities_name ON knowledge_entities(canonical_name);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entities_kind ON knowledge_entities(kind);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entities_status ON knowledge_entities(status);
+CREATE TABLE IF NOT EXISTS knowledge_entity_evidence (
+    entity_id TEXT NOT NULL,
+    note_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    quote TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    PRIMARY KEY(entity_id, note_id),
+    FOREIGN KEY(entity_id) REFERENCES knowledge_entities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_book ON knowledge_entity_evidence(book_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_note ON knowledge_entity_evidence(note_id);
+CREATE TABLE IF NOT EXISTS knowledge_relations (
+    id TEXT PRIMARY KEY,
+    from_entity_id TEXT NOT NULL,
+    to_entity_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    input_hash TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_relations_from ON knowledge_relations(from_entity_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_relations_to ON knowledge_relations(to_entity_id);
+-- 记录每条笔记最后一次被抽取时用的内容 hash，未变化的笔记在下次扫描时跳过。
+CREATE TABLE IF NOT EXISTS knowledge_note_state (
+    note_id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    scanned_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_note_state_book ON knowledge_note_state(book_id);
+-- 导入资料（网页 / PDF / EPUB）。刻意与 books 分开：
+-- 导入的 PDF/EPUB 不是微信读书书籍，塞进 books 会污染同步与书籍图。
+CREATE TABLE IF NOT EXISTS library_sources (
+    id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT,
+    origin TEXT,
+    local_path TEXT,
+    content_hash TEXT NOT NULL,
+    page_count INTEGER NOT NULL DEFAULT 0,
+    cover_path TEXT,
+    imported_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_library_sources_active ON library_sources(is_deleted, imported_at DESC);
+-- 同一份内容重复导入时靠这个唯一索引兜底。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_sources_hash ON library_sources(content_hash);
+CREATE TABLE IF NOT EXISTS source_documents (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    heading TEXT,
+    content TEXT NOT NULL,
+    locator_json TEXT NOT NULL,
+    FOREIGN KEY(source_id) REFERENCES library_sources(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_source_documents_source ON source_documents(source_id, position);
+CREATE VIRTUAL TABLE IF NOT EXISTS source_docs_fts USING fts5(doc_id UNINDEXED,source_id UNINDEXED,title,heading,content,tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS source_docs_fts_insert AFTER INSERT ON source_documents
+BEGIN
+  INSERT INTO source_docs_fts(doc_id,source_id,title,heading,content)
+  SELECT NEW.id,NEW.source_id,coalesce((SELECT title FROM library_sources WHERE id=NEW.source_id),''),coalesce(NEW.heading,''),NEW.content;
+END;
+CREATE TRIGGER IF NOT EXISTS source_docs_fts_delete AFTER DELETE ON source_documents
+BEGIN
+  DELETE FROM source_docs_fts WHERE doc_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS source_docs_fts_update AFTER UPDATE OF content,heading ON source_documents
+WHEN OLD.content IS NOT NEW.content OR OLD.heading IS NOT NEW.heading
+BEGIN
+  DELETE FROM source_docs_fts WHERE doc_id=OLD.id;
+  INSERT INTO source_docs_fts(doc_id,source_id,title,heading,content)
+  SELECT NEW.id,NEW.source_id,coalesce((SELECT title FROM library_sources WHERE id=NEW.source_id),''),coalesce(NEW.heading,''),NEW.content;
+END;
+CREATE TRIGGER IF NOT EXISTS source_docs_fts_source_delete AFTER DELETE ON library_sources
+BEGIN
+  DELETE FROM source_docs_fts WHERE source_id=OLD.id;
+END;

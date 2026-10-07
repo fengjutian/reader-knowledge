@@ -1,4 +1,4 @@
-import { LayoutDashboard, Library, NotebookText, Search, Sparkles, Settings, BookOpen, Share2, Database, Compass, Languages } from "lucide-react";
+import { LayoutDashboard, Library, NotebookText, Search, Sparkles, Settings, BookOpen, Share2, Database, Compass, Languages, Import } from "lucide-react";
 import { useAppStore, type Page } from "../../stores/app";
 
 const items: { id: Page; label: string; icon: typeof Library }[] = [
@@ -9,6 +9,7 @@ const items: { id: Page; label: string; icon: typeof Library }[] = [
   { id: "ai", label: "AI 助手", icon: Sparkles },
   { id: "graph", label: "知识图谱", icon: Share2 },
   { id: "glossary", label: "名词库", icon: Languages },
+  { id: "import", label: "导入资料", icon: Import },
   { id: "database", label: "数据库", icon: Database },
 ];
 

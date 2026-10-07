@@ -3,6 +3,8 @@ mod commands;
 mod database;
 mod error;
 mod http;
+mod import;
+mod rag;
 mod models;
 mod metadata;
 mod sync;
@@ -70,6 +72,22 @@ pub fn run() {
             ,commands::get_embedding_settings
             ,commands::save_embedding_settings
             ,commands::test_embedding
+            ,commands::get_reranker_settings
+            ,commands::save_reranker_settings
+            ,commands::test_reranker
+            ,commands::list_concept_graph
+            ,commands::get_concept_entity
+            ,commands::correct_concept_entity
+            ,commands::merge_concept_entities
+            ,commands::clear_suggested_concepts
+            ,commands::scan_concepts
+            ,commands::preview_web_import
+            ,commands::preview_file_import
+            ,commands::confirm_import
+            ,commands::list_library_sources
+            ,commands::get_library_source
+            ,commands::delete_library_source
+            ,commands::purge_library_source
             ,commands::build_semantic_relations
             ,commands::build_metadata_relations
             ,commands::local_embedding_status

@@ -63,8 +63,7 @@ export function aiStreamReducer(state: AiStreamState, action: AiStreamAction): A
       if (!state.requestId || event.requestId !== state.requestId) return state;
       switch (event.type) {
         case "started":
-          if (state.status !== "streaming") return state;
-          return state.notice === (event.notice ?? "") ? state : { ...state, notice: event.notice ?? "" };
+          return state.status === "streaming" ? state : state;
         case "delta":
           if (state.status !== "streaming") return state;
           return { ...state, draft: state.draft + event.content };
@@ -73,6 +72,8 @@ export function aiStreamReducer(state: AiStreamState, action: AiStreamAction): A
             ...state,
             status: "completed",
             draft: event.answer.content,
+            // rerank 降级 / 流式回退的说明挂在回答上，不是 started 事件。
+            notice: event.answer.rerankNote ?? "",
             answer: event.answer,
           };
         case "failed":

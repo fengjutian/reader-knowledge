@@ -166,6 +166,34 @@ describe("SearchDialog", () => {
     });
   });
 
+  it("导入资料结果打开资料详情而不是书籍抽屉", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "globalSearch").mockResolvedValue(page([result({ id: "d1", type: "source", bookId: "s1", title: "导入的书", subtitle: "第 12 页", snippet: "PDF 里的正文" })]));
+    render(<SearchDialog />);
+    await typeAndWait(user, "正文");
+
+    await user.click(await screen.findByText("PDF 里的正文"));
+    await waitFor(() => {
+      const state = useAppStore.getState();
+      expect(state.sourceDetailId).toBe("s1");
+      expect(state.selectedBookId).toBeUndefined();
+      expect(state.searchOpen).toBe(false);
+    });
+  });
+
+  it("导入资料类型可以作为筛选条件", async () => {
+    const user = userEvent.setup();
+    const search = vi.spyOn(api, "globalSearch").mockResolvedValue(page([result({ id: "d1", type: "source" })]));
+    render(<SearchDialog />);
+    await typeAndWait(user, "内容");
+
+    await user.click(screen.getByRole("button", { name: "导入资料" }));
+    await waitFor(() => {
+      const last = search.mock.calls[search.mock.calls.length - 1][0];
+      expect(last.types).toEqual(["source"]);
+    });
+  });
+
   it("限定书籍后把书籍过滤传给后端", async () => {
     const user = userEvent.setup();
     const search = vi.spyOn(api, "globalSearch").mockResolvedValue(page([result({ id: "h1", type: "highlight" })]));

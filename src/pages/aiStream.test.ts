@@ -98,9 +98,18 @@ describe("aiStreamReducer", () => {
     expect(aiStreamReducer(state, { type: "stop", requestId: "b" })).toBe(state);
   });
 
-  it("started 上的回退说明会展示出来", () => {
-    const next = apply(streaming("a"), { requestId: "a", type: "started", notice: "已回退到非流式" });
-    expect(next.notice).toBe("已回退到非流式");
+  it("completed 上的非阻断说明会带进 notice", () => {
+    const next = apply(
+      streaming("a"),
+      { requestId: "a", type: "completed", answer: { ...answer, rerankNote: "重排服务超时，本次沿用本地排序" } },
+    );
+    expect(next.notice).toBe("重排服务超时，本次沿用本地排序");
+    expect(next.answer?.content).toBe("完整回答", "提示不能影响正文");
+  });
+
+  it("没有说明时 notice 保持为空", () => {
+    const next = apply(streaming("a"), { requestId: "a", type: "completed", answer });
+    expect(next.notice).toBe("");
   });
 
   it("没有活动请求时任何事件都不会被接受", () => {

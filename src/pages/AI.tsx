@@ -40,11 +40,12 @@ function loadHistory(): AiConversation[] {
   catch { return []; }
 }
 
-function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void }) {
+function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; openBook: (bookId: string, noteId?: string) => void; openSource: (sourceId: string) => void }) {
   const markdown = answer.content
     .replace(/(?<!\\)\[(\d+)\]/g, "[[$1]](citation:$1)")
     .replace(/(?<!\\)\[W(\d+)\]/g, "[[W$1]](glossary:$1)");
   const glossaryCitations = answer.glossaryCitations ?? [];
+  const sourceCitations = answer.sourceCitations ?? [];
   return <><ReactMarkdown
     remarkPlugins={[remarkGfm]}
     urlTransform={url => url.startsWith("citation:") ? url : url}
@@ -52,6 +53,9 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
       a: ({ href, children }) => {
         if (href?.startsWith("citation:")) {
           const index = Number(href.slice("citation:".length));
+          // 编号接在笔记之后，先找资料引用再找笔记引用
+          const source = sourceCitations.find(item => item.index === index);
+          if (source) return <button type="button" className="answer__source-link answer__source-link--imported" onClick={() => openSource(source.sourceId)}>{children}</button>;
           const citation = answer.citations.find(item => item.index === index);
           return citation ? <button type="button" className="answer__source-link" onClick={() => openBook(citation.note.bookId, citation.note.id)}>{children}</button> : <>{children}</>;
         }
@@ -63,7 +67,7 @@ function MarkdownAnswer({ answer, openBook }: { answer: AiAnswer; openBook: (boo
         return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
       },
     }}
-  >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}</>;
+  >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}{sourceCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>引用的导入资料</h3><span>引用 {sourceCitations.length} 条</span></div>{sourceCitations.map(citation => <button type="button" className="glossary-citation glossary-citation--source" key={citation.index} onClick={() => openSource(citation.sourceId)}><span>{citation.index}</span><div><strong>{citation.title}<small>{citation.locator.page !== undefined ? `第 ${citation.locator.page} 页` : citation.locator.chapter !== undefined ? `第 ${citation.locator.chapter} 章` : "导入资料"}</small></strong><p>“{citation.quote}”</p></div></button>)}</div>}</>;
 }
 
 export function AI() {
@@ -91,6 +95,13 @@ export function AI() {
   const pendingRef = useRef<PendingAsk | null>(null);
   const committedRef = useRef<string | null>(null);
   const openBook = useAppStore(state => state.openBook);
+  const setSourceDetail = useAppStore(state => state.setSourceDetail);
+  const setPage = useAppStore(state => state.setPage);
+  // 引用导入资料时跳到资料页并展开对应资料
+  const openSource = useCallback((sourceId: string) => {
+    setSourceDetail(sourceId);
+    setPage("import");
+  }, [setSourceDetail, setPage]);
   const streaming = isStreaming(stream);
 
   function releaseStream() {
@@ -281,10 +292,10 @@ export function AI() {
       <div className="ai-content" ref={scrollRef} onScroll={event => { const el = event.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
       {turns.length === 0 && !streaming && !error && stream.status === "idle" && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
-      {turns.length > 0 && <div className="ai-thread">{turns.map((turn, turnIndex) => <section className="answer" key={`${turn.question}-${turnIndex}`}><div className="answer__question">{turn.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={turn.answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {turn.answer.sourcesConsidered} 条 · 引用 {turn.answer.citations.length} 条</span></div>{turn.answer.citations.map(citation => <button className="citation" key={`${turnIndex}-${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>)}</div>}
+      {turns.length > 0 && <div className="ai-thread">{turns.map((turn, turnIndex) => <section className="answer" key={`${turn.question}-${turnIndex}`}><div className="answer__question">{turn.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={turn.answer} openBook={openBook} openSource={openSource}/></div></div>{turn.answer.rerankNote && <p className="answer__notice">{turn.answer.rerankNote}</p>}<div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {turn.answer.sourcesConsidered} 条 · 引用 {turn.answer.citations.length} 条</span></div>{turn.answer.citations.map(citation => <button className="citation" key={`${turnIndex}-${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>)}</div>}
       {(streaming || stream.status === "stopped" || stream.status === "error") && (stream.draft || stream.question) && <section className="answer answer--streaming"><div className="answer__question">{stream.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.draft}</ReactMarkdown>{streaming && <span className="answer__caret"/>}</div></div>{stream.status === "stopped" && <p className="answer__notice">已停止生成，以上内容未完成。</p>}</section>}
       {stream.status === "error" && <div className="ai-error"><strong>生成失败</strong><p>{stream.error}</p><button type="button" className="button button--primary" onClick={retry}><RotateCcw size={15}/>重试</button></div>}
-      {streaming && stream.notice && <div className="metadata-message"><Sparkles size={15}/><span>{stream.notice}</span></div>}
+      {stream.status === "streaming" && stream.notice && <div className="metadata-message"><Sparkles size={15}/><span>{stream.notice}</span></div>}
       {streaming && !stream.draft && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       </div>
       <form className="ask-box" onSubmit={ask}>

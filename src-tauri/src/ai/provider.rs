@@ -61,8 +61,6 @@ impl StreamStop {
 pub enum AiStreamEvent {
     Started {
         request_id: String,
-        /// 服务不支持流式、已回退到非流式请求时给出的说明
-        notice: Option<String>,
     },
     Delta {
         request_id: String,
@@ -95,7 +93,7 @@ impl AiStreamEvent {
     }
 
     pub fn started(request_id: &str) -> Self {
-        AiStreamEvent::Started { request_id: request_id.to_owned(), notice: None }
+        AiStreamEvent::Started { request_id: request_id.to_owned() }
     }
 
     pub fn delta(request_id: &str, content: impl Into<String>) -> Self {
@@ -112,14 +110,6 @@ impl AiStreamEvent {
 
     pub fn cancelled(request_id: &str) -> Self {
         AiStreamEvent::Cancelled { request_id: request_id.to_owned() }
-    }
-
-    /// 服务明确不支持流式时的回退提示
-    pub fn with_notice(mut self, notice: impl Into<String>) -> Self {
-        if let AiStreamEvent::Started { notice: slot, .. } = &mut self {
-            *slot = Some(notice.into());
-        }
-        self
     }
 }
 
@@ -186,9 +176,8 @@ mod tests {
         assert_eq!(json["requestId"], "req-1");
         assert_eq!(json["content"], "你好");
 
-        let started = serde_json::to_value(AiStreamEvent::started("req-2").with_notice("已回退到非流式")).unwrap();
+        let started = serde_json::to_value(AiStreamEvent::started("req-2")).unwrap();
         assert_eq!(started["type"], "started");
-        assert_eq!(started["notice"], "已回退到非流式");
         assert_eq!(started["requestId"], "req-2");
     }
 

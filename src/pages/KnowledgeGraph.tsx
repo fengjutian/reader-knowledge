@@ -1,6 +1,7 @@
-import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Eraser, Focus, GitCompareArrows, Globe2, Link2, Maximize2, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Eraser, Focus, GitCompareArrows, Globe2, Link2, Maximize2, Network, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/tauri";
+import { ConceptGraphPanel } from "../components/graph/ConceptGraphPanel";
 import { KnowledgeGraphCanvas } from "../components/graph/KnowledgeGraphCanvas";
 import { KnowledgeGraph3D } from "../components/graph/KnowledgeGraph3D";
 import { Button } from "../components/ui/Button";
@@ -24,7 +25,12 @@ const workerStrength = (strength: Strength): WorkerStrength => strength === "sta
 /** 元数据关系目前只支持微信读书与豆瓣，图谱中据此明确说明。 */
 const METADATA_SOURCES = ["weread", "douban"] as const;
 
+type GraphView = "books" | "concepts";
+
 export function KnowledgeGraph() {
+  // 概念网络与书籍关系是两种视图，切换时不卸载书籍图的数据，
+  // 避免来回切换反复重算本地关系。
+  const [view, setView] = useState<GraphView>("books");
   const [books, setBooks] = useState<Book[]>([]), [notes, setNotes] = useState<Note[]>([]), [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false), [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   const [semanticLoading, setSemanticLoading] = useState(false);
@@ -353,7 +359,18 @@ export function KnowledgeGraph() {
   const q = query.trim().toLowerCase();
   const pickerBooks = useMemo(() => q ? books.filter(book => `${book.title}${book.author}${book.category}`.toLowerCase().includes(q)) : books, [books, q]);
   const pickerStart = Math.max(0, Math.floor(pickerScroll / 46) - 2), pickerItems = pickerBooks.slice(pickerStart, pickerStart + 12);
+  if (view === "concepts") return <div className="knowledge-graph-page">
+    <div className="graph-view-tabs" role="tablist" aria-label="图谱视图">
+      <button type="button" role="tab" aria-selected={false} onClick={() => setView("books")}><BookOpen size={15}/>书籍关系</button>
+      <button type="button" role="tab" aria-selected onClick={() => setView("concepts")}><Network size={15}/>概念网络</button>
+    </div>
+    <ConceptGraphPanel/>
+  </div>;
   return <div className="knowledge-graph-page">
+    <div className="graph-view-tabs" role="tablist" aria-label="图谱视图">
+      <button type="button" role="tab" aria-selected onClick={() => setView("books")}><BookOpen size={15}/>书籍关系</button>
+      <button type="button" role="tab" aria-selected={false} onClick={() => setView("concepts")}><Network size={15}/>概念网络</button>
+    </div>
     <div className="graph-source-toolbar"><label><span>关系来源</span><select value={relationSource} onChange={e => { setRelationSource(e.target.value as RelationSource); setEdgeId(undefined); }}><option value="all">全部来源</option><option value="local">本地笔记</option><option value="semantic">语义向量</option><option value="weread">微信读书</option><option value="douban">豆瓣</option></select></label><label className="graph-score-filter"><span>最低关联度</span><input type="range" min="0" max="90" step="5" value={Math.round(minimumScore * 100)} onChange={event => { setMinimumScore(Number(event.target.value) / 100); setEdgeId(undefined); }}/><strong>{Math.round(minimumScore * 100)}%</strong></label><button type="button" onClick={() => void clearCaches()}><Eraser size={14}/>清理缓存</button><button type="button" disabled={analyzing} onClick={() => void recomputeLocalRelations()}><RotateCw className={analyzing ? "spin" : ""} size={14}/>重新计算本地关系</button>{cacheNotice && <em>{cacheNotice}</em>}</div>
     <div className="graph-toolbar"><div className="graph-search-wrap" ref={pickerRef}><label className="graph-search"><Search size={16}/><input value={query} onFocus={() => setPickerOpen(true)} onChange={e => { setQuery(e.target.value); setPickerOpen(true); setPickerScroll(0); }} onKeyDown={e => { if (e.key === "Escape") setPickerOpen(false); }} placeholder="选择一本中心书籍" /><button type="button" aria-label="展开全部书籍" onClick={() => setPickerOpen(open => !open)}><ChevronDown size={15}/></button></label>{pickerOpen && <div className="graph-book-picker"><div className="graph-book-picker__count">{q ? `找到 ${pickerBooks.length} 本` : `全部 ${pickerBooks.length} 本书`}</div><div className="graph-book-picker__scroll" onScroll={event => setPickerScroll(event.currentTarget.scrollTop)}><div style={{ height: pickerBooks.length * 46 }}>{pickerItems.map((book, index) => <button style={{ transform: `translateY(${(pickerStart + index) * 46}px)` }} key={book.id} onClick={() => { navigateToBook(book.id); setQuery(""); setPickerOpen(false); }}><strong>{book.title}</strong><span>{book.author || book.category || "未知作者"}</span></button>)}</div></div></div>}</div><label className="graph-strength"><Link2 size={14}/><span>每本书显示</span><select value={strength} onChange={e => setStrength(e.target.value as Strength)}>{strength === "all" && <option value="all" disabled>全局预览</option>}<option value="strong">5 个强关联</option><option value="balanced">10 个关联</option><option value="standard">12 个关联</option><option value="broad">20 个关联</option></select></label><label className="graph-strength"><span>关系</span><select value={relationFilter} onChange={e => { setRelationFilter(e.target.value as RelationFilter); setEdgeId(undefined); }}><option value="all">全部</option><option value="content">内容关联</option><option value="author">共同作者</option><option value="analyzable">可深度分析</option></select></label><label className="graph-connected-filter"><input type="checkbox" checked={connectedOnly} onChange={event => setConnectedOnly(event.target.checked)}/><span>仅显示有关联</span></label><div className="graph-nav"><button onClick={goBack} disabled={!backStack.length} title="返回上一本中心书" aria-label="返回"><ArrowLeft size={15}/></button><button onClick={goForward} disabled={!forwardStack.length} title="前进到下一本中心书" aria-label="前进"><ArrowRight size={15}/></button><button onClick={resetToGlobal} disabled={!graph.nodes.length} title="重置到全局视图" aria-label="重置到全局视图"><Globe2 size={15}/></button><button onClick={() => setFitRequest(value => value + 1)} disabled={!viewGraph.nodes.length} title="适应画布" aria-label="适应画布"><Maximize2 size={15}/></button><button onClick={() => refreshSemanticRelations(true)} disabled={semanticLoading} title="刷新语义关系" aria-label="刷新语义关系"><RotateCw className={semanticLoading ? "spin" : ""} size={15}/></button></div><span>{semanticLoading ? "正在刷新关系…" : `${viewGraph.edges.length} 个关系`}</span></div>
     <section className={`graph-shell${selected || selectedEdge ? " has-detail" : ""}`}>{(loading || (analyzing && !graph.nodes.length)) && <div className="graph-state">正在后台分析书籍之间的联系…<span>你可以继续使用其他页面</span></div>}{(analyzing || semanticLoading) && !!graph.nodes.length && <div className="graph-analyzing">{semanticLoading ? "正在生成语义向量并计算关系…" : "正在补充关系…"}</div>}{semanticError && <div className="graph-refresh-error">刷新失败：{semanticError}</div>}{!loading && error && <div className="graph-state"><Share2/><strong>暂时无法生成图谱</strong><span>{error}</span></div>}

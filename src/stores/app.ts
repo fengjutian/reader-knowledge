@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type Page = "dashboard" | "books" | "discover" | "metadata" | "notes" | "ai" | "graph" | "glossary" | "database" | "settings";
+export type Page = "dashboard" | "books" | "discover" | "metadata" | "notes" | "ai" | "graph" | "glossary" | "database" | "settings" | "import";
 export type Theme = "light" | "dark" | "voyage" | "minimax" | "landpack" | "parley" | "lagoon";
 export type FontFamily = "system" | "source-han-sans" | "source-han-serif" | "lxgw-wenkai";
 interface AppState {
@@ -10,10 +10,13 @@ interface AppState {
   searchOpen: boolean;
   selectedBookId?: string;
   selectedNoteId?: string;
+  /** 正在查看的导入资料 id */
+  sourceDetailId?: string;
   aiDraft?: { mode: "compare"; bookIds: string[]; question: string };
   setPage: (page: Page) => void;
   setSearchOpen: (open: boolean) => void;
   openBook: (bookId: string, noteId?: string) => void;
+  setSourceDetail: (sourceId: string | undefined) => void;
   closeBook: () => void;
   clearSelectedNote: () => void;
   openAiCompare: (bookIds: string[]) => void;
@@ -36,6 +39,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPage: page => set({ page }),
   setSearchOpen: searchOpen => set({ searchOpen }),
   openBook: (selectedBookId, selectedNoteId) => set({ selectedBookId, selectedNoteId }),
+  setSourceDetail: sourceDetailId => set({ sourceDetailId }),
   closeBook: () => set({ selectedBookId: undefined, selectedNoteId: undefined }),
   clearSelectedNote: () => set({ selectedNoteId: undefined }),
   openAiCompare: bookIds => set({ page: "ai", aiDraft: { mode: "compare", bookIds, question: "请比较这些书对同一主题的观点、共识、分歧与互补之处。" } }),

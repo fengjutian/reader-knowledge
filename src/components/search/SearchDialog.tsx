@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Search, X, Highlighter, Lightbulb, BookOpen, Loader2, ChevronDown } from "lucide-react";
+import { Search, X, Highlighter, Lightbulb, BookOpen, FileText, Loader2, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/tauri";
@@ -15,6 +15,7 @@ const typeOptions: { value: TypeFilter; label: string }[] = [
   { value: "book", label: "书籍" },
   { value: "highlight", label: "划线" },
   { value: "thought", label: "想法" },
+  { value: "source", label: "导入资料" },
 ];
 
 function readableError(error: unknown) {
@@ -25,6 +26,7 @@ function readableError(error: unknown) {
 function resultIcon(type: SearchEntityType) {
   if (type === "book") return <BookOpen size={16}/>;
   if (type === "thought") return <Lightbulb size={16}/>;
+  if (type === "source") return <FileText size={16}/>;
   return <Highlighter size={16}/>;
 }
 
@@ -92,14 +94,25 @@ export function SearchDialog() {
     return () => window.clearTimeout(timer);
   }, [query, type, bookId, bookFilterActive]);
 
-  const open = useCallback((result: GlobalSearchResult) => {
+  const setSourceDetail = useAppStore(state => state.setSourceDetail);
+
+  const open = useCallback(async (result: GlobalSearchResult) => {
     // 书籍结果没有笔记可定位，只打开书籍详情。
+    if (result.type === "source") {
+      // 导入资料不是微信读书书籍，打开资料详情而不是书籍抽屉
+      setSourceDetail(result.bookId);
+      setSearchOpen(false);
+      setQuery("");
+      setResults([]);
+      setActiveIndex(0);
+      return;
+    }
     openBook(result.bookId, result.type === "book" ? undefined : result.id);
     setSearchOpen(false);
     setQuery("");
     setResults([]);
     setActiveIndex(0);
-  }, [openBook, setSearchOpen]);
+  }, [openBook, setSearchOpen, setSourceDetail]);
 
   function loadMore() {
     if (loadingMore || !hasMore) return;

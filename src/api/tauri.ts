@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, GlobalSearchPage, GlobalSearchRequest, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, ConceptGraph, ConceptGraphQuery, ConceptScanResult, ConfirmImportRequest, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, ImportPreview, KnowledgeEntity, LibrarySource, RerankerSettings, SourceDetail, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -90,6 +90,22 @@ export const api = {
   saveAiSettings: (settings: AiSettings, apiKey?: string) => call<void>("save_ai_settings", { settings, apiKey }),
   testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),
   embeddingSettings: () => call<EmbeddingSettings | null>("get_embedding_settings"),
+  rerankerSettings: () => call<RerankerSettings | null>("get_reranker_settings"),
+  saveRerankerSettings: (settings: RerankerSettings, apiKey?: string) => call<void>("save_reranker_settings", { settings, apiKey }),
+  testReranker: (settings: RerankerSettings, apiKey?: string) => call<boolean>("test_reranker", { settings, apiKey }),
+  conceptGraph: (query: ConceptGraphQuery) => call<ConceptGraph>("list_concept_graph", { query }),
+  conceptEntity: (entityId: string) => call<KnowledgeEntity>("get_concept_entity", { entityId }),
+  correctConceptEntity: (correction: EntityCorrection) => call<KnowledgeEntity>("correct_concept_entity", { correction }),
+  mergeConceptEntities: (sourceId: string, targetId: string) => call<void>("merge_concept_entities", { request: { sourceId, targetId } }),
+  clearSuggestedConcepts: () => call<number>("clear_suggested_concepts"),
+  scanConcepts: (request: { bookId?: string; changedOnly?: boolean } = {}) => call<ConceptScanResult>("scan_concepts", { request }),
+  previewWebImport: (url: string) => call<ImportPreview>("preview_web_import", { request: { url } }),
+  previewFileImport: (path: string) => call<ImportPreview>("preview_file_import", { request: { path } }),
+  confirmImport: (request: ConfirmImportRequest) => call<ImportPreview>("confirm_import", { request }),
+  librarySources: (includeDeleted = false) => call<LibrarySource[]>("list_library_sources", { includeDeleted }),
+  librarySource: (sourceId: string) => call<SourceDetail>("get_library_source", { sourceId }),
+  deleteLibrarySource: (sourceId: string) => call<void>("delete_library_source", { sourceId }),
+  purgeLibrarySource: (sourceId: string) => call<void>("purge_library_source", { sourceId }),
   saveEmbeddingSettings: (settings: EmbeddingSettings, apiKey?: string) => call<void>("save_embedding_settings", { settings, apiKey }),
   testEmbedding: () => call<boolean>("test_embedding"),
   semanticRelations: () => call<SemanticRelation[]>("build_semantic_relations"),

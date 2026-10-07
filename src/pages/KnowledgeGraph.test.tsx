@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { api } from "../api/tauri";
@@ -9,6 +10,7 @@ import type { Book, Note, SemanticRelation } from "../types/domain";
 // WebGL / canvas 渲染在 jsdom 中不可用，这里用占位组件替代。
 vi.mock("../components/graph/KnowledgeGraph3D", () => ({ KnowledgeGraph3D: () => <div data-testid="graph-3d" /> }));
 vi.mock("../components/graph/KnowledgeGraphCanvas", () => ({ KnowledgeGraphCanvas: () => <div data-testid="graph-canvas" /> }));
+vi.mock("../components/graph/ConceptGraphPanel", () => ({ ConceptGraphPanel: () => <div data-testid="concept-panel" /> }));
 
 const book = (id: string, title: string, extra: Partial<Book> = {}): Book => ({
   id, title, author: "作者", category: "分类", cover: "", highlightCount: 2, thoughtCount: 1, progress: 0, updatedAt: "2026-01-01", readingStatus: "reading", ...extra,
@@ -128,5 +130,31 @@ describe("KnowledgeGraph 数据更新链路", () => {
     vi.spyOn(api, "notes").mockResolvedValue([note("n1", "b1", "内容"), note("n2", "b2", "内容")]);
     render(<KnowledgeGraph />);
     await waitFor(() => expect(screen.getByText(/尚未配置 Embedding/)).toBeInTheDocument());
+  });
+});
+
+describe("KnowledgeGraph 视图切换", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "books").mockResolvedValue([book("b1", "书一")]);
+    vi.spyOn(api, "notes").mockResolvedValue([note("n1", "b1", "内容")]);
+  });
+
+  it("默认显示书籍关系，可切到概念网络", async () => {
+    const user = userEvent.setup();
+    render(<KnowledgeGraph />);
+    // 初始是书籍关系视图
+    expect(screen.getByRole("tab", { name: /书籍关系/ })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: /概念网络/ }));
+    expect(screen.getByTestId("concept-panel")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /概念网络/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("切到概念网络后还能切回书籍关系", async () => {
+    const user = userEvent.setup();
+    render(<KnowledgeGraph />);
+    await user.click(screen.getByRole("tab", { name: /概念网络/ }));
+    await user.click(screen.getByRole("tab", { name: /书籍关系/ }));
+    expect(screen.queryByTestId("concept-panel")).not.toBeInTheDocument();
   });
 });

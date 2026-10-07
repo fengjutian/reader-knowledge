@@ -111,7 +111,7 @@ export interface ReadingStats {
 }
 
 export interface SearchResult extends Note { score: number }
-export type SearchEntityType = "book" | "highlight" | "thought";
+export type SearchEntityType = "book" | "highlight" | "thought" | "source";
 /** 全局搜索结果：书籍 / 划线 / 想法共用一个列表，靠 type 区分。 */
 export interface GlobalSearchResult {
   id: string;
@@ -136,18 +136,89 @@ export interface GlobalSearchRequest {
 export interface GlobalSearchPage { results: GlobalSearchResult[]; hasMore: boolean }
 export interface Citation { index: number; note: Note }
 export interface GlossaryCitation { index:number;term:string;definition:string;source:string;sourceUrl:string }
-export interface AiAnswer { content: string; citations: Citation[]; glossaryCitations?: GlossaryCitation[]; sourcesConsidered: number }
+export interface AiAnswer {
+  content: string;
+  citations: Citation[];
+  glossaryCitations?: GlossaryCitation[];
+  sourcesConsidered: number;
+  /** 非阻断提示：rerank 降级、或服务不支持流式而回退。回答本身是完整的。 */
+  rerankNote?: string;
+  /** 来自导入资料的引用。编号接在 citations 之后。 */
+  sourceCitations?: SourceCitation[];
+}
+export interface SourceCitation {
+  index: number; sourceId: string; sourceType: SourceType; title: string;
+  locator: SourceLocator; quote: string;
+}
 export type AiMode = "ask" | "summary" | "compare";
 export interface AiTurn { question: string; answer: AiAnswer }
 export interface AiRequest { question: string; mode: AiMode; bookIds: string[]; history?: { question: string; answer: string }[] }
 /** 后端 `ai-stream` 事件的 TS 形态，与 `src-tauri/src/ai/provider.rs` 的 `AiStreamEvent` 一一对应。 */
 export type AiStreamEvent =
-  | { requestId: string; type: "started"; notice?: string }
+  | { requestId: string; type: "started" }
   | { requestId: string; type: "delta"; content: string }
   | { requestId: string; type: "completed"; answer: AiAnswer }
   | { requestId: string; type: "failed"; message: string }
   | { requestId: string; type: "cancelled" };
 export interface AiSettings { provider: string; endpoint: string; model: string }
+export interface RerankerSettings { provider: string; endpoint: string; model: string; topN: number; enabled: boolean }
+
+// 概念级知识图谱
+export type EntityKind = "concept" | "topic" | "idea";
+export type EntityStatus = "suggested" | "confirmed" | "hidden";
+export type ConceptRelationKind = "broader" | "narrower" | "related" | "supports" | "conflicts" | "causes" | "applies";
+export interface ConceptEvidence { noteId: string; bookId: string; quote: string; confidence: number }
+export interface KnowledgeEntity {
+  id: string; kind: EntityKind; canonicalName: string; description: string;
+  aliases: string[]; status: EntityStatus; evidenceCount: number;
+  updatedAt: string; evidence: ConceptEvidence[];
+}
+export interface KnowledgeRelation {
+  id: string; fromEntityId: string; toEntityId: string;
+  relation: ConceptRelationKind; summary: string;
+  confidence: number; evidence: ConceptEvidence[];
+}
+export interface ConceptGraph {
+  entities: KnowledgeEntity[]; relations: KnowledgeRelation[];
+  /** 节点过多时后端只返回高置信度子图 */
+  truncated: boolean; totalEntities: number;
+}
+export interface ConceptGraphQuery {
+  kinds?: EntityKind[]; bookId?: string; minConfidence?: number;
+  centerId?: string; limit?: number; includeHidden?: boolean;
+}
+export interface ConceptScanResult {
+  booksScanned: number; booksFailed: number; notesScanned: number; notesSkipped: number;
+  entitiesCreated: number; relationsCreated: number; rejected: number; failures: string[];
+}
+export interface EntityCorrection {
+  id: string; canonicalName?: string; description?: string;
+  aliases?: string[]; status?: EntityStatus;
+}
+
+// 导入资料（网页 / PDF / EPUB）
+export type SourceType = "web" | "pdf" | "epub";
+export interface SourceLocator { page?: number; chapter?: number; heading?: string }
+export interface LibrarySource {
+  id: string; sourceType: SourceType; title: string; author?: string;
+  /** 网页是原 URL；PDF / EPUB 是原始文件路径 */
+  origin?: string; pageCount: number; cover?: string;
+  documentCount: number; importedAt: string; deleted: boolean;
+}
+export interface SourceDocumentItem {
+  id: string; position: number; heading: string; content: string; locator: SourceLocator;
+}
+export interface SourceDetail extends LibrarySource { documents: SourceDocumentItem[] }
+export interface ImportPreview {
+  sourceType: SourceType; title: string; author?: string; origin?: string; pageCount: number;
+  sample: SourceDocumentItem[]; documentCount: number; warnings: string[];
+  /** 同一内容已导入过时为 true，confirm 时不会重复入库 */
+  duplicate: boolean; duplicateOf?: string;
+}
+export interface ConfirmImportRequest {
+  sourceType: SourceType; title: string; author?: string; origin?: string; pageCount: number;
+  url?: string; path?: string;
+}
 export interface EmbeddingSettings { provider: string; endpoint: string; model: string }
 export interface SemanticRelation { id: string; from: string; to: string; score: number; keywords: string[]; relation: string; evidence: { bookId: string; noteId: string; text: string }[] }
 export interface LocalModelStatus { installed: boolean; sizeBytes: number; model: string }

@@ -947,6 +947,197 @@ fn book_candidates(
 }
 
 /// 笔记打分：整段包含权重最高，其次标题、章节，最后按词命中次数累计。
+/// 空查询下的最近导入资料。
+fn recent_source_results(db: &Database, limit: i64) -> Result<Vec<GlobalSearchResult>, AppError> {
+    let c = db.connect()?;
+    let mut statement = c.prepare(
+        "SELECT d.source_id,s.title,s.source_type,d.id,coalesce(d.heading,''),d.content,coalesce(d.locator_json,'{}')
+         FROM source_documents d JOIN library_sources s ON s.id=d.source_id
+         WHERE s.is_deleted=0 ORDER BY s.imported_at DESC, d.position LIMIT ?1",
+    )?;
+    let rows = statement
+        .query_map([limit], |r| {
+            Ok(SourceCandidate {
+                source_id: r.get(0)?,
+                source_title: r.get(1)?,
+                source_type: r.get(2)?,
+                doc_id: r.get(3)?,
+                heading: r.get(4)?,
+                content: r.get(5)?,
+                locator: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
+                relevance: 0.0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|candidate| {
+            let label = source_locator_label(&candidate.source_type, &candidate.locator);
+            GlobalSearchResult {
+                id: candidate.doc_id,
+                entity_type: "source".into(),
+                book_id: candidate.source_id,
+                subtitle: if label.is_empty() { candidate.source_type.clone() } else { label },
+                title: candidate.source_title,
+                snippet: snippet_of(&candidate.content),
+                score: 0.0,
+                updated_at: String::new(),
+            }
+        })
+        .collect())
+}
+
+/// 导入资料的候选块。
+struct SourceCandidate {
+    source_id: String,
+    source_title: String,
+    source_type: String,
+    doc_id: String,
+    heading: String,
+    content: String,
+    locator: crate::import::Locator,
+    relevance: f64,
+}
+
+fn map_source_candidate(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceCandidate> {
+    Ok(SourceCandidate {
+        source_id: r.get(0)?,
+        source_title: r.get(1)?,
+        source_type: r.get(2)?,
+        doc_id: r.get(3)?,
+        heading: r.get(4)?,
+        content: r.get(5)?,
+        locator: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
+        relevance: r.get(7)?,
+    })
+}
+
+/// 导入资料的候选集，走 `source_docs_fts`。
+///
+/// 与笔记一样沿用「FTS 收敛 + 兜底扫描 + Rust 侧包含匹配」的双层策略：
+/// `unicode61` 不切分中文，纯 FTS 对中文查询必然落空。
+fn source_candidates(
+    db: &Database,
+    match_query: Option<&str>,
+    source_id: Option<&String>,
+    limit: i64,
+) -> Result<Vec<SourceCandidate>, AppError> {
+    let c = db.connect()?;
+    if let Some(match_query) = match_query {
+        // MATCH 里必须写表名本身：给 FTS 表起别名后 MATCH 会静默返回空结果。
+        let mut statement = c.prepare(
+            "SELECT source_docs_fts.source_id,coalesce(s.title,''),coalesce(s.source_type,''),source_docs_fts.doc_id,
+                    coalesce(source_docs_fts.heading,''),source_docs_fts.content,coalesce(d.locator_json,'{}'),bm25(source_docs_fts)
+             FROM source_docs_fts
+             JOIN source_documents d ON d.id=source_docs_fts.doc_id
+             JOIN library_sources s ON s.id=source_docs_fts.source_id
+             WHERE source_docs_fts MATCH ?1 AND s.is_deleted=0 AND (?2 IS NULL OR source_docs_fts.source_id=?2)
+             ORDER BY bm25(source_docs_fts) LIMIT ?3",
+        )?;
+        let rows = statement
+            .query_map(rusqlite::params![match_query, source_id, limit], map_source_candidate)?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+    let mut statement = c.prepare(
+        "SELECT d.source_id,coalesce(s.title,''),coalesce(s.source_type,''),d.id,
+                coalesce(d.heading,''),d.content,coalesce(d.locator_json,'{}'),0.0
+         FROM source_documents d
+         JOIN library_sources s ON s.id=d.source_id
+         WHERE s.is_deleted=0 AND (?1 IS NULL OR d.source_id=?1) LIMIT ?2",
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![source_id, limit], map_source_candidate)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 导入资料的打分：正文整段包含权重最高，标题与章节名次之。
+fn score_source(candidate: &SourceCandidate, normalized_query: &str, terms: &[String]) -> f64 {
+    let content = normalize_search_text(&candidate.content);
+    let title = normalize_search_text(&candidate.source_title);
+    let heading = normalize_search_text(&candidate.heading);
+    let mut score = candidate.relevance;
+    if !normalized_query.is_empty() {
+        if content.contains(normalized_query) {
+            score += 12.0;
+        } else if terms.iter().any(|term| content.contains(term)) {
+            score += 4.0;
+        } else {
+            return 0.0;
+        }
+    }
+    for term in terms {
+        if title.contains(term) {
+            score += 4.0;
+        }
+        if heading.contains(term) {
+            score += 2.5;
+        }
+        score += content.match_indices(term).count().min(4) as f64;
+    }
+    score
+}
+
+/// 资料标题旁的来源标签，例如「第 12 页」「第 3 章」「网页」。
+///
+/// 优先看定位信息里有没有页码 / 章节号 —— 判据是「有没有」而不是
+/// 「来源类型是不是 pdf」，这样 EPUB 的章节与 PDF 的页码都能正确显示。
+fn source_locator_label(source_type: &str, locator: &crate::import::Locator) -> String {
+    if let Some(page) = locator.page {
+        return format!("第 {page} 页");
+    }
+    if let Some(chapter) = locator.chapter {
+        return format!("第 {chapter} 章");
+    }
+    if source_type == "web" {
+        return "网页".to_string();
+    }
+    locator.heading.clone().unwrap_or_default()
+}
+
+/// 把导入资料并入全局搜索结果。
+fn source_search_results(
+    db: &Database,
+    active_types: &[String],
+    book_id: Option<&String>,
+    match_query: Option<&str>,
+    terms: &[String],
+    normalized_query: &str,
+    limit: i64,
+) -> Result<Vec<GlobalSearchResult>, AppError> {
+    if !active_types.iter().any(|kind| kind == "source") {
+        return Ok(Vec::new());
+    }
+    // 书籍过滤对导入资料没有意义：book_id 只在指定书籍时生效，这里直接跳过
+    if book_id.is_some() {
+        return Ok(Vec::new());
+    }
+    Ok(source_candidates(db, match_query, None, limit)?
+        .into_iter()
+        .filter_map(|candidate| {
+            let score = score_source(&candidate, normalized_query, terms);
+            if score <= 0.0 {
+                return None;
+            }
+            let label = source_locator_label(&candidate.source_type, &candidate.locator);
+            let subtitle = if label.is_empty() { candidate.source_type.clone() } else { label };
+            Some(GlobalSearchResult {
+                id: candidate.doc_id,
+                entity_type: "source".into(),
+                book_id: candidate.source_id,
+                title: candidate.source_title,
+                subtitle,
+                snippet: snippet_of(&candidate.content),
+                score,
+                updated_at: String::new(),
+            })
+        })
+        .collect())
+}
+
 fn score_note(candidate: &NoteCandidate, normalized_query: &str, terms: &[String]) -> f64 {
     let content = normalize_search_text(&candidate.content);
     let title = normalize_search_text(&candidate.title);
@@ -1000,6 +1191,10 @@ fn global_search_impl(db: &Database, request: &GlobalSearchRequest) -> Result<Gl
         if active_types.iter().any(|kind| kind == "book") {
             results.extend(recent_book_results(&db, book_id.as_ref(), limit + 1)?);
         }
+        // 导入资料：书籍过滤对它没有意义，只在未限定书籍时参与
+        if active_types.iter().any(|kind| kind == "source") && book_id.is_none() {
+            results.extend(recent_source_results(&db, limit + 1)?);
+        }
         // 同分按更新时间倒序，书名稳定排序避免同毫秒抖动。
         results.sort_by(|left, right| {
             right
@@ -1040,6 +1235,16 @@ fn global_search_impl(db: &Database, request: &GlobalSearchRequest) -> Result<Gl
             });
         }
     }
+    // 导入资料：书籍过滤对它没有意义，只在未限定书籍时参与
+    results.extend(source_search_results(
+        &db,
+        &active_types,
+        book_id.as_ref(),
+        match_query.as_deref(),
+        &terms,
+        &normalized_query,
+        candidate_limit,
+    )?);
     if active_types.iter().any(|kind| kind == "book") {
         for candidate in book_candidates(&db, book_id.as_ref(), match_query.as_deref(), candidate_limit)? {
             let score = score_book(&candidate, &normalized_query);
@@ -1264,6 +1469,694 @@ pub fn get_ai_settings(db: State<'_, Database>) -> Result<Option<AiSettings>, Ap
 #[tauri::command]
 pub fn get_embedding_settings(db: State<'_, Database>) -> Result<Option<EmbeddingSettings>, AppError> {
     db.connect()?.query_row("SELECT provider,endpoint,model FROM embedding_settings WHERE id=1", [], |row| Ok(EmbeddingSettings { provider: row.get(0)?, endpoint: row.get(1)?, model: row.get(2)? })).optional().map_err(AppError::from)
+}
+
+fn reranker_settings_from_db(db: &Database) -> Result<Option<RerankerSettings>, AppError> {
+    db.connect()?
+        .query_row("SELECT provider,endpoint,model,top_n,enabled FROM reranker_settings WHERE id=1", [], |row| {
+            Ok(RerankerSettings {
+                provider: row.get(0)?,
+                endpoint: row.get(1)?,
+                model: row.get(2)?,
+                top_n: row.get(3)?,
+                enabled: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .optional()
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub fn get_reranker_settings(db: State<'_, Database>) -> Result<Option<RerankerSettings>, AppError> {
+    reranker_settings_from_db(&db)
+}
+
+#[tauri::command]
+pub fn save_reranker_settings(
+    db: State<'_, Database>,
+    settings: RerankerSettings,
+    api_key: Option<String>,
+) -> Result<(), AppError> {
+    save_reranker_settings_impl(&db, &settings, api_key)
+}
+
+fn save_reranker_settings_impl(
+    db: &Database,
+    settings: &RerankerSettings,
+    api_key: Option<String>,
+) -> Result<(), AppError> {
+    let top_n_range = crate::ai::reranker::MIN_TOP_N..=crate::ai::reranker::MAX_TOP_N;
+    // 关闭开关时只校验 Top N，这样用户能先关掉一个坏掉的配置。
+    if settings.enabled {
+        crate::ai::reranker::validate_settings(settings)?;
+    } else if !top_n_range.contains(&settings.top_n) {
+        return Err(AppError::Message(format!(
+            "Top N 必须在 {} 到 {} 之间",
+            crate::ai::reranker::MIN_TOP_N,
+            crate::ai::reranker::MAX_TOP_N
+        )));
+    }
+    if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
+        // 密钥只进系统凭据库，绝不写进 SQLite。
+        let entry = keyring::Entry::new(
+            "ReadFlow",
+            &crate::ai::reranker::credential_name(&settings.provider),
+        )?;
+        entry.set_password(&api_key)?;
+        if entry.get_password()? != api_key {
+            return Err(AppError::Message(
+                "Reranker Key 未能正确保存到系统凭据库，请重试".into(),
+            ));
+        }
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    db.connect()?.execute(
+        "INSERT INTO reranker_settings(id,provider,endpoint,model,top_n,enabled,updated_at)
+         VALUES(1,?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,endpoint=excluded.endpoint,
+           model=excluded.model,top_n=excluded.top_n,enabled=excluded.enabled,updated_at=excluded.updated_at",
+        rusqlite::params![settings.provider, settings.endpoint, settings.model, settings.top_n, settings.enabled as i64, now],
+    )?;
+    Ok(())
+}
+
+// ---------- 概念级知识图谱 ----------
+
+/// 一次扫描的单本书上下文。
+struct BookNotes {
+    book_id: String,
+    /// (note_id, content)
+    notes: Vec<(String, String)>,
+}
+
+/// 按书籍分批取出未删除的划线与想法。
+fn notes_grouped_by_book(db: &Database, book_id: Option<&str>) -> Result<Vec<BookNotes>, AppError> {
+    let c = db.connect()?;
+    let mut books: std::collections::BTreeMap<String, Vec<(String, String)>> = std::collections::BTreeMap::new();
+    let mut query = c.prepare(
+        "SELECT h.book_id,h.bookmark_id,h.mark_text FROM highlights h JOIN books b ON b.book_id=h.book_id
+         WHERE h.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR h.book_id=?1)
+         UNION ALL
+         SELECT t.book_id,t.review_id,t.content FROM thoughts t JOIN books b ON b.book_id=t.book_id
+         WHERE t.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR t.book_id=?1)
+         ORDER BY 1, 2",
+    )?;
+    let rows = query.query_map([book_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    for row in rows {
+        let (book, id, content) = row?;
+        let content: String = content.chars().take(crate::ai::concepts::MAX_NOTE_CHARS).collect();
+        books.entry(book).or_default().push((id, content));
+    }
+    Ok(books
+        .into_iter()
+        .map(|(book_id, notes)| BookNotes { book_id, notes })
+        .collect())
+}
+
+/// 已确认的名词库条目，作为抽取时的候选提示。
+fn glossary_candidates(db: &Database) -> Result<Vec<(String, String, Vec<String>)>, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare("SELECT canonical_name,coalesce(definition,''),coalesce(aliases_json,'[]') FROM glossary_terms WHERE status='confirmed'")?;
+    let rows = query.query_map([], |r| {
+        let aliases: Vec<String> = serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default();
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, aliases))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// 库里已有实体的名字（含别名），用于校验关系两端。
+fn known_entity_names(db: &Database) -> Result<std::collections::HashSet<String>, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare("SELECT canonical_name,coalesce(aliases_json,'[]') FROM knowledge_entities")?;
+    let rows = query.query_map([], |r| {
+        let canonical = r.get::<_, String>(0)?;
+        let aliases: Vec<String> = serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or_default();
+        Ok((canonical, aliases))
+    })?;
+    let mut names = std::collections::HashSet::new();
+    for row in rows {
+        let (canonical, aliases) = row?;
+        for key in crate::ai::concepts::entity_lookup_keys(&canonical, &aliases) {
+            names.insert(key);
+        }
+    }
+    Ok(names)
+}
+
+/// 某本书里内容未变化的笔记（可以跳过重新抽取）。
+fn unchanged_notes(db: &Database, notes: &[(String, String)]) -> Result<Vec<String>, AppError> {
+    if notes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let c = db.connect()?;
+    let mut query = c.prepare("SELECT note_id,content_hash FROM knowledge_note_state")?;
+    let mut hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, hash) = row?;
+        hashes.insert(id, hash);
+    }
+    Ok(notes
+        .iter()
+        .filter(|(id, content)| {
+            hashes
+                .get(id)
+                .map(|hash| *hash == content_hash(content))
+                .unwrap_or(false)
+        })
+        .map(|(id, _)| id.clone())
+        .collect())
+}
+
+fn content_hash(content: &str) -> String {
+    format!("{:x}", md5::compute(content.as_bytes()))
+}
+
+/// 解析 AI 返回的 JSON。允许模型把 JSON 包在 ```json 代码块或散文里。
+fn parse_extraction(text: &str) -> Result<crate::ai::concepts::RawExtraction, AppError> {
+    let trimmed = text.trim();
+    let without_fence = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|value| value.trim_end_matches("```").trim())
+        .unwrap_or(trimmed);
+    let start = without_fence.find('{');
+    let end = without_fence.rfind('}');
+    let candidate = match (start, end) {
+        (Some(start), Some(end)) if end > start => &without_fence[start..=end],
+        _ => return Err(AppError::Message("AI 没有返回有效的 JSON".into())),
+    };
+    serde_json::from_str(candidate).map_err(|error| AppError::Message(format!("AI 返回的概念 JSON 无法解析：{error}")))
+}
+
+/// 把一批笔记的抽取结果写库。证据与关系两端都已经在 `validate_extraction` 里校验过。
+fn persist_extraction(
+    db: &Database,
+    extraction: &crate::ai::concepts::ValidatedExtraction,
+    scanned_notes: &[(String, String)],
+) -> Result<(i64, i64), AppError> {
+    let mut c = db.connect()?;
+    let transaction = c.transaction()?;
+    let now = now_timestamp() as i64;
+    // 本次抽取产出的名字 → 实体 ID，关系落库时要用
+    let mut name_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    {
+        let mut query = transaction.prepare("SELECT id,canonical_name,coalesce(aliases_json,'[]') FROM knowledge_entities")?;
+        let rows = query.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, serde_json::from_str::<Vec<String>>(&r.get::<_, String>(2)?).unwrap_or_default()))
+        })?;
+        for row in rows {
+            let (id, canonical, aliases) = row?;
+            for key in crate::ai::concepts::entity_lookup_keys(&canonical, &aliases) {
+                name_to_id.insert(key, id.clone());
+            }
+        }
+    }
+    let mut entity_count = 0;
+    for entity in &extraction.entities {
+        let id = crate::ai::concepts::entity_id(&entity.kind, &entity.canonical_name);
+        let key = entity.canonical_name.to_lowercase();
+        // 已存在的实体只补证据，不覆盖用户改过的名字与状态
+        if name_to_id.contains_key(&key) {
+            let existing = name_to_id[&key].clone();
+            {
+                let mut query = transaction.prepare(
+                    "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence)
+                     VALUES(?1,?2,?3,?4,?5)
+                     ON CONFLICT(entity_id,note_id) DO UPDATE SET quote=excluded.quote,confidence=excluded.confidence",
+                )?;
+                for evidence in &entity.evidence {
+                    query.execute(rusqlite::params![existing, evidence.note_id, evidence.book_id, evidence.quote, evidence.confidence])?;
+                }
+            }
+            continue;
+        }
+        transaction.execute(
+            "INSERT INTO knowledge_entities(id,kind,canonical_name,description,aliases_json,status,source_hash,updated_at)
+             VALUES(?1,?2,?3,?4,?5,'suggested',?6,?7)",
+            rusqlite::params![id, entity.kind, entity.canonical_name, entity.description, serde_json::to_string(&entity.aliases).unwrap_or_else(|_| "[]".into()), entity.canonical_name.clone(), now],
+        )?;
+        {
+            let mut query = transaction.prepare(
+                "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES(?1,?2,?3,?4,?5)",
+            )?;
+            for evidence in &entity.evidence {
+                query.execute(rusqlite::params![id, evidence.note_id, evidence.book_id, evidence.quote, evidence.confidence])?;
+            }
+        }
+        name_to_id.insert(key, id);
+        entity_count += 1;
+    }
+
+    let mut relation_count = 0;
+    for relation in &extraction.relations {
+        let (Some(from), Some(to)) = (
+            name_to_id.get(&relation.from_name.to_lowercase()).cloned(),
+            name_to_id.get(&relation.to_name.to_lowercase()).cloned(),
+        ) else {
+            continue;
+        };
+        if from == to {
+            continue;
+        }
+        let id = crate::ai::concepts::relation_id(&from, &to, &relation.relation);
+        transaction.execute(
+            "INSERT INTO knowledge_relations(id,from_entity_id,to_entity_id,relation,summary,confidence,evidence_json,input_hash,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(id) DO UPDATE SET summary=excluded.summary,confidence=excluded.confidence,
+               evidence_json=excluded.evidence_json,input_hash=excluded.input_hash,updated_at=excluded.updated_at",
+            rusqlite::params![id, from, to, relation.relation, relation.summary, relation.confidence, serde_json::to_string(&relation.evidence).unwrap_or_else(|_| "[]".into()), format!("{}|{}", relation.from_name, relation.to_name), now],
+        )?;
+        relation_count += 1;
+    }
+
+    for (note_id, content) in scanned_notes {
+        transaction.execute(
+            "INSERT INTO knowledge_note_state(note_id,book_id,content_hash,scanned_at) VALUES(?1,'',?2,?3)
+             ON CONFLICT(note_id) DO UPDATE SET content_hash=excluded.content_hash,scanned_at=excluded.scanned_at",
+            rusqlite::params![note_id, content_hash(content), now],
+        )?;
+    }
+    transaction.commit()?;
+    Ok((entity_count, relation_count))
+}
+
+/// 概念图谱查询。大图默认只返回高置信度子图。
+#[tauri::command]
+pub fn list_concept_graph(db: State<'_, Database>, query: ConceptGraphQuery) -> Result<ConceptGraph, AppError> {
+    list_concept_graph_impl(&db, &query)
+}
+
+fn list_concept_graph_impl(db: &Database, query: &ConceptGraphQuery) -> Result<ConceptGraph, AppError> {
+    for kind in &query.kinds {
+        if !ENTITY_KINDS.contains(&kind.as_str()) {
+            return Err(AppError::Message("不支持的实体类型".into()));
+        }
+    }
+    let min_confidence = query.min_confidence.unwrap_or(0.0).clamp(0.0, 1.0);
+    // 超过这个数量只给高置信度子图，避免前端一次渲染上万节点
+    const SUBGRAPH_THRESHOLD: i64 = 500;
+    let limit = query.limit.unwrap_or(600).clamp(1, 2_000);
+    let c = db.connect()?;
+
+    // 中心实体模式：只看它的邻居
+    if let Some(center_id) = query.center_id.as_ref().filter(|value| !value.is_empty()) {
+        let mut query_stmt = c.prepare(
+            "SELECT e.id,e.kind,e.canonical_name,e.description,e.aliases_json,e.status,e.updated_at,
+                    (SELECT count(*) FROM knowledge_entity_evidence v WHERE v.entity_id=e.id)
+             FROM knowledge_entities e
+             WHERE e.id=?1 OR e.id IN (SELECT from_entity_id FROM knowledge_relations WHERE to_entity_id=?1
+                                       UNION SELECT to_entity_id FROM knowledge_relations WHERE from_entity_id=?1)
+             ORDER BY 4, 1 LIMIT ?2",
+        )?;
+        let entities = query_stmt
+            .query_map(rusqlite::params![center_id, limit], map_entity_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = entities.len() as i64;
+        let ids: Vec<String> = entities.iter().map(|item| item.id.clone()).collect();
+        let relations = relations_between(&c, &ids, min_confidence, query.include_hidden)?;
+        let entities = entities
+            .into_iter()
+            .filter(|item| query.include_hidden || item.status != "hidden")
+            .collect();
+        return Ok(ConceptGraph { entities, relations, truncated: false, total_entities: total });
+    }
+
+    let mut count_query = c.prepare("SELECT count(*) FROM knowledge_entities WHERE (?1 IS NULL OR status<>'hidden')")?;
+    let total_entities: i64 = count_query.query_row([if query.include_hidden { None } else { Some("x") }], |r| r.get(0)).unwrap_or(0);
+    // 500 节点以上只加载高置信度子图
+    let (subgraph_confidence, truncated) = if total_entities > SUBGRAPH_THRESHOLD {
+        (min_confidence.max(0.45), true)
+    } else {
+        (min_confidence, false)
+    };
+
+    let kind_filter: Vec<String> = query.kinds.clone();
+    let mut stmt = c.prepare(
+        "SELECT e.id,e.kind,e.canonical_name,e.description,e.aliases_json,e.status,e.updated_at,
+                (SELECT count(*) FROM knowledge_entity_evidence v WHERE v.entity_id=e.id)
+         FROM knowledge_entities e
+         WHERE (?1 IS NULL OR e.status<>'hidden')
+           AND (?2 IS NULL OR e.kind IN (SELECT value FROM json_each(?2)))
+           AND (?3 IS NULL OR e.id IN (SELECT entity_id FROM knowledge_entity_evidence WHERE book_id=?3))
+           AND EXISTS(SELECT 1 FROM knowledge_entity_evidence v WHERE v.entity_id=e.id AND v.confidence>=?4)
+         ORDER BY 7 DESC LIMIT ?5",
+    )?;
+    let kinds_json = if kind_filter.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&kind_filter).unwrap_or_default())
+    };
+    let entities: Vec<KnowledgeEntity> = stmt
+        .query_map(
+            rusqlite::params![
+                if query.include_hidden { None } else { Some("x") },
+                kinds_json,
+                query.book_id.as_ref().filter(|value| !value.is_empty()),
+                subgraph_confidence,
+                limit
+            ],
+            map_entity_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let ids: Vec<String> = entities.iter().map(|item| item.id.clone()).collect();
+    let relations = relations_between(&c, &ids, subgraph_confidence, query.include_hidden)?;
+    Ok(ConceptGraph { entities, relations, truncated, total_entities })
+}
+
+fn map_entity_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeEntity> {
+    let updated: i64 = r.get(6)?;
+    Ok(KnowledgeEntity {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        canonical_name: r.get(2)?,
+        description: r.get(3)?,
+        aliases: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+        status: r.get(5)?,
+        evidence_count: r.get(7)?,
+        updated_at: if updated > 0 {
+            rusqlite::Connection::open_in_memory()
+                .ok()
+                .and_then(|c| c.query_row("SELECT coalesce(datetime(?1,'unixepoch','localtime'),'')", rusqlite::params![updated], |r| r.get::<_, String>(0)).ok())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        },
+        evidence: Vec::new(),
+    })
+}
+
+/// 只保留两端都在给定集合内的关系。
+fn relations_between(
+    c: &rusqlite::Connection,
+    entity_ids: &[String],
+    min_confidence: f64,
+    include_hidden: bool,
+) -> Result<Vec<KnowledgeRelation>, AppError> {
+    if entity_ids.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let json = serde_json::to_string(entity_ids).unwrap_or_default();
+    // 用 json_each 展开实体 ID 集合，避免拼接大量占位符。
+    let mut stmt = c.prepare(
+        "SELECT r.id,r.from_entity_id,r.to_entity_id,r.relation,r.summary,r.confidence,r.evidence_json
+         FROM knowledge_relations r
+         WHERE r.confidence>=?1
+           AND r.from_entity_id IN (SELECT value FROM json_each(?2))
+           AND r.to_entity_id IN (SELECT value FROM json_each(?2))
+           AND (?3 OR r.from_entity_id NOT IN (SELECT id FROM knowledge_entities WHERE status='hidden')
+                  AND r.to_entity_id NOT IN (SELECT id FROM knowledge_entities WHERE status='hidden'))
+         ORDER BY r.confidence DESC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![min_confidence, json, include_hidden], |r| {
+        Ok(KnowledgeRelation {
+            id: r.get(0)?,
+            from_entity_id: r.get(1)?,
+            to_entity_id: r.get(2)?,
+            relation: r.get(3)?,
+            summary: r.get(4)?,
+            confidence: r.get(5)?,
+            evidence: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// 概念详情：带上证据笔记。
+fn concept_entity_with_evidence(db: &Database, entity_id: &str) -> Result<KnowledgeEntity, AppError> {
+    let c = db.connect()?;
+    let mut stmt = c.prepare(
+        "SELECT e.id,e.kind,e.canonical_name,e.description,e.aliases_json,e.status,e.updated_at,
+                (SELECT count(*) FROM knowledge_entity_evidence v WHERE v.entity_id=e.id)
+         FROM knowledge_entities e WHERE e.id=?1",
+    )?;
+    let mut entity = stmt
+        .query_row([&entity_id], map_entity_row)
+        .optional()?
+        .ok_or_else(|| AppError::Message("概念不存在".into()))?;
+    let mut evidence_query = c.prepare("SELECT note_id,book_id,quote,confidence FROM knowledge_entity_evidence WHERE entity_id=?1 ORDER BY confidence DESC")?;
+    entity.evidence = evidence_query
+        .query_map([entity_id], |r| {
+            Ok(ConceptEvidence { note_id: r.get(0)?, book_id: r.get(1)?, quote: r.get(2)?, confidence: r.get(3)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(entity)
+}
+
+/// 概念详情：带上证据笔记。
+#[tauri::command]
+pub fn get_concept_entity(db: State<'_, Database>, entity_id: String) -> Result<KnowledgeEntity, AppError> {
+    concept_entity_with_evidence(&db, &entity_id)
+}
+
+/// 用户校正：确认 / 隐藏 / 重命名 / 加别名。
+#[tauri::command]
+pub fn correct_concept_entity(db: State<'_, Database>, correction: EntityCorrection) -> Result<KnowledgeEntity, AppError> {
+    correct_entity_impl(&db, &correction)
+}
+
+fn correct_entity_impl(db: &Database, correction: &EntityCorrection) -> Result<KnowledgeEntity, AppError> {
+    let c = db.connect()?;
+    let mut stmt = c.prepare("SELECT id,canonical_name,description,aliases_json,status FROM knowledge_entities WHERE id=?1")?;
+    let (id, mut name, mut description, aliases_json, status): (String, String, String, String, String) = stmt
+        .query_row([&correction.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .optional()?
+        .ok_or_else(|| AppError::Message("概念不存在".into()))?;
+    if let Some(next) = correction.canonical_name.as_deref() {
+        let normalized = crate::ai::concepts::normalize_name(next).ok_or_else(|| AppError::Message("概念名称不能为空".into()))?;
+        name = normalized;
+    }
+    if let Some(next) = correction.description.as_deref() {
+        description = next.chars().take(320).collect();
+    }
+    let mut status = status;
+    if let Some(next) = correction.status.as_deref() {
+        if !ENTITY_STATUSES.contains(&next) {
+            return Err(AppError::Message("不支持的概念状态".into()));
+        }
+        status = next.to_owned();
+    }
+    let mut aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+    for alias in correction.aliases.iter().filter_map(|value| crate::ai::concepts::normalize_name(value)) {
+        if alias != name && !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    c.execute(
+        "UPDATE knowledge_entities SET canonical_name=?1,description=?2,aliases_json=?3,status=?4,updated_at=?5 WHERE id=?6",
+        rusqlite::params![name, description, serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".into()), status, now_timestamp() as i64, id],
+    )?;
+    drop(stmt);
+    drop(c);
+    concept_entity_with_evidence(&db, &correction.id)
+}
+
+/// 合并两个实体。整个过程在一个事务里完成，关系两端统一改写并去重。
+#[tauri::command]
+pub fn merge_concept_entities(db: State<'_, Database>, request: MergeEntitiesRequest) -> Result<(), AppError> {
+    merge_entities_impl(&db, &request.source_id, &request.target_id)
+}
+
+fn merge_entities_impl(db: &Database, source_id: &str, target_id: &str) -> Result<(), AppError> {
+    if source_id == target_id {
+        return Err(AppError::Message("不能把概念合并到它自己".into()));
+    }
+    let mut c = db.connect()?;
+    let transaction = c.transaction()?;
+    let mut stmt = transaction.prepare("SELECT canonical_name,description,coalesce(aliases_json,'[]') FROM knowledge_entities WHERE id=?1")?;
+    let (source_name, source_description, source_aliases): (String, String, String) = stmt
+        .query_row([source_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?
+        .ok_or_else(|| AppError::Message("待合并的概念不存在".into()))?;
+    let (target_name, _target_description, target_aliases): (String, String, String) = stmt
+        .query_row([target_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?
+        .ok_or_else(|| AppError::Message("目标概念不存在".into()))?;
+    drop(stmt);
+
+    // 证据搬到目标实体：主键冲突时保留更高置信度的一条
+    transaction.execute(
+        "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence)
+         SELECT ?1,note_id,book_id,quote,confidence FROM knowledge_entity_evidence WHERE entity_id=?2
+         ON CONFLICT(entity_id,note_id) DO UPDATE SET quote=excluded.quote,
+           confidence=max(knowledge_entity_evidence.confidence,excluded.confidence)",
+        rusqlite::params![target_id, source_id],
+    )?;
+    transaction.execute("DELETE FROM knowledge_entity_evidence WHERE entity_id=?1", [source_id])?;
+
+    // 关系两端改写到目标，并处理合并后出现的自环与重复边
+    transaction.execute("UPDATE OR IGNORE knowledge_relations SET from_entity_id=?1 WHERE from_entity_id=?2", rusqlite::params![target_id, source_id])?;
+    transaction.execute("UPDATE OR IGNORE knowledge_relations SET to_entity_id=?1 WHERE to_entity_id=?2", rusqlite::params![target_id, source_id])?;
+    transaction.execute("DELETE FROM knowledge_relations WHERE from_entity_id=to_entity_id", [])?;
+    // 同一对实体同一关系类型只保留一条。
+    // 端点要先归一化：合并后可能出现 2→3 与 3→2 两条反向重复边。
+    transaction.execute(
+        "DELETE FROM knowledge_relations WHERE rowid NOT IN (
+           SELECT min(rowid) FROM knowledge_relations GROUP BY
+             CASE WHEN from_entity_id < to_entity_id THEN from_entity_id ELSE to_entity_id END,
+             CASE WHEN from_entity_id < to_entity_id THEN to_entity_id ELSE from_entity_id END,
+             relation
+         )",
+        [],
+    )?;
+
+    // 目标实体的别名吸收来源的名称与别名
+    let mut aliases: Vec<String> = serde_json::from_str(&target_aliases).unwrap_or_default();
+    for alias in std::iter::once(source_name.clone()).chain(serde_json::from_str::<Vec<String>>(&source_aliases).unwrap_or_default()) {
+        let alias = alias.trim().to_owned();
+        if !alias.is_empty() && alias != target_name && !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    transaction.execute(
+        "UPDATE knowledge_entities SET aliases_json=?1,description=coalesce(nullif(?2,''),description),updated_at=?3 WHERE id=?4",
+        rusqlite::params![serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".into()), source_description, now_timestamp() as i64, target_id],
+    )?;
+    transaction.execute("DELETE FROM knowledge_entities WHERE id=?1", [source_id])?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// 清理所有 suggested 状态的实体（用户主动触发）。
+#[tauri::command]
+pub fn clear_suggested_concepts(db: State<'_, Database>) -> Result<i64, AppError> {
+    clear_suggested_concepts_impl(&db)
+}
+
+fn clear_suggested_concepts_impl(db: &Database) -> Result<i64, AppError> {
+    let c = db.connect()?;
+    let removed = c.execute("DELETE FROM knowledge_entities WHERE status='suggested'", [])?;
+    Ok(removed as i64)
+}
+
+/// 扫描全部 / 仅变化内容，抽取概念与关系。
+#[tauri::command]
+pub async fn scan_concepts(db: State<'_, Database>, request: ConceptScanRequest) -> Result<ConceptScanResult, AppError> {
+    let provider = ai_provider(&db)?;
+    let books = notes_grouped_by_book(&db, request.book_id.as_deref().filter(|value| !value.trim().is_empty()))?;
+    let glossary = glossary_candidates(&db)?;
+    let known = known_entity_names(&db)?;
+    let mut result = ConceptScanResult {
+        books_scanned: 0, books_failed: 0, notes_scanned: 0, notes_skipped: 0,
+        entities_created: 0, relations_created: 0, rejected: 0, failures: Vec::new(),
+    };
+    if books.is_empty() {
+        return Ok(result);
+    }
+    for book in books {
+        // 每本书独立处理：任何一本书失败都不影响其他书，也不回滚已完成的
+        let skip = match unchanged_notes(&db, &book.notes) {
+            Ok(skip) => skip,
+            Err(error) => {
+                result.books_failed += 1;
+                result.failures.push(format!("《{}》读取抽取缓存失败：{error}", book.book_id));
+                continue;
+            }
+        };
+        let pending: Vec<(String, String)> = if request.changed_only {
+            book.notes.iter().filter(|(id, _)| !skip.contains(id)).cloned().collect()
+        } else {
+            book.notes.clone()
+        };
+        result.notes_skipped += skip.len() as i64;
+        if pending.is_empty() {
+            continue;
+        }
+        let candidates = crate::ai::concepts::extract_candidates(
+            &pending.iter().map(|(id, content)| (id.as_str(), content.as_str())).collect::<Vec<_>>(),
+            &glossary,
+            60,
+        );
+        // 证据校验用的真实笔记集合：note_id, book_id, book_title, content
+        let real_notes: Vec<(String, String, String, String)> = pending
+            .iter()
+            .map(|(id, content)| (id.clone(), book.book_id.clone(), book.book_id.clone(), content.clone()))
+            .collect();
+        let system = "你是阅读笔记的概念抽取器。只输出严格 JSON，不要任何解释或 Markdown。格式：{\"entities\":[{\"kind\":\"concept|topic|idea\",\"canonical_name\":\"概念名\",\"description\":\"一句话定义\",\"aliases\":[\"同义词\"],\"confidence\":0.0-1.0,\"evidence_note_ids\":[\"笔记ID\"]}],\"relations\":[{\"from\":\"概念名\",\"to\":\"概念名\",\"relation\":\"broader|narrower|related|supports|conflicts|causes|applies\",\"summary\":\"一句话\",\"confidence\":0.0-1.0,\"evidence_note_ids\":[\"笔记ID\"]}]}。每个实体至少给一条真实存在的笔记 ID 作为证据；不要编造 ID。";
+        let mut entities_created = 0;
+        let mut relations_created = 0;
+        for batch in crate::ai::concepts::batch_notes(&pending) {
+            let body = batch
+                .iter()
+                .map(|(id, content)| format!("[{}] {}", id, content.chars().take(crate::ai::concepts::MAX_NOTE_CHARS).collect::<String>()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            // 名词库条目单独列出，让 AI 优先复用已有规范名而不是另起一个。
+            let glossary_hint = if candidates.glossary_terms.is_empty() {
+                "（名词库为空）".to_string()
+            } else {
+                candidates
+                    .glossary_terms
+                    .values()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join("、")
+            };
+            let prompt = format!(
+                "已确认名词库条目（优先复用这些规范名）：\n{glossary_hint}\n\n高频候选词（只作参考，不要强行全用）：\n{}\n\n以下是笔记：\n{}\n\n请抽取概念、主题与用户观点，以及它们之间的关系。",
+                candidates.frequent_phrases.join("、"),
+                body
+            );
+            let messages = vec![ChatMessage { role: "system".into(), content: system.into() }, ChatMessage { role: "user".into(), content: prompt }];
+            let response = match provider.chat(&messages).await {
+                Ok(response) => response,
+                Err(error) => {
+                    result.books_failed += 1;
+                    result.failures.push(format!("《{}》：{error}", book.book_id));
+                    break;
+                }
+            };
+            let raw = match parse_extraction(&response) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    result.books_failed += 1;
+                    result.failures.push(format!("《{}》：{error}", book.book_id));
+                    break;
+                }
+            };
+            let validated = crate::ai::concepts::validate_extraction(&raw, &real_notes, &known);
+            result.rejected += (validated.rejected_without_evidence + validated.rejected_unknown_note + validated.rejected_unknown_endpoint + validated.rejected_bad_kind) as i64;
+            if validated.entities.is_empty() && validated.relations.is_empty() {
+                continue;
+            }
+            let scanned: Vec<(String, String)> = batch
+                .iter()
+                .filter(|(id, _)| real_notes.iter().any(|(note_id, ..)| note_id == id))
+                .cloned()
+                .collect();
+            match persist_extraction(&db, &validated, &scanned) {
+                Ok((entities, relations)) => {
+                    entities_created += entities;
+                    relations_created += relations;
+                    result.notes_scanned += batch.len() as i64;
+                }
+                Err(error) => result.failures.push(format!("《{}》写入失败：{error}", book.book_id)),
+            }
+        }
+        result.entities_created += entities_created;
+        result.relations_created += relations_created;
+        result.books_scanned += 1;
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn test_reranker(
+    settings: RerankerSettings,
+    api_key: Option<String>,
+) -> Result<bool, AppError> {
+    let api_key = match api_key.filter(|value| !value.trim().is_empty()) {
+        Some(value) => value,
+        None => {
+            keyring::Entry::new("ReadFlow", &crate::ai::reranker::credential_name(&settings.provider))?
+                .get_password()?
+        }
+    };
+    crate::ai::reranker::test_connection(&reqwest::Client::new(), &settings, &api_key).await
 }
 
 #[tauri::command]
@@ -1550,9 +2443,21 @@ struct PreparedAsk {
     messages: Vec<ChatMessage>,
     results: Vec<SearchResult>,
     glossary_matches: Vec<GlossaryCitation>,
+    /// 重排降级时的非阻断提示；启用并成功时为空。
+    rerank_note: String,
+    /// 导入资料里的证据，编号接在笔记之后。
+    source_evidence: Vec<crate::rag::Evidence>,
 }
 
-fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppError> {
+async fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppError> {
+    prepare_ask_with_cancel(db, request, &std::sync::atomic::AtomicBool::new(false)).await
+}
+
+async fn prepare_ask_with_cancel(
+    db: &Database,
+    request: &AiRequest,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<PreparedAsk, AppError> {
     let question = &request.question;
     if !matches!(request.mode.as_str(), "ask" | "summary" | "compare") {
         return Err(AppError::Message("不支持的 AI 分析模式".into()));
@@ -1569,7 +2474,7 @@ fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppErr
     if question.trim().is_empty() {
         return Err(AppError::Message("问题不能为空".into()));
     }
-    let results = rag_search(db, question, &request.mode, &request.book_ids)?;
+    let (results, rerank_note) = rag_search(db, question, &request.mode, &request.book_ids, cancelled).await?;
     let mut context = String::new();
     for (index, result) in results.iter().enumerate() {
         let source = if result.note.note_type == "thought" {
@@ -1598,12 +2503,27 @@ fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppErr
             content
         ));
     }
+    // 导入资料并入证据：编号接着笔记往后排，AI 的 [n] 引用不会与笔记混淆。
+    let source_evidence = crate::rag::source_evidence(
+        db,
+        question,
+        &search_terms(question),
+        &request.book_ids,
+        if request.mode == "ask" { 12 } else { 6 },
+    )?;
+    let source_start = results.len();
+    for (offset, evidence) in source_evidence.iter().enumerate() {
+        let content_limit = if request.mode == "ask" { 700 } else { 420 };
+        context.push_str(&evidence.prompt_text(source_start + offset + 1, content_limit));
+        context.push('\n');
+    }
     let metadata_book_ids = if request.book_ids.is_empty() { results.iter().map(|result| result.note.book_id.clone()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>() } else { request.book_ids.clone() };
     let metadata = metadata_context(db, &metadata_book_ids)?;
     let (glossary, glossary_matches) = glossary_context(db,&format!("{}\n{}",question,context))?;
-    if results.is_empty() && glossary.is_empty() {
+    // 笔记、导入资料、名词解释三者都为空才算没有依据
+    if results.is_empty() && source_evidence.is_empty() && glossary.is_empty() {
         return Err(AppError::Message(
-            "没有检索到相关笔记或名词解释，无法生成有依据的回答".into(),
+            "没有检索到相关笔记、导入资料或名词解释，无法生成有依据的回答".into(),
         ));
     }
     let system = "你是 wereader 的个人阅读知识助手。阅读笔记是观点回答的唯一证据；书籍元数据只能作为背景信息。必须区分书籍原文划线、用户自己的想法和元数据；不得把简介或主题当成用户观点或书中论证；不同元数据来源不得合并成一个事实。每个重要观点结论使用 [数字] 标注笔记来源；证据不足时必须明确说明。";
@@ -1626,13 +2546,15 @@ fn prepare_ask(db: &Database, request: &AiRequest) -> Result<PreparedAsk, AppErr
         messages.push(ChatMessage { role: "assistant".into(), content: turn.answer.chars().take(5000).collect() });
     }
     messages.push(ChatMessage { role: "user".into(), content: prompt });
-    Ok(PreparedAsk { messages, results, glossary_matches })
+    Ok(PreparedAsk { messages, results, glossary_matches, rerank_note, source_evidence })
 }
 
-/// 正文固定下来之后再决定引用哪些笔记，所以两条路径共用这一个收尾函数。
+/// 正文固定下来之后再决定引用哪些证据，所以两条路径共用这一个收尾函数。
 fn finalize_answer(prepared: PreparedAsk, content: String) -> AiAnswer {
-    let PreparedAsk { results, glossary_matches, .. } = prepared;
+    let PreparedAsk { results, glossary_matches, rerank_note, source_evidence, .. } = prepared;
     let sources_considered = results.len();
+    // 导入资料的引用编号接在笔记之后，与 prompt 中给出的编号保持一致
+    let source_start = results.len();
     let citations = results
         .into_iter()
         .enumerate()
@@ -1646,20 +2568,437 @@ fn finalize_answer(prepared: PreparedAsk, content: String) -> AiAnswer {
         .into_iter()
         .filter(|citation| content.contains(&format!("[W{}]", citation.index)))
         .collect();
+    // 导入资料的引用编号接在笔记之后，编号与 prompt 里给出的完全一致
+    let source_citations = source_evidence
+        .into_iter()
+        .enumerate()
+        .filter(|(offset, _)| content.contains(&format!("[{}]", source_start + offset + 1)))
+        .map(|(offset, evidence)| SourceCitation {
+            index: source_start + offset + 1,
+            source_id: evidence.book_id().to_owned(),
+            source_type: match &evidence {
+                crate::rag::Evidence::Source { source_type, .. } => source_type.clone(),
+                crate::rag::Evidence::Note { .. } => "note".to_owned(),
+            },
+            title: match &evidence {
+                crate::rag::Evidence::Source { source_title, .. } => source_title.clone(),
+                crate::rag::Evidence::Note { book_title, .. } => book_title.clone(),
+            },
+            locator: match &evidence {
+                crate::rag::Evidence::Source { locator, .. } => locator.clone(),
+                crate::rag::Evidence::Note { .. } => crate::import::Locator::default(),
+            },
+            quote: evidence.content().chars().take(200).collect(),
+        })
+        .collect();
     AiAnswer {
         content,
         citations,
         glossary_citations,
         sources_considered,
+        rerank_note,
+        source_citations,
     }
 }
 
 #[tauri::command]
 pub async fn ask_ai(db: State<'_, Database>, request: AiRequest) -> Result<AiAnswer, AppError> {
-    let prepared = prepare_ask(&db, &request)?;
+    let prepared = prepare_ask(&db, &request).await?;
     let provider = ai_provider(&db)?;
     let content = provider.chat(&prepared.messages).await?;
     Ok(finalize_answer(prepared, content))
+}
+
+// ---------- 导入资料 ----------
+
+/// 应用数据目录，用来存 EPUB 封面等副本。
+fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+    app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn cover_file_name(extension: &str) -> String {
+    format!("cover.{}", extension.trim_start_matches('.').to_lowercase())
+}
+
+/// 把解析结果写库。
+fn persist_source(
+    db: &Database,
+    app: &AppHandle,
+    parsed: &crate::import::ParsedSource,
+) -> Result<String, AppError> {
+    let kind = parsed.kind.ok_or_else(|| AppError::Message("无法识别资料类型".into()))?;
+    let body: String = parsed.chunks.iter().map(|chunk| chunk.content.as_str()).collect::<Vec<_>>().join("\n");
+    let hash = crate::import::content_hash(kind, &parsed.title, &body);
+    let now = now_timestamp() as i64;
+    let source_id = uuid::Uuid::new_v4().to_string();
+
+    // 封面复制进应用数据目录，不依赖原文件持续存在
+    let cover_path = match (parsed.cover.as_ref(), parsed.cover_extension.as_ref()) {
+        (Some(bytes), Some(extension)) => {
+            let directory = app_data_dir(app)?.join("imports");
+            std::fs::create_dir_all(&directory).map_err(|error| AppError::Message(error.to_string()))?;
+            let name = cover_file_name(extension);
+            std::fs::write(directory.join(&name), bytes).map_err(|error| AppError::Message(format!("保存封面失败：{error}")))?;
+            Some(name)
+        }
+        _ => None,
+    };
+
+    let mut c = db.connect()?;
+    let transaction = c.transaction()?;
+    transaction.execute(
+        "INSERT INTO library_sources(id,source_type,title,author,origin,local_path,content_hash,page_count,cover_path,imported_at,updated_at,is_deleted)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,0)",
+        rusqlite::params![source_id, kind.as_str(), parsed.title, parsed.author, parsed.origin, parsed.origin, hash, parsed.page_count as i64, cover_path, now],
+    )?;
+    {
+        let mut statement = transaction.prepare("INSERT INTO source_documents(id,source_id,position,heading,content,locator_json) VALUES(?1,?2,?3,?4,?5,?6)")?;
+        for chunk in &parsed.chunks {
+            statement.execute(rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                source_id,
+                chunk.position as i64,
+                chunk.heading,
+                chunk.content,
+                serde_json::to_string(&chunk.locator).unwrap_or_else(|_| "{}".into()),
+            ])?;
+        }
+    }
+    transaction.commit()?;
+    Ok(source_id)
+}
+
+/// 找出内容 hash 相同且未删除的既有资料。
+fn find_duplicate(db: &Database, kind: crate::import::SourceKind, title: &str, body: &str) -> Result<Option<String>, AppError> {
+    let hash = crate::import::content_hash(kind, title, body);
+    db.connect()?
+        .query_row("SELECT id FROM library_sources WHERE content_hash=?1 AND is_deleted=0 LIMIT 1", [hash], |r| r.get(0))
+        .optional()
+        .map_err(AppError::from)
+}
+
+fn preview_chunks(parsed: &crate::import::ParsedSource) -> Vec<SourceDocumentItem> {
+    parsed
+        .chunks
+        .iter()
+        .take(5)
+        .map(|chunk| SourceDocumentItem {
+            id: String::new(),
+            position: chunk.position as i64,
+            heading: chunk.heading.clone(),
+            content: chunk.content.chars().take(400).collect(),
+            locator: chunk.locator.clone(),
+        })
+        .collect()
+}
+
+fn parsed_body(parsed: &crate::import::ParsedSource) -> String {
+    parsed.chunks.iter().map(|chunk| chunk.content.as_str()).collect::<Vec<_>>().join("\n")
+}
+
+/// 按 URL 抓取网页并返回预览。
+///
+/// 重复内容在这里就查出来：用户点确认之前就能看到「这份已经导入过」。
+#[tauri::command]
+pub async fn preview_web_import(db: State<'_, Database>, request: PreviewWebRequest) -> Result<ImportPreview, AppError> {
+    let parsed = fetch_web_source(&request.url).await?;
+    let duplicate_of = find_duplicate(&db, crate::import::SourceKind::Web, &parsed.title, &parsed_body(&parsed))?;
+    Ok(ImportPreview {
+        source_type: "web".into(),
+        title: parsed.title.clone(),
+        author: parsed.author.clone(),
+        origin: parsed.origin.clone(),
+        page_count: 0,
+        sample: preview_chunks(&parsed),
+        document_count: parsed.chunks.len() as i64,
+        warnings: parsed.warnings.clone(),
+        duplicate: duplicate_of.is_some(),
+        duplicate_of,
+    })
+}
+
+/// 抓取网页。每次重定向都重新校验目标地址，挡「公网 302 到内网」。
+async fn fetch_web_source(input: &str) -> Result<crate::import::ParsedSource, AppError> {
+    let mut url = crate::import::web::validate_url(input)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(crate::import::web::WEB_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| AppError::Message(format!("网络客户端初始化失败：{error}")))?;
+
+    // 自己处理重定向：reqwest 的自动跟随不会把目标地址交回来校验
+    for _ in 0..=crate::import::web::MAX_REDIRECTS {
+        let response = client
+            .get(url.clone())
+            .header("User-Agent", "wereader/0.2 (personal reading library)")
+            .header("Accept", "text/html,application/xhtml+xml")
+            .send()
+            .await
+            .map_err(|error| AppError::Message(format!("抓取失败：{error}")))?;
+
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| AppError::Message("重定向响应没有 Location".into()))?;
+            let next = url
+                .join(location)
+                .map_err(|_| AppError::Message("重定向地址无效".into()))?;
+            crate::import::web::validate_redirect(&url, &next)?;
+            // 下一轮仍然要走 HTTPS + 内网检查
+            url = crate::import::web::validate_url(next.as_str())?;
+            continue;
+        }
+
+        let status = response.status();
+        if !status.is_success() {
+            // 404 / 无结果不是系统错误，给出明确文案
+            return Err(AppError::Message(match status.as_u16() {
+                404 => "这个页面不存在（404）".into(),
+                403 => "对方拒绝了抓取（403）".into(),
+                429 => "请求过于频繁（429），请稍后再试".into(),
+                code => format!("抓取失败（HTTP {code}）"),
+            }));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !crate::import::web::is_html_content_type(content_type) {
+            return Err(AppError::Message(format!("这个链接不是网页（{content_type}），暂不支持该格式")));
+        }
+        // 先看 Content-Length，再边读边限制，避免大响应打爆内存
+        if let Some(length) = response.content_length() {
+            if length > crate::import::web::MAX_HTML_BYTES as u64 {
+                return Err(AppError::Message("页面体积超过导入上限".into()));
+            }
+        }
+        // reqwest 的 Response 没有实现 Read，用 chunk() 逐段读并累加限制。
+        let mut body = Vec::new();
+        let mut stream = response;
+        while let Some(chunk) = stream.chunk().await.map_err(|error| AppError::Message(format!("读取页面失败：{error}")))? {
+            if body.len() + chunk.len() > crate::import::web::MAX_HTML_BYTES {
+                return Err(AppError::Message("页面体积超过导入上限".into()));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        if body.len() >= crate::import::web::MAX_HTML_BYTES {
+            return Err(AppError::Message("页面体积超过导入上限".into()));
+        }
+        let html = String::from_utf8_lossy(&body).to_string();
+        let parsed = crate::import::web::build_parsed_source(&url, &html);
+        crate::import::validate_size(crate::import::SourceKind::Web, &parsed.chunks)?;
+        return Ok(parsed);
+    }
+    Err(AppError::Message("重定向次数过多，已中止抓取".into()))
+}
+
+/// 预览本地文件（PDF / EPUB）。先校验再解析。
+#[tauri::command]
+pub fn preview_file_import(db: State<'_, Database>, request: PreviewFileRequest) -> Result<ImportPreview, AppError> {
+    let parsed = read_local_file(&request.path)?;
+    let duplicate_of = find_duplicate(&db, parsed.kind.unwrap_or(crate::import::SourceKind::Web), &parsed.title, &parsed_body(&parsed))?;
+    Ok(ImportPreview {
+        source_type: parsed.kind.map(|kind| kind.as_str().to_owned()).unwrap_or_default(),
+        title: parsed.title.clone(),
+        author: parsed.author.clone(),
+        origin: parsed.origin.clone(),
+        page_count: parsed.page_count as i64,
+        sample: preview_chunks(&parsed),
+        document_count: parsed.chunks.len() as i64,
+        warnings: parsed.warnings.clone(),
+        duplicate: duplicate_of.is_some(),
+        duplicate_of,
+    })
+}
+
+/// 读本地文件并按扩展名分派。
+fn read_local_file(path: &str) -> Result<crate::import::ParsedSource, AppError> {
+    let path = std::path::Path::new(path);
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !matches!(extension.as_str(), "pdf" | "epub") {
+        return Err(AppError::Message("目前只支持导入 PDF 与 EPUB 文件".into()));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| AppError::Message(format!("无法读取文件：{error}")))?;
+    if !metadata.is_file() {
+        return Err(AppError::Message("这不是一个文件".into()));
+    }
+    let bytes = std::fs::read(path).map_err(|error| AppError::Message(format!("无法读取文件：{error}")))?;
+    let mut parsed = match extension.as_str() {
+        "pdf" => crate::import::pdf::parse(bytes)?,
+        _ => crate::import::epub::parse(bytes)?,
+    };
+    parsed.origin = Some(path.to_string_lossy().to_string());
+    let kind = parsed.kind.ok_or_else(|| AppError::Message("无法识别资料类型".into()))?;
+    crate::import::validate_size(kind, &parsed.chunks)?;
+    Ok(parsed)
+}
+
+/// 用户确认后正式入库。网页会重新抓一次（预览时内容可能已变）。
+#[tauri::command]
+pub async fn confirm_import(app: AppHandle, db: State<'_, Database>, request: ConfirmImportRequest) -> Result<ImportPreview, AppError> {
+    let parsed = match request.source_type.as_str() {
+        "web" => {
+            let url = request.url.clone().ok_or_else(|| AppError::Message("缺少网页地址".into()))?;
+            let mut parsed = fetch_web_source(&url).await?;
+            parsed.title = request.title.clone();
+            parsed.author = request.author.clone();
+            parsed.origin = request.origin_hint();
+            parsed
+        }
+        "pdf" | "epub" => {
+            let path = request.path.clone().ok_or_else(|| AppError::Message("缺少文件路径".into()))?;
+            let mut parsed = read_local_file(&path)?;
+            parsed.title = request.title.clone();
+            parsed.author = request.author.clone();
+            // 用户改了标题时 origin 仍按实际来源记录
+            parsed.origin = request.origin_hint();
+            parsed
+        }
+        other => return Err(AppError::Message(format!("不支持的来源类型：{other}"))),
+    };
+    let kind = parsed.kind.ok_or_else(|| AppError::Message("无法识别资料类型".into()))?;
+    let body = parsed_body(&parsed);
+    if let Some(existing) = find_duplicate(&db, kind, &parsed.title, &body)? {
+        // 重复内容不重复入库，把已有资料指回去
+        return Ok(ImportPreview {
+            source_type: kind.as_str().to_owned(),
+            title: parsed.title.clone(),
+            author: parsed.author.clone(),
+            origin: parsed.origin.clone(),
+            page_count: parsed.page_count as i64,
+            sample: preview_chunks(&parsed),
+            document_count: parsed.chunks.len() as i64,
+            warnings: parsed.warnings,
+            duplicate: true,
+            duplicate_of: Some(existing),
+        });
+    }
+    let id = persist_source(&db, &app, &parsed)?;
+    Ok(ImportPreview {
+        source_type: kind.as_str().to_owned(),
+        title: parsed.title.clone(),
+        author: parsed.author.clone(),
+        origin: parsed.origin.clone(),
+        page_count: parsed.page_count as i64,
+        sample: preview_chunks(&parsed),
+        document_count: parsed.chunks.len() as i64,
+        warnings: parsed.warnings,
+        duplicate: false,
+        duplicate_of: Some(id),
+    })
+}
+
+fn list_sources_impl(db: &Database, include_deleted: bool) -> Result<Vec<LibrarySource>, AppError> {
+    let c = db.connect()?;
+    let mut statement = c.prepare(
+        "SELECT s.id,s.source_type,s.title,s.author,s.origin,s.page_count,s.cover_path,
+                (SELECT count(*) FROM source_documents d WHERE d.source_id=s.id),s.imported_at,s.is_deleted
+         FROM library_sources s
+         WHERE (?1=1 OR s.is_deleted=0)
+         ORDER BY s.imported_at DESC",
+    )?;
+    let rows = statement.query_map([include_deleted as i64], |r| {
+        Ok(LibrarySource {
+            id: r.get(0)?,
+            source_type: r.get(1)?,
+            title: r.get(2)?,
+            author: r.get(3)?,
+            origin: r.get(4)?,
+            page_count: r.get(5)?,
+            cover: r.get(6)?,
+            document_count: r.get(7)?,
+            imported_at: r.get::<_, i64>(8)?.to_string(),
+            deleted: r.get::<_, i64>(9)? != 0,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// 导入资料列表。
+#[tauri::command]
+pub fn list_library_sources(db: State<'_, Database>, include_deleted: Option<bool>) -> Result<Vec<LibrarySource>, AppError> {
+    list_sources_impl(&db, include_deleted.unwrap_or(false))
+}
+
+fn source_detail_impl(db: &Database, source_id: &str) -> Result<SourceDetail, AppError> {
+    let c = db.connect()?;
+    let mut statement = c.prepare(
+        "SELECT s.id,s.source_type,s.title,s.author,s.origin,s.page_count,s.cover_path,
+                (SELECT count(*) FROM source_documents d WHERE d.source_id=s.id),s.imported_at,s.is_deleted
+         FROM library_sources s WHERE s.id=?1",
+    )?;
+    let source = statement
+        .query_row([source_id], |r| {
+            Ok(LibrarySource {
+                id: r.get(0)?,
+                source_type: r.get(1)?,
+                title: r.get(2)?,
+                author: r.get(3)?,
+                origin: r.get(4)?,
+                page_count: r.get(5)?,
+                cover: r.get(6)?,
+                document_count: r.get(7)?,
+                imported_at: r.get::<_, i64>(8)?.to_string(),
+                deleted: r.get::<_, i64>(9)? != 0,
+            })
+        })
+        .optional()?
+        .ok_or_else(|| AppError::Message("资料不存在".into()))?;
+    let mut documents = c.prepare("SELECT id,position,coalesce(heading,''),content,locator_json FROM source_documents WHERE source_id=?1 ORDER BY position")?;
+    let items = documents
+        .query_map([source_id], |r| {
+            Ok(SourceDocumentItem {
+                id: r.get(0)?,
+                position: r.get(1)?,
+                heading: r.get(2)?,
+                content: r.get(3)?,
+                locator: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SourceDetail { source, documents: items })
+}
+
+/// 资料详情（含全部文档块）。
+#[tauri::command]
+pub fn get_library_source(db: State<'_, Database>, source_id: String) -> Result<SourceDetail, AppError> {
+    source_detail_impl(&db, &source_id)
+}
+
+/// 软删除：FTS 由触发器同步清理，列表里不再出现但数据还在。
+#[tauri::command]
+pub fn delete_library_source(db: State<'_, Database>, source_id: String) -> Result<(), AppError> {
+    let changed = db
+        .connect()?
+        .execute("UPDATE library_sources SET is_deleted=1,updated_at=?1 WHERE id=?2", rusqlite::params![now_timestamp() as i64, source_id])?;
+    if changed == 0 {
+        return Err(AppError::Message("资料不存在".into()));
+    }
+    Ok(())
+}
+
+/// 彻底删除本地副本。删表由 CASCADE 完成，封面文件也要一起清掉。
+#[tauri::command]
+pub fn purge_library_source(app: AppHandle, db: State<'_, Database>, source_id: String) -> Result<(), AppError> {
+    let cover: Option<String> = db
+        .connect()?
+        .query_row("SELECT cover_path FROM library_sources WHERE id=?1", [&source_id], |r| r.get(0))
+        .optional()?;
+    db.connect()?.execute("DELETE FROM library_sources WHERE id=?1", [&source_id])?;
+    if let Some(name) = cover.filter(|value| !value.is_empty()) {
+        // 只删除我们自己生成的文件名，避免被传入任意路径
+        let safe = std::path::Path::new(&name);
+        if safe.file_name().and_then(|value| value.to_str()) == Some(name.as_str()) {
+            let _ = std::fs::remove_file(app_data_dir(&app)?.join("imports").join(&name));
+        }
+    }
+    Ok(())
 }
 
 /// 流式问答。命令立刻返回 `requestId`，正文通过 `ai-stream` 事件推送。
@@ -1681,7 +3020,7 @@ pub async fn ask_ai_stream(
     if request_id.len() > 128 {
         return Err(AppError::Message("请求标识过长".into()));
     }
-    let prepared = prepare_ask(&db, &request)?;
+    let prepared = prepare_ask_with_cancel(&db, &request, &std::sync::atomic::AtomicBool::new(false)).await?;
     let provider = ai_provider(&db)?;
     let token = registry.register(&request_id)?;
     let cancel_token = Arc::clone(&token);
@@ -1693,8 +3032,7 @@ pub async fn ask_ai_stream(
         let emit = |event: crate::ai::provider::AiStreamEvent| {
             let _ = emit_app.emit(crate::ai::provider::AI_STREAM_EVENT, event);
         };
-        let started = crate::ai::provider::AiStreamEvent::started(&task_id);
-        emit(started.clone());
+        emit(crate::ai::provider::AiStreamEvent::started(&task_id));
         let outcome = provider
             .chat_stream(&prepared.messages, &cancel_token, |delta| {
                 emit(crate::ai::provider::AiStreamEvent::delta(&task_id, delta));
@@ -1702,10 +3040,11 @@ pub async fn ask_ai_stream(
             .await;
         match outcome {
             Ok((crate::ai::providers::StreamOutcome::Completed(content), notice)) => {
+                // 服务不支持流式的回退说明优先于 rerank 提示；两者都是非阻断的。
+                let mut answer = finalize_answer(prepared, content);
                 if let Some(notice) = notice {
-                    emit(started.with_notice(notice));
+                    answer.rerank_note = notice;
                 }
-                let answer = finalize_answer(prepared, content);
                 emit(crate::ai::provider::AiStreamEvent::completed(&task_id, answer));
             }
             Ok((crate::ai::providers::StreamOutcome::Cancelled, _)) => {
@@ -2025,12 +3364,13 @@ fn validate_ai_settings(settings: &AiSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-fn rag_search(
+async fn rag_search(
     db: &Database,
     question: &str,
     mode: &str,
     book_ids: &[String],
-) -> Result<Vec<SearchResult>, AppError> {
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<(Vec<SearchResult>, String), AppError> {
     let search_input = if mode == "ask" { question } else { "" };
     if book_ids.len() > 1 {
         // 小范围比较保留更多证据；大范围分析保证每本书至少有一个样本，
@@ -2054,9 +3394,110 @@ fn rag_search(
             )?);
         }
         combined.truncate(total_limit);
-        return Ok(combined);
+        return Ok(maybe_rerank(db, question, mode, book_ids, combined, cancelled).await);
     }
-    hybrid_search(db, search_input, None, book_ids, 200)
+    let candidates = hybrid_search(db, search_input, None, book_ids, 200)?;
+    Ok(maybe_rerank(db, question, mode, book_ids, candidates, cancelled).await)
+}
+
+/// Hybrid Search 之后可选地做一次 rerank。
+///
+/// 返回 `(候选, 降级提示)`。任何一步失败都只是把提示填上，候选本身原样返回，
+/// 所以 AI 永远不会因为重排不可用而失败。
+async fn maybe_rerank(
+    db: &Database,
+    question: &str,
+    mode: &str,
+    book_ids: &[String],
+    candidates: Vec<SearchResult>,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> (Vec<SearchResult>, String) {
+    let Ok(Some(settings)) = reranker_settings_from_db(db) else {
+        return (candidates, String::new());
+    };
+    if !crate::ai::reranker::is_usable(&settings) {
+        return (candidates, String::new());
+    }
+    // 只在全库提问时重排：summary / compare 的检索输入是空串，没有 query 可用。
+    if question.trim().is_empty() || mode != "ask" {
+        return (candidates, String::new());
+    }
+    let Ok(api_key) = keyring::Entry::new(
+        "ReadFlow",
+        &crate::ai::reranker::credential_name(&settings.provider),
+    )
+    .and_then(|entry| entry.get_password())
+    else {
+        return (
+            candidates,
+            "未配置 Reranker API Key，本次沿用本地排序".into(),
+        );
+    };
+    let documents: Vec<String> = candidates
+        .iter()
+        .map(|item| item.note.content.clone())
+        .collect();
+    let outcome = crate::ai::reranker::rerank(
+        &reqwest::Client::new(),
+        &settings,
+        &api_key,
+        question.trim(),
+        &documents,
+        cancelled,
+    )
+    .await;
+    // 只记录耗时与候选数，不记录问题正文、笔记正文或密钥。
+    eprintln!(
+        "[rerank] applied={} candidates={} elapsed_ms={}",
+        outcome.applied, outcome.candidate_count, outcome.elapsed_ms
+    );
+    if !outcome.applied || outcome.original_order.is_empty() {
+        let warning = if outcome.warning.is_empty() {
+            "重排未生效，本次沿用本地排序".to_string()
+        } else {
+            outcome.warning
+        };
+        return (candidates, warning);
+    }
+    let top_n = (settings.top_n as usize).clamp(1, candidates.len());
+    // 调试用途：打印每条候选的排序来源与分项分数，不记录正文。
+    crate::ai::reranker::log_score_breakdown(
+        &outcome,
+        &candidates.iter().map(|item| -item.score).collect::<Vec<_>>(),
+        |index| {
+            candidates
+                .get(index)
+                .map(|item| item.note.id.clone())
+                .unwrap_or_default()
+        },
+    );
+    let mut reranked: Vec<SearchResult> = outcome
+        .original_order
+        .iter()
+        .filter_map(|index| candidates.get(*index).cloned())
+        .collect();
+    if reranked.is_empty() {
+        return (candidates, "重排结果为空，本次沿用本地排序".into());
+    }
+    // 跨书分析要保住选中书籍的证据覆盖，不能被单本书刷屏。
+    if book_ids.len() > 1 {
+        let book_ids_of: Vec<String> = reranked
+            .iter()
+            .map(|item| item.note.book_id.clone())
+            .collect();
+        let selected = crate::ai::reranker::apply_book_coverage(
+            &(0..reranked.len()).collect::<Vec<usize>>(),
+            &book_ids_of,
+            top_n,
+            2,
+        );
+        reranked = selected
+            .into_iter()
+            .filter_map(|index| reranked.get(index).cloned())
+            .collect();
+    }
+    reranked.truncate(top_n);
+    (reranked, String::new())
 }
 
 fn hybrid_search(
@@ -2160,7 +3601,11 @@ fn hybrid_search(
     Ok(ranked)
 }
 
-fn normalize_search_text(input: &str) -> String {
+/// 规范化搜索文本：转小写并只保留字母数字。
+///
+/// 抽成 `pub(crate)` 是为了让 `rag` 模块用同一套规则给导入资料打分，
+/// 否则笔记与资料的匹配口径会不一致。
+pub(crate) fn normalize_search_text(input: &str) -> String {
     input
         .to_lowercase()
         .chars()
@@ -2207,18 +3652,40 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        book_title_boost, classify_google_books_status, database_row_query, fts_match_expression,
-        fts_query, global_search_impl, normalize_recommendations, normalize_scores, parse_relation_analysis,
-        relevance_from_bm25, request_default, search_terms, snippet_of, validate_secret_kind, weread_reader_id,
+        book_title_boost, classify_google_books_status, clear_suggested_concepts_impl, concept_entity_with_evidence,
+        content_hash, correct_entity_impl, database_row_query, fts_match_expression, fts_query, global_search_impl,
+        known_entity_names, list_concept_graph_impl, maybe_rerank, merge_entities_impl, normalize_recommendations,
+        normalize_scores, notes_grouped_by_book, parse_extraction, parse_relation_analysis, persist_extraction,
+        cover_file_name, find_duplicate, list_sources_impl, relevance_from_bm25, reranker_settings_from_db,
+        request_default, save_reranker_settings_impl, search_terms, snippet_of, source_detail_impl, unchanged_notes,
+        validate_secret_kind, weread_reader_id,
         MetadataBatchFuture, MetadataFetchResult, AppError, GLOBAL_SEARCH_SNIPPET_CHARS,
     };
-    use crate::{database::Database, models::{GlobalSearchPage, GlobalSearchRequest, GlobalSearchResult}};
+    use crate::{
+        database::Database,
+        models::{
+            ConceptGraphQuery, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, GlobalSearchResult, Note,
+            RerankerSettings, SearchResult,
+        },
+    };
     use std::{
         future::Future,
-        sync::{Arc, Mutex},
+        sync::{atomic::AtomicBool, Arc, Mutex},
         task::{Context, Poll, Waker},
         time::Duration,
     };
+
+    /// 跑一个真正的异步函数。
+    ///
+    /// 与 `block_on` 不同，这里起的是 tokio runtime：重排降级路径会读系统凭据库，
+    /// 而凭据库调用可能真的挂起，用无 waker 的忙等会死循环。
+    fn run_async<F: Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("创建 tokio runtime 失败")
+            .block_on(future)
+    }
 
     /// 最小执行器：tokio 没有开启 macros feature，用不了 `#[tokio::test]`；
     /// 这里喂进去的假请求都是立刻就绪的 future，直接轮询即可。
@@ -2786,5 +4253,764 @@ mod tests {
         }
         let db = Database::open(&path).unwrap();
         assert_eq!(count_indexed(&db), 2);
+    }
+
+    // ---------- Reranker ----------
+
+    fn seed_reranker(db: &Database, settings: &RerankerSettings) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO reranker_settings(id,provider,endpoint,model,top_n,enabled,updated_at)
+                 VALUES(1,?1,?2,?3,?4,?5,0)
+                 ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,endpoint=excluded.endpoint,
+                   model=excluded.model,top_n=excluded.top_n,enabled=excluded.enabled",
+                rusqlite::params![settings.provider, settings.endpoint, settings.model, settings.top_n, settings.enabled as i64],
+            )
+            .unwrap();
+    }
+
+    fn usable_reranker() -> RerankerSettings {
+        RerankerSettings {
+            provider: "Cohere".into(),
+            endpoint: "https://api.cohere.com/v1/rerank".into(),
+            model: "rerank-multilingual-v3.0".into(),
+            top_n: 8,
+            enabled: true,
+        }
+    }
+
+    fn notes_of(results: Vec<SearchResult>) -> Vec<String> {
+        results.into_iter().map(|item| item.note.id).collect()
+    }
+
+    fn candidates(db: &Database, book_id: &str, count: usize) -> Vec<SearchResult> {
+        seed_book(db, book_id, "书", "作者", "分类");
+        (0..count)
+            .map(|index| {
+                seed_highlight(db, &format!("h{index}"), book_id, "第一章", &format!("候选正文 {index}"));
+                SearchResult {
+                    note: Note {
+                        id: format!("h{index}"),
+                        note_type: "highlight".into(),
+                        book_id: book_id.into(),
+                        book_title: "书".into(),
+                        chapter: "第一章".into(),
+                        content: format!("候选正文 {index}"),
+                        created_at: String::new(),
+                    },
+                    // hybrid_search 用负分表示名次，越小越靠前。
+                    score: -(index as f64),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rerank_未配置时原样返回候选() {
+        let (_dir, db) = search_test_db();
+        let local = candidates(&db, "b1", 5);
+        let (results, warning) = run_async(maybe_rerank(&db, "问题", "ask", &[], local.clone(), &AtomicBool::new(false)));
+        assert!(warning.is_empty());
+        assert_eq!(notes_of(results), notes_of(local));
+    }
+
+    #[test]
+    fn rerank_关闭时原样返回候选() {
+        let (_dir, db) = search_test_db();
+        let mut settings = usable_reranker();
+        settings.enabled = false;
+        seed_reranker(&db, &settings);
+        let local = candidates(&db, "b1", 4);
+        let (results, warning) = run_async(maybe_rerank(&db, "问题", "ask", &[], local.clone(), &AtomicBool::new(false)));
+        assert!(warning.is_empty());
+        assert_eq!(notes_of(results), notes_of(local));
+    }
+
+    #[test]
+    fn rerank_summary_与_compare_模式不重排() {
+        let (_dir, db) = search_test_db();
+        seed_reranker(&db, &usable_reranker());
+        // 这两种模式的检索输入是空串，重排没有 query 可用
+        let local = candidates(&db, "b1", 3);
+        let (results, warning) = run_async(maybe_rerank(&db, "问题", "compare", &[], local.clone(), &AtomicBool::new(false)));
+        assert!(warning.is_empty());
+        assert_eq!(notes_of(results), notes_of(local));
+    }
+
+    #[test]
+    fn rerank_缺少_api_key_时降级并给出提示() {
+        let (_dir, db) = search_test_db();
+        seed_reranker(&db, &usable_reranker());
+        let local = candidates(&db, "b1", 3);
+        let (results, warning) = run_async(maybe_rerank(&db, "问题", "ask", &[], local.clone(), &AtomicBool::new(false)));
+        // 没有 key 也不能让 AI 失败：候选原样返回，附带一条提示
+        assert!(!warning.is_empty(), "应当给出降级提示");
+        assert_eq!(notes_of(results), notes_of(local), "候选必须原样返回");
+    }
+
+    #[test]
+    fn rerank_端点无效时降级而不是报错() {
+        let (_dir, db) = search_test_db();
+        let mut settings = usable_reranker();
+        // 指向一个必定拒绝连接的本地端口
+        settings.endpoint = "http://127.0.0.1:9/rerank".into();
+        seed_reranker(&db, &settings);
+        let local = candidates(&db, "b1", 3);
+        // 所有降级路径都必须给出非空 warning 且不丢候选
+        let (results, warning) = run_async(maybe_rerank(&db, "问题", "ask", &[], local.clone(), &AtomicBool::new(false)));
+        assert!(!warning.is_empty());
+        assert_eq!(results.len(), local.len());
+    }
+
+    #[test]
+    fn rerank_不会发送候选集以外的数据() {
+        let (_dir, db) = search_test_db();
+        seed_reranker(&db, &usable_reranker());
+        // 库里还有别的笔记，但只有传入的候选会进入重排
+        seed_book(&db, "b2", "另一本书", "另一位作者", "分类");
+        seed_highlight(&db, "other", "b2", "第二章", "不该被发送的正文");
+        let local = candidates(&db, "b1", 3);
+        let (results, _warning) = run_async(maybe_rerank(&db, "问题", "ask", &[], local, &AtomicBool::new(false)));
+        assert!(!results.iter().any(|item| item.note.id == "other"));
+    }
+
+    #[test]
+    fn rerank_配置校验覆盖开关打开与关闭两种情况() {
+        let (_dir, db) = search_test_db();
+        // 关闭时允许 endpoint 非法，用户才能先关掉坏配置
+        let mut broken = usable_reranker();
+        broken.enabled = false;
+        broken.endpoint = "http://insecure.example.com/rerank".into();
+        save_reranker_settings_impl(&db, &broken, None).expect("关闭状态下不应因 endpoint 报错");
+        let saved = reranker_settings_from_db(&db).unwrap().expect("配置应当被保存");
+        assert!(!saved.enabled);
+
+        // 打开时必须校验
+        broken.enabled = true;
+        assert!(save_reranker_settings_impl(&db, &broken, None).is_err());
+    }
+
+    #[test]
+    fn rerank_top_n_越界被拒绝() {
+        let (_dir, db) = search_test_db();
+        let mut settings = usable_reranker();
+        settings.enabled = false;
+        settings.top_n = 999;
+        assert!(save_reranker_settings_impl(&db, &settings, None).unwrap_err().to_string().contains("Top N"));
+    }
+
+    #[test]
+    fn rerank_开关与_top_n_能正确往返数据库() {
+        let (_dir, db) = search_test_db();
+        let mut settings = usable_reranker();
+        settings.top_n = 12;
+        settings.enabled = false;
+        save_reranker_settings_impl(&db, &settings, None).unwrap();
+        let saved = reranker_settings_from_db(&db).unwrap().unwrap();
+        assert_eq!(saved.top_n, 12);
+        assert!(!saved.enabled);
+        assert_eq!(saved.provider, "Cohere");
+
+        // 再存一次应当是覆盖而不是插第二行
+        settings.enabled = true;
+        save_reranker_settings_impl(&db, &settings, None).unwrap();
+        let count = db.connect().unwrap().query_row("SELECT count(*) FROM reranker_settings", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ---------- 导入资料 ----------
+
+    fn seed_source(db: &Database, source_id: &str, source_type: &str, title: &str, deleted: bool) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO library_sources(id,source_type,title,content_hash,page_count,imported_at,updated_at,is_deleted)
+                 VALUES(?1,?2,?3,?4,1,1700000000,1700000000,?5)",
+                rusqlite::params![source_id, source_type, title, format!("hash-{source_id}"), deleted as i64],
+            )
+            .unwrap();
+    }
+
+    fn seed_source_doc(db: &Database, doc_id: &str, source_id: &str, heading: &str, content: &str, locator: crate::import::Locator) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO source_documents(id,source_id,position,heading,content,locator_json) VALUES(?1,?2,0,?3,?4,?5)",
+                rusqlite::params![doc_id, source_id, heading, content, serde_json::to_string(&locator).unwrap()],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn 导入资料_按内容哈希判重() {
+        let (_dir, db) = search_test_db();
+        let chunks = vec![crate::import::DocumentChunk {
+            position: 0,
+            heading: "第一章".into(),
+            content: "一些正文".into(),
+            locator: crate::import::Locator::default(),
+        }];
+        let parsed = crate::import::ParsedSource {
+            title: "测试资料".into(),
+            kind: Some(crate::import::SourceKind::Epub),
+            chunks,
+            ..Default::default()
+        };
+        crate::import::validate_size(crate::import::SourceKind::Epub, &parsed.chunks).unwrap();
+        assert!(find_duplicate(&db, crate::import::SourceKind::Epub, "测试资料", "一些正文").unwrap().is_none());
+
+        // 直接插一条同 hash 的记录
+        let hash = crate::import::content_hash(crate::import::SourceKind::Epub, "测试资料", "一些正文");
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO library_sources(id,source_type,title,content_hash,page_count,imported_at,updated_at,is_deleted)
+                 VALUES('s1','epub','测试资料',?1,1,0,0,0)",
+                [&hash],
+            )
+            .unwrap();
+        assert_eq!(find_duplicate(&db, crate::import::SourceKind::Epub, "测试资料", "一些正文").unwrap().as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn 导入资料_软删除后不再算重复() {
+        let (_dir, db) = search_test_db();
+        let hash = crate::import::content_hash(crate::import::SourceKind::Web, "网页", "正文");
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO library_sources(id,source_type,title,content_hash,page_count,imported_at,updated_at,is_deleted)
+                 VALUES('s1','web','网页',?1,0,0,0,1)",
+                [&hash],
+            )
+            .unwrap();
+        assert!(find_duplicate(&db, crate::import::SourceKind::Web, "网页", "正文").unwrap().is_none());
+    }
+
+    #[test]
+    fn 导入资料_软删除后不出现在列表() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "在架资料", false);
+        seed_source(&db, "s2", "epub", "已删资料", true);
+        let visible = list_sources_impl(&db, false).unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].title, "在架资料");
+        let all = list_sources_impl(&db, true).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn 导入资料_删除后从搜索里消失() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "导入的PDF", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "独特关键词内容", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+
+        let page = search(&db, GlobalSearchRequest { query: "独特关键词".into(), ..request_default() });
+        assert!(page.results.iter().any(|item| item.entity_type == "source" && item.id == "d1"));
+
+        db.connect().unwrap().execute("UPDATE library_sources SET is_deleted=1 WHERE id='s1'", []).unwrap();
+        let page = search(&db, GlobalSearchRequest { query: "独特关键词".into(), ..request_default() });
+        assert!(!page.results.iter().any(|item| item.entity_type == "source"));
+    }
+
+    #[test]
+    fn 导入资料_搜索结果带页码或章节定位() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "一本PDF", false);
+        seed_source_doc(&db, "d1", "s1", "第 12 页", "关键词甲", crate::import::Locator { page: Some(12), chapter: None, heading: None });
+        seed_source(&db, "s2", "epub", "一本EPUB", false);
+        seed_source_doc(&db, "d2", "s2", "第三章", "关键词甲", crate::import::Locator { page: None, chapter: Some(3), heading: None });
+
+        let page = search(&db, GlobalSearchRequest { query: "关键词甲".into(), ..request_default() });
+        let labels: Vec<String> = page.results.iter().filter(|item| item.entity_type == "source").map(|item| item.subtitle.clone()).collect();
+        assert!(labels.contains(&"第 12 页".to_string()), "PDF 结果应带页码，实际 {labels:?}");
+        assert!(labels.contains(&"第 3 章".to_string()), "EPUB 结果应带章节号，实际 {labels:?}");
+    }
+
+    #[test]
+    fn 导入资料_限定书籍时不参与搜索() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "书", "作者", "分类");
+        seed_source(&db, "s1", "pdf", "导入的PDF", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "关键词乙", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+
+        let page = search(&db, GlobalSearchRequest { query: "关键词乙".into(), book_id: Some("b1".into()), ..request_default() });
+        assert!(!page.results.iter().any(|item| item.entity_type == "source"), "限定书籍时导入资料不应出现");
+    }
+
+    #[test]
+    fn 导入资料_文档块增删改会同步_fts() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "导入的PDF", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "原始唯一词汇", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+
+        let count = |db: &Database| -> i64 { db.connect().unwrap().query_row("SELECT count(*) FROM source_docs_fts", [], |r| r.get(0)).unwrap() };
+        assert_eq!(count(&db), 1);
+
+        // 改内容：旧词应当消失
+        db.connect().unwrap().execute("UPDATE source_documents SET content='修改后的新词汇' WHERE id='d1'", []).unwrap();
+        assert_eq!(count(&db), 1, "更新不应产生重复行");
+        let old_hit: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM source_docs_fts WHERE source_docs_fts MATCH '\"原始唯一词汇\"'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old_hit, 0, "旧内容必须从 FTS 移除");
+
+        // 删文档：FTS 同步清理
+        db.connect().unwrap().execute("DELETE FROM source_documents WHERE id='d1'", []).unwrap();
+        assert_eq!(count(&db), 0, "删除文档必须同步清理 FTS");
+    }
+
+    #[test]
+    fn 导入资料_删除来源会级联清理文档与_fts() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "epub", "导入的EPUB", false);
+        seed_source_doc(&db, "d1", "s1", "第一章", "内容甲", crate::import::Locator::default());
+        db.connect().unwrap().execute("DELETE FROM library_sources WHERE id='s1'", []).unwrap();
+        let docs: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM source_documents", [], |r| r.get(0)).unwrap();
+        let fts: i64 = db.connect().unwrap().query_row("SELECT count(*) FROM source_docs_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(docs, 0, "文档应当级联删除");
+        assert_eq!(fts, 0, "FTS 应当同步清理");
+    }
+
+    #[test]
+    fn 导入资料_资料详情返回全部文档块() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "导入的PDF", false);
+        seed_source_doc(&db, "d1", "s1", "第 1 页", "第一段", crate::import::Locator { page: Some(1), chapter: None, heading: None });
+        seed_source_doc(&db, "d2", "s1", "第 2 页", "第二段", crate::import::Locator { page: Some(2), chapter: None, heading: None });
+
+        let detail = source_detail_impl(&db, "s1").unwrap();
+        assert_eq!(detail.source.title, "导入的PDF");
+        assert_eq!(detail.documents.len(), 2);
+        assert_eq!(detail.documents[1].locator.page, Some(2));
+        assert!(source_detail_impl(&db, "missing").is_err());
+    }
+
+    #[test]
+    fn 导入资料_内容_hash_唯一索引拦住重复入库() {
+        let (_dir, db) = search_test_db();
+        seed_source(&db, "s1", "pdf", "书", false);
+        let second = db
+            .connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO library_sources(id,source_type,title,content_hash,page_count,imported_at,updated_at,is_deleted)
+                 VALUES('s2','pdf','书','hash-s1',1,0,0,0)",
+                [],
+            );
+        assert!(second.is_err(), "相同内容 hash 重复入库必须被唯一索引拒绝");
+    }
+
+    #[test]
+    fn 导入资料_封面文件名必须清洗() {
+        // 只允许自己生成的文件名，避免 purge 时被传入任意路径
+        assert_eq!(cover_file_name("JPG"), "cover.jpg");
+        assert_eq!(cover_file_name(".png"), "cover.png");
+    }
+
+    // ---------- 概念级知识图谱 ----------
+
+    fn seed_entity(db: &Database, id: &str, kind: &str, name: &str, status: &str, confidence: f64) {
+        let c = db.connect().unwrap();
+        c.execute(
+            "INSERT INTO knowledge_entities(id,kind,canonical_name,description,aliases_json,status,source_hash,updated_at)
+             VALUES(?1,?2,?3,'','[]',?4,'',0)",
+            rusqlite::params![id, kind, name, status],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES(?1,'n1','b1','引文',?2)",
+            rusqlite::params![id, confidence],
+        )
+        .unwrap();
+    }
+
+    fn seed_concept_relation(db: &Database, id: &str, from: &str, to: &str, confidence: f64) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO knowledge_relations(id,from_entity_id,to_entity_id,relation,summary,confidence,evidence_json,input_hash,updated_at)
+                 VALUES(?1,?2,?3,'related','关系说明',?4,'[]','',0)",
+                rusqlite::params![id, from, to, confidence],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn 概念图谱_空库返回空图() {
+        let (_dir, db) = search_test_db();
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert!(graph.entities.is_empty());
+        assert!(graph.relations.is_empty());
+        assert!(!graph.truncated);
+    }
+
+    #[test]
+    fn 概念图谱_按类型过滤() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "组织", "confirmed", 0.9);
+        seed_entity(&db, "topic:1", "topic", "效率", "confirmed", 0.9);
+        seed_entity(&db, "idea:1", "idea", "我的判断", "confirmed", 0.9);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { kinds: vec!["topic".into()], ..Default::default() }).unwrap();
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.entities[0].kind, "topic");
+    }
+
+    #[test]
+    fn 概念图谱_按书籍过滤() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:a", "concept", "甲", "confirmed", 0.9);
+        db.connect().unwrap().execute(
+            "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES('concept:a','n2','b2','引文',0.9)", []).unwrap();
+        seed_entity(&db, "concept:b", "concept", "乙", "confirmed", 0.9);
+        db.connect().unwrap().execute(
+            "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES('concept:b','n2','b2','引文',0.9)", []).unwrap();
+        seed_entity(&db, "concept:c", "concept", "丙", "confirmed", 0.9);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { book_id: Some("b2".into()), ..Default::default() }).unwrap();
+        assert_eq!(graph.entities.len(), 2, "限定书籍后只返回有该书证据的概念");
+        assert!(!graph.entities.iter().any(|item| item.canonical_name == "丙"));
+    }
+
+    #[test]
+    fn 概念图谱_默认不返回隐藏实体() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "可见", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "隐藏的", "hidden", 0.9);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.entities[0].canonical_name, "可见");
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { include_hidden: true, ..Default::default() }).unwrap();
+        assert_eq!(graph.entities.len(), 2);
+    }
+
+    #[test]
+    fn 概念图谱_拒绝未知类型() {
+        let (_dir, db) = search_test_db();
+        let error = list_concept_graph_impl(&db, &ConceptGraphQuery { kinds: vec!["paragraph".into()], ..Default::default() }).unwrap_err();
+        assert!(error.to_string().contains("不支持的实体类型"));
+    }
+
+    #[test]
+    fn 关系两端都在结果集里才返回() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "乙", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "丙", "confirmed", 0.9);
+        // 丙只和乙有关系，和甲没有关系
+        seed_concept_relation(&db, "r1", "concept:1", "concept:2", 0.9);
+        seed_concept_relation(&db, "r2", "concept:2", "concept:3", 0.9);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { center_id: Some("concept:1".into()), ..Default::default() }).unwrap();
+        let ids: Vec<String> = graph.entities.iter().map(|item| item.id.clone()).collect();
+        assert!(!ids.contains(&"concept:3".to_string()), "无连接的实体不应出现");
+        for relation in &graph.relations {
+            assert!(ids.contains(&relation.from_entity_id) && ids.contains(&relation.to_entity_id), "关系两端必须都在返回的节点里");
+        }
+    }
+
+    #[test]
+    fn 关系置信度低于阈值时被过滤() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "乙", "confirmed", 0.9);
+        seed_concept_relation(&db, "r1", "concept:1", "concept:2", 0.2);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { min_confidence: Some(0.5), ..Default::default() }).unwrap();
+        assert!(graph.relations.is_empty());
+    }
+
+    #[test]
+    fn 大图会标记为截断并只返回高置信度子图() {
+        let (_dir, db) = search_test_db();
+        let c = db.connect().unwrap();
+        {
+            let mut insert = c.prepare("INSERT INTO knowledge_entities(id,kind,canonical_name,description,aliases_json,status,source_hash,updated_at) VALUES(?1,'concept',?2,'','[]','confirmed','',0)").unwrap();
+            let mut evidence = c.prepare("INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES(?1,?2,'b1','引文',?3)").unwrap();
+            for index in 0..520 {
+                let id = format!("concept:{index}");
+                insert.execute(rusqlite::params![id, format!("概念{index}")]).unwrap();
+                // 置信度都低于截断阈值 0.45
+                evidence.execute(rusqlite::params![id, format!("n{index}"), 0.3]).unwrap();
+            }
+        }
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert!(graph.truncated, "超过 500 节点应标记截断");
+        assert_eq!(graph.total_entities, 520);
+        assert!(graph.entities.is_empty(), "低置信度实体应被高置信度门槛挡掉");
+    }
+
+    #[test]
+    fn 中心实体扩展只返回邻居() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "中心", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "邻居", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "无关", "confirmed", 0.9);
+        seed_concept_relation(&db, "r1", "concept:1", "concept:2", 0.9);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { center_id: Some("concept:1".into()), ..Default::default() }).unwrap();
+        let ids: Vec<String> = graph.entities.iter().map(|item| item.id.clone()).collect();
+        assert!(ids.contains(&"concept:1".to_string()));
+        assert!(ids.contains(&"concept:2".to_string()));
+        assert!(!ids.contains(&"concept:3".to_string()));
+        assert_eq!(graph.relations.len(), 1);
+    }
+
+    #[test]
+    fn 内容未变化的笔记会被跳过() {
+        let (_dir, db) = search_test_db();
+        let notes = vec![("n1".to_string(), "同一段内容".to_string()), ("n2".to_string(), "另一段内容".to_string())];
+        assert!(unchanged_notes(&db, &notes).unwrap().is_empty());
+
+        db.connect().unwrap().execute(
+            "INSERT INTO knowledge_note_state(note_id,book_id,content_hash,scanned_at) VALUES('n1','b1',?1,0)",
+            [content_hash("同一段内容")],
+        ).unwrap();
+
+        let skipped = unchanged_notes(&db, &notes).unwrap();
+        assert_eq!(skipped, vec!["n1".to_string()], "只有内容未变化的笔记才跳过");
+
+        // 内容变了就不再跳过
+        let changed = vec![("n1".to_string(), "改过的内容".to_string())];
+        assert!(unchanged_notes(&db, &changed).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 写入后能读回实体与证据() {
+        let (_dir, db) = search_test_db();
+        let notes = vec![("n1".to_string(), "b1".to_string(), "书一".to_string(), "地方债务".to_string())];
+        let raw = crate::ai::concepts::RawExtraction {
+            entities: vec![crate::ai::concepts::RawEntity {
+                kind: "concept".into(),
+                canonical_name: "地方债务".into(),
+                description: "定义".into(),
+                aliases: vec!["政府债务".into()],
+                confidence: Some(0.8),
+                evidence_note_ids: vec!["n1".into()],
+            }],
+            relations: vec![],
+        };
+        let validated = crate::ai::concepts::validate_extraction(&raw, &notes, &std::collections::HashSet::new());
+        let (created, _) = persist_extraction(&db, &validated, &[("n1".to_string(), "地方债务".to_string())]).unwrap();
+        assert_eq!(created, 1);
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.entities[0].canonical_name, "地方债务");
+        assert_eq!(graph.entities[0].status, "suggested", "新抽取的实体默认是待确认");
+        assert_eq!(graph.entities[0].aliases, vec!["政府债务".to_string()]);
+
+        // 再次写入同一实体不应重复建节点，只补证据
+        let (created_again, _) = persist_extraction(&db, &validated, &[]).unwrap();
+        assert_eq!(created_again, 0);
+        assert_eq!(list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap().entities.len(), 1);
+    }
+
+    #[test]
+    fn 伪造的_note_id_不会入库() {
+        let (_dir, db) = search_test_db();
+        let notes = vec![("n1".to_string(), "b1".to_string(), "书一".to_string(), "真实内容".to_string())];
+        let raw = crate::ai::concepts::RawExtraction {
+            entities: vec![crate::ai::concepts::RawEntity {
+                kind: "concept".into(),
+                canonical_name: "伪造概念".into(),
+                description: String::new(),
+                aliases: vec![],
+                confidence: Some(0.9),
+                evidence_note_ids: vec!["n999".into()],
+            }],
+            relations: vec![],
+        };
+        let validated = crate::ai::concepts::validate_extraction(&raw, &notes, &std::collections::HashSet::new());
+        persist_extraction(&db, &validated, &[]).unwrap();
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert!(graph.entities.is_empty(), "伪造证据的概念不得出现在图谱里");
+    }
+
+    #[test]
+    fn 重命名与别名可以往返数据库() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "旧名字", "suggested", 0.9);
+        let updated = correct_entity_impl(&db, &EntityCorrection {
+            id: "concept:1".into(),
+            canonical_name: Some("新名字".into()),
+            description: Some("说明".into()),
+            aliases: vec!["别名一".into(), "别名一".into()],
+            status: Some("confirmed".into()),
+        })
+        .unwrap();
+        assert_eq!(updated.canonical_name, "新名字");
+        assert_eq!(updated.description, "说明");
+        assert_eq!(updated.aliases, vec!["别名一".to_string()], "重复别名要去重");
+        assert_eq!(updated.status, "confirmed");
+
+        // 重启后仍在
+        let reloaded = concept_entity_with_evidence(&db, "concept:1").unwrap();
+        assert_eq!(reloaded.canonical_name, "新名字");
+        assert_eq!(reloaded.status, "confirmed");
+        assert_eq!(reloaded.aliases, vec!["别名一".to_string()]);
+    }
+
+    #[test]
+    fn 拒绝非法状态与空名称() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "原名", "suggested", 0.9);
+        assert!(correct_entity_impl(&db, &EntityCorrection { id: "concept:1".into(), status: Some("deleted".into()), ..Default::default() }).is_err());
+        assert!(correct_entity_impl(&db, &EntityCorrection { id: "concept:1".into(), canonical_name: Some("   ".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn 合并会搬运证据并删掉自环() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "乙", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "丙", "confirmed", 0.9);
+        seed_concept_relation(&db, "r1", "concept:1", "concept:2", 0.9);
+        seed_concept_relation(&db, "r2", "concept:2", "concept:3", 0.9);
+        db.connect().unwrap().execute(
+            "INSERT INTO knowledge_entity_evidence(entity_id,note_id,book_id,quote,confidence) VALUES('concept:1','n2','b1','甲的证据',0.4)", []).unwrap();
+
+        merge_entities_impl(&db, "concept:1", "concept:2").unwrap();
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        assert_eq!(graph.entities.len(), 2, "合并后只剩两个实体");
+        assert!(!graph.entities.iter().any(|item| item.id == "concept:1"));
+
+        let target = concept_entity_with_evidence(&db, "concept:2").unwrap();
+        assert_eq!(target.evidence.len(), 2, "来源实体的证据要搬过来");
+        assert!(target.aliases.contains(&"甲".to_string()), "来源实体的名称要成为别名");
+        assert!(!graph.relations.iter().any(|item| item.from_entity_id == item.to_entity_id), "合并后不允许自环");
+    }
+
+    #[test]
+    fn 合并时重复关系只保留一条() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "乙", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "丙", "confirmed", 0.9);
+        // concept:1 ↔ concept:3 有两条方向不同的重复边
+        seed_concept_relation(&db, "r1", "concept:1", "concept:3", 0.9);
+        seed_concept_relation(&db, "r2", "concept:3", "concept:1", 0.8);
+
+        merge_entities_impl(&db, "concept:1", "concept:2").unwrap();
+
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery::default()).unwrap();
+        let involving_target = graph
+            .relations
+            .iter()
+            .filter(|item| item.from_entity_id == "concept:2" || item.to_entity_id == "concept:2")
+            .count();
+        assert_eq!(involving_target, 1, "重复边必须去重");
+    }
+
+    #[test]
+    fn 合并时保留更高的证据置信度() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        seed_entity(&db, "concept:2", "concept", "乙", "confirmed", 0.9);
+        // seed_entity 已经给两者都建了同一条 n1 证据，这里只调整甲的置信度更低
+        db.connect().unwrap().execute(
+            "UPDATE knowledge_entity_evidence SET confidence=0.2,quote='低置信' WHERE entity_id='concept:1'", []).unwrap();
+
+        merge_entities_impl(&db, "concept:1", "concept:2").unwrap();
+
+        let target = concept_entity_with_evidence(&db, "concept:2").unwrap();
+        assert_eq!(target.evidence.len(), 1, "同一笔记不应重复");
+        assert_eq!(target.evidence[0].confidence, 0.9, "同一笔记冲突时保留更高置信度");
+    }
+
+    #[test]
+    fn 拒绝合并到自身或不存在的实体() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "甲", "confirmed", 0.9);
+        assert!(merge_entities_impl(&db, "concept:1", "concept:1").is_err());
+        assert!(merge_entities_impl(&db, "concept:1", "concept:missing").is_err());
+        assert!(merge_entities_impl(&db, "concept:missing", "concept:1").is_err());
+    }
+
+    #[test]
+    fn 清理建议项只删_suggested() {
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "待确认", "suggested", 0.9);
+        seed_entity(&db, "concept:2", "concept", "已确认", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "已隐藏", "hidden", 0.9);
+
+        let removed = clear_suggested_concepts_impl(&db).unwrap();
+        assert_eq!(removed, 1);
+        let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { include_hidden: true, ..Default::default() }).unwrap();
+        assert_eq!(graph.entities.len(), 2);
+        assert!(!graph.entities.iter().any(|item| item.canonical_name == "待确认"));
+    }
+
+    #[test]
+    fn 概念四张表迁移可重复执行() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        for _ in 0..3 {
+            Database::open(&path).unwrap();
+        }
+        let c = Database::open(&path).unwrap().connect().unwrap();
+        for table in ["knowledge_entities", "knowledge_entity_evidence", "knowledge_relations", "knowledge_note_state"] {
+            let count: i64 = c
+                .query_row("SELECT count(*) FROM sqlite_master WHERE name=?1", [table], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1, "{table} 应当存在且只有一份");
+        }
+    }
+
+    #[test]
+    fn 解析_ai_返回的_json_容忍代码块与散文() {
+        let clean: crate::ai::concepts::RawExtraction = parse_extraction(r#"{"entities":[],"relations":[]}"#).unwrap();
+        assert!(clean.entities.is_empty());
+
+        let fenced = parse_extraction("```json\n{\"entities\":[{\"kind\":\"concept\",\"canonical_name\":\"甲\"}]}\n```").unwrap();
+        assert_eq!(fenced.entities.len(), 1);
+
+        let wrapped = parse_extraction("好的，结果如下：{\"entities\":[{\"kind\":\"concept\",\"canonical_name\":\"甲\"}]} 以上。").unwrap();
+        assert_eq!(wrapped.entities[0].canonical_name, "甲");
+
+        // 没有 JSON 时明确报错
+        assert!(parse_extraction("完全没有 JSON").is_err());
+        assert!(parse_extraction("").is_err());
+    }
+
+    #[test]
+    fn 按书籍分批取笔记且过滤已删除内容() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "书一", "作者", "分类");
+        seed_book(&db, "b2", "书二", "作者", "分类");
+        seed_highlight(&db, "h1", "b1", "第一章", "划线一");
+        seed_highlight(&db, "h2", "b1", "第一章", "划线二");
+        seed_thought(&db, "t1", "b1", "第二章", "想法一");
+        seed_highlight(&db, "h3", "b2", "第一章", "另一本书");
+        db.connect().unwrap().execute("UPDATE highlights SET is_deleted=1 WHERE bookmark_id='h2'", []).unwrap();
+
+        let groups = notes_grouped_by_book(&db, None).unwrap();
+        assert_eq!(groups.len(), 2, "两本书各一组");
+        let first = groups.iter().find(|group| group.book_id == "b1").unwrap();
+        assert_eq!(first.notes.len(), 2, "已删除的划线不应出现");
+
+        let only_b2 = notes_grouped_by_book(&db, Some("b2")).unwrap();
+        assert_eq!(only_b2.len(), 1);
+        assert_eq!(only_b2[0].book_id, "b2");
+    }
+
+    #[test]
+    fn 已知实体名包含别名() {
+        let (_dir, db) = search_test_db();
+        db.connect().unwrap().execute(
+            "INSERT INTO knowledge_entities(id,kind,canonical_name,description,aliases_json,status,source_hash,updated_at)
+             VALUES('concept:1','concept','组织管理','定义','[\"组织\"]','confirmed','',0)",
+            [],
+        ).unwrap();
+        let names = known_entity_names(&db).unwrap();
+        assert!(names.contains("组织管理"));
+        assert!(names.contains("组织"), "别名也要算已知名字");
     }
 }

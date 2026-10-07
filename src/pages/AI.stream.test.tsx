@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AI } from "./AI";
 import { api } from "../api/tauri";
+import { useAppStore } from "../stores/app";
 import type { AiAnswer, AiStreamEvent } from "../types/domain";
 
 // 测试环境没有 Tauri 运行时，必须让 adapter 认为自己跑在 Tauri 里才会走流式分支。
@@ -111,6 +112,40 @@ describe("AI 流式回答", () => {
 
     emit({ requestId, type: "delta", content: "不该再出现" });
     expect(screen.queryByText("已生成的部分不该再出现")).not.toBeInTheDocument();
+  });
+
+  it("引用导入资料时跳到资料页并展示页码定位", async () => {
+    const { user } = await ask("资料引用");
+    const requestId = lastRequestId();
+    emit({ requestId, type: "completed", answer: {
+      ...answer,
+      content: "根据导入资料[1] 的说法。",
+      citations: [],
+      sourceCitations: [{ index: 1, sourceId: "s1", sourceType: "pdf", title: "导入的书", locator: { page: 12 }, quote: "原文引文片段" }],
+    } });
+
+    expect(await screen.findByText("引用的导入资料")).toBeInTheDocument();
+    expect(screen.getByText("第 12 页")).toBeInTheDocument();
+
+    await user.click(screen.getByText("导入的书"));
+    await waitFor(() => {
+      const state = useAppStore.getState();
+      expect(state.sourceDetailId).toBe("s1");
+      expect(state.page).toBe("import");
+    });
+  });
+
+  it("重排降级提示展示为非阻断消息，正文照常显示", async () => {
+    await ask("降级提示");
+    const requestId = lastRequestId();
+    emit({ requestId, type: "delta", content: "这是正文" });
+    emit({ requestId, type: "completed", answer: { ...answer, content: "这是正文", rerankNote: "重排服务超时，本次沿用本地排序" } });
+
+    expect(await screen.findByText("重排服务超时，本次沿用本地排序")).toBeInTheDocument();
+    expect(screen.getByText("这是正文")).toBeInTheDocument();
+    // 提示不能变成错误，回答仍然是正常入库的一条 turn
+    await waitFor(() => expect(document.querySelectorAll(".ai-history__item")).toHaveLength(1));
+    expect(screen.queryByText(/搜索失败|生成失败/)).not.toBeInTheDocument();
   });
 
   it("完成后只写入一次历史", async () => {
