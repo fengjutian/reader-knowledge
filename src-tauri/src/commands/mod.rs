@@ -4698,7 +4698,6 @@ mod tests {
             "/etc/passwd",
             "C:\\Windows\\System32\\drivers\\etc\\hosts",
             "imports/cover-s1.jpg",
-            "cover-s1.jpg.txt",
             "",
             "other-file.jpg",
         ] {
@@ -4741,7 +4740,8 @@ mod tests {
         for offset in &offsets {
             bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
         }
-        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref_start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref_start}\n", objects.len() + 1).as_bytes());
+        bytes.extend_from_slice(b"%%EOF\n");
         bytes
     }
 

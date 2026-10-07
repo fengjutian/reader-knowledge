@@ -918,41 +918,100 @@ mod tests {
 
     // ---------- 真实样本 ----------
 
-    /// 拼一个多页 PDF：每页一条内容流，`info` 里带 /Title。
-    fn build_pdf(version: &str, pages: &[&str], title: Option<&str>) -> Vec<u8> {
-        let mut bytes = format!("%PDF-{version}\n").into_bytes();
-        let mut offsets: Vec<usize> = Vec::new();
-        // 1: Catalog, 2: Pages, 3: Font, 4: Info
-        let mut objects: Vec<(usize, String)> = vec![
-            (1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()),
-            (2, format!("<< /Type /Pages /Count {} /Kids [{}] >>", pages.len(), (0..pages.len()).map(|i| format!("{} 0 R", 5 + i * 2)).collect::<Vec<_>>().join(" "))),
-            (3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()),
-        ];
-        let info = match title {
-            Some(value) => format!("<< /Title ({value}) /Producer (test) >>"),
-            None => "<< /Producer (test) >>".to_string(),
-        };
-        objects.push((4, info));
-        for (index, content) in pages.iter().enumerate() {
-            let content_id = 6 + index * 2;
-            objects.push((5 + index * 2, format!("<< /Type /Page /Parent 2 0 R /Contents {content_id} 0 R /MediaBox [0 0 612 792] >>")));
-            objects.push((content_id, format!("STREAM:<< /Length {} >>\n{content}", content.len())));
+    /// 用 lopdf 自己写出 PDF 样本。
+    ///
+    /// 手写 xref 偏移量很容易错一位，而且那样造出来的文件根本不像真实 PDF。
+    /// 直接用成熟的 writer，才算真的在测「导入器面对正常 PDF 的表现」。
+    fn build_pdf(version: &str, pages: &[&str], title: Option<&str>, modern: bool) -> Vec<u8> {
+        use lopdf::{dictionary, Document, Object, Stream};
+
+        let mut doc = Document::with_version(version);
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        let pages_id = doc.new_object_id();
+        let mut kids: Vec<Object> = Vec::new();
+        for content in pages {
+            let stream = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+            let page = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => stream,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+            });
+            kids.push(page.into());
         }
-        objects.sort_by_key(|(id, _)| *id);
-        for (id, body) in &objects {
-            offsets.push(bytes.len());
-            if let Some(content) = body.strip_prefix("STREAM:") {
-                bytes.extend_from_slice(format!("{id} 0 obj\n{content}\nendstream\nendobj\n").as_bytes());
-            } else {
-                bytes.extend_from_slice(format!("{id} 0 obj\n{body}\nendobj\n").as_bytes());
-            }
+        let count = kids.len() as i64;
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Count" => count, "Kids" => kids }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        if let Some(value) = title {
+            let info = doc.add_object(dictionary! { "Title" => Object::string_literal(value), "Producer" => Object::string_literal("test") });
+            doc.trailer.set("Info", info);
         }
-        let xref_start = bytes.len();
-        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-        for offset in &offsets {
-            bytes.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        let mut bytes = Vec::new();
+        if modern {
+            // 对象流 + 交叉引用流：PDF 1.5+ 的真实形态
+            doc.save_modern(&mut bytes).expect("写出样本 PDF 失败");
+        } else {
+            doc.save_to(&mut bytes).expect("写出样本 PDF 失败");
         }
-        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 4 0 R >>\nstartxref\n{xref_start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        bytes
+    }
+
+    /// 带 ToUnicode 映射的中文样本。
+    ///
+    /// 真实中文 PDF 的字符码是 CID，只有 ToUnicode CMap 能翻回汉字 ——
+    /// 这正是手写解析器会出乱码、而成熟解析器能读对的地方。
+    fn build_cjk_pdf(text: &str) -> Vec<u8> {
+        use lopdf::{dictionary, Document, Object, Stream};
+
+        let mut doc = Document::with_version("1.7");
+        let chars: Vec<char> = text.chars().collect();
+        let mut bfchar = String::new();
+        for (index, character) in chars.iter().enumerate() {
+            let code = index as u32 + 1;
+            let target: Vec<u16> = (*character).encode_utf16().collect();
+            bfchar.push_str(&format!("<{code:04X}> <{}>\n", target.iter().map(|unit| format!("{unit:04X}")).collect::<String>()));
+        }
+        let cmap = format!(
+            "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+             /CMapName /Custom def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n\
+             {}beginbfchar\n{}endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n",
+            chars.len(),
+            bfchar
+        );
+        let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type0",
+            "BaseFont" => "NotoSerifCJK",
+            "Encoding" => "Identity-H",
+            "DescendantFonts" => vec![dictionary! {
+                "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "NotoSerifCJK",
+                "CIDSystemInfo" => dictionary! { "Registry" => "Adobe", "Ordering" => "Identity", "Supplement" => 0 },
+                "DW" => 1000,
+            }.into()],
+            "ToUnicode" => to_unicode,
+        });
+        let pages_id = doc.new_object_id();
+        // 每个汉字一个两字节 CID，十六进制串交给 Tj
+        let codes: String = (0..chars.len()).map(|index| format!("{:04X}", index + 1)).collect();
+        let content = format!("BT /F1 12 Tf 72 720 Td <{codes}> Tj ET");
+        let stream = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => stream,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        });
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Count" => 1, "Kids" => vec![page.into()] }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let info = doc.add_object(dictionary! { "Title" => Object::string_literal("中文样本"), "Producer" => Object::string_literal("test") });
+        doc.trailer.set("Info", info);
+        let mut bytes = Vec::new();
+        doc.save_modern(&mut bytes).expect("写出中文样本 PDF 失败");
         bytes
     }
 
@@ -962,11 +1021,9 @@ mod tests {
 
     #[test]
     fn 简单英文_pdf_按页导入且页码从一开始() {
-        let pdf = build_pdf(
-            "1.4",
-            &[&simple_page("Page one body"), &simple_page("Page two body")],
-            Some("Sample Book"),
-        );
+        let first = simple_page("Page one body");
+        let second = simple_page("Page two body");
+        let pdf = build_pdf("1.4", &[&first, &second], Some("Sample Book"), false);
         let parsed = parse(pdf).unwrap();
         assert_eq!(parsed.title, "Sample Book");
         assert_eq!(parsed.page_count, 2);
@@ -980,7 +1037,7 @@ mod tests {
     fn 多页_每页都带正确页码_locator() {
         let pages: Vec<String> = (1..=5).map(|index| simple_page(&format!("Body of page {index}"))).collect();
         let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
-        let parsed = parse(build_pdf("1.4", &refs, Some("Multi"))).unwrap();
+        let parsed = parse(build_pdf("1.4", &refs, Some("Multi"), false)).unwrap();
         let mut seen: Vec<u32> = parsed.chunks.iter().filter_map(|chunk| chunk.locator.page).collect();
         seen.sort_unstable();
         seen.dedup();
@@ -990,22 +1047,20 @@ mod tests {
     #[test]
     fn 引号与数组文本算子都能抽出来() {
         let quoted = "BT /F1 12 Tf (Quoted line) ' (Second line) \" ET";
-        let pdf = build_pdf("1.4", &[quoted], Some("Quoted"));
+        let pdf = build_pdf("1.4", &[quoted], Some("Quoted"), false);
         let parsed = parse(pdf).unwrap();
         assert!(parsed.chunks[0].content.contains("Quoted line"), "实际：{}", parsed.chunks[0].content);
 
         let kerned = "BT [(Kerned) -500 (Text)] TJ ET";
-        let pdf = build_pdf("1.4", &[kerned], Some("Kerned"));
+        let pdf = build_pdf("1.4", &[kerned], Some("Kerned"), false);
         assert!(parse(pdf).unwrap().chunks[0].content.contains("Kerned"));
     }
 
     #[test]
     fn 部分页没有文字时给出警告且导入其余页() {
-        let pdf = build_pdf(
-            "1.4",
-            &[&simple_page("Text page one"), "q Q 100 0 0 100 20 20 cm /Im0 Do Q", &simple_page("Text page three")],
-            Some("Partial"),
-        );
+        let first = simple_page("Text page one");
+        let third = simple_page("Text page three");
+        let pdf = build_pdf("1.4", &[&first, "q Q 100 0 0 100 20 20 cm /Im0 Do Q", &third], Some("Partial"), false);
         let parsed = parse(pdf).unwrap();
         assert_eq!(parsed.page_count, 3);
         assert!(parsed.warnings.iter().any(|w| w.contains("没有可用文字层")), "实际：{:?}", parsed.warnings);
@@ -1014,39 +1069,43 @@ mod tests {
 
     #[test]
     fn 全扫描版_明确提示不支持_ocr() {
-        let pdf = build_pdf("1.4", &["q Q 100 0 0 100 20 20 cm /Im0 Do Q", "q W 0 0 h Q"], Some("Scanned"));
+        let pdf = build_pdf("1.4", &["q Q 100 0 0 100 20 20 cm /Im0 Do Q", "q W 0 0 h Q"], Some("Scanned"), false);
         let error = parse(pdf).unwrap_err().to_string();
         assert!(error.contains("暂不支持 OCR"), "实际：{error}");
     }
 
     #[test]
     fn 加密_pdf_给出加密提示而不是当成扫描版() {
-        let mut pdf = build_pdf("1.4", &[&simple_page("Secret body text here")], Some("Locked"));
-        // trailer 里出现 /Encrypt 就表示这份文档被加密保护
-        let text = String::from_utf8_lossy(&pdf).replace("/Info 4 0 R", "/Info 4 0 R /Encrypt 99 0 R");
-        pdf = text.into_bytes();
-        let error = parse(pdf).unwrap_err().to_string();
+        let page = simple_page("Secret body text here");
+        let pdf = build_pdf("1.4", &[&page], Some("Locked"), false);
+        // 往 trailer 里塞一个 /Encrypt：解析器据此判定这是加密文档。
+        // 用真实的加密字典最好，但样本只需要走到「识别为加密」这一步。
+        let text = String::from_utf8_lossy(&pdf).replacen("%%EOF", "/Encrypt 9 0 R\n%%EOF", 1);
+        let error = parse(text.into_bytes()).unwrap_err().to_string();
         assert!(error.contains("加密"), "实际：{error}");
         assert!(!error.contains("扫描版"), "加密 PDF 不能被当成扫描版：{error}");
     }
 
     #[test]
     fn 损坏的_pdf_被拒绝() {
-        let mut pdf = build_pdf("1.4", &[&simple_page("Body")], Some("Broken"));
+        let page = simple_page("Body");
+        let mut pdf = build_pdf("1.4", &[&page], Some("Broken"), false);
         pdf.truncate(pdf.len() / 2);
         assert!(parse(pdf).is_err());
     }
 
     #[test]
     fn 没有元数据标题时用正文首行() {
-        let pdf = build_pdf("1.4", &[&simple_page("Readable Title Line\nrest of the body")], None);
+        let page = simple_page("Readable Title Line\nrest of the body");
+        let pdf = build_pdf("1.4", &[&page], None, false);
         let parsed = parse(pdf).unwrap();
         assert_eq!(parsed.title, "Readable Title Line");
     }
 
     #[test]
     fn 带元数据标题时优先用元数据() {
-        let pdf = build_pdf("1.4", &[&simple_page("First line of body")], Some("Metadata Title"));
+        let page = simple_page("First line of body");
+        let pdf = build_pdf("1.4", &[&page], Some("Metadata Title"), false);
         assert_eq!(parse(pdf).unwrap().title, "Metadata Title");
     }
 
@@ -1061,5 +1120,40 @@ mod tests {
         let error = check_size(MAX_PDF_BYTES + 1).unwrap_err().to_string();
         assert!(error.contains("体积超过"), "实际：{error}");
         assert!(check_size(MAX_PDF_BYTES).is_ok());
+    }
+
+    #[test]
+    fn pdf_1_7_对象流与交叉引用流能解析() {
+        // 对象流 + xref 流是 PDF 1.5+ 的默认形态：
+        // 很多真实 PDF（包括不少中文扫描/排版工具的导出）都是这种结构。
+        let first = simple_page("Object stream page one");
+        let second = simple_page("Object stream page two");
+        let pdf = build_pdf("1.7", &[&first, &second], Some("Modern Book"), true);
+        let parsed = parse(pdf).unwrap();
+        assert_eq!(parsed.title, "Modern Book");
+        assert_eq!(parsed.page_count, 2);
+        assert!(parsed.chunks[0].content.contains("Object stream page one"));
+        assert!(parsed.chunks.iter().any(|chunk| chunk.locator.page == Some(2)));
+    }
+
+    #[test]
+    fn 对象流_pdf_不走兼容解析路径() {
+        let page = simple_page("Modern only body");
+        let pdf = build_pdf("1.7", &[&page], Some("Modern"), true);
+        let parsed = parse(pdf).unwrap();
+        assert!(
+            !parsed.warnings.iter().any(|w| w.contains("兼容解析路径")),
+            "主解析器应当直接处理对象流，实际 warnings：{:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn 中文_tounicode_字体能正确提取() {
+        // CID 码 + ToUnicode CMap：手写解析器会吐乱码，这正是换成熟库的意义
+        let parsed = parse(build_cjk_pdf("深入理解计算机系统")).unwrap();
+        let body: String = parsed.chunks.iter().map(|chunk| chunk.content.as_str()).collect();
+        assert!(body.contains("深入理解计算机系统"), "实际：{body}");
+        assert!(!body.contains('\u{FFFD}'), "不能出现替换字符");
     }
 }

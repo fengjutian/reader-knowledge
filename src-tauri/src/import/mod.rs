@@ -311,16 +311,13 @@ mod tests {
 
     #[test]
     fn 假_pdf_扩展名会被签名校验拒绝() {
-        for fake in [
-            &b"PK\x03\x04rest-of-a-zip"[..],
-            b"<!DOCTYPE html><html></html>".as_slice(),
-            b"just plain text".as_slice(),
-            b"",
-        ] {
+        for fake in [&b"PK\x03\x04rest-of-a-zip"[..], b"<!DOCTYPE html><html></html>".as_slice(), b"just plain text".as_slice()] {
             let error = check_file_signature(SourceKind::Pdf, fake).unwrap_err().to_string();
             assert!(error.contains("不是有效的 PDF"), "实际：{error}");
         }
         assert!(check_file_signature(SourceKind::Pdf, b"%PDF-1.7\nrest").is_ok());
+        // 空文件单独提示，和「不是 PDF」区分开
+        assert!(check_file_signature(SourceKind::Pdf, b"").unwrap_err().to_string().contains("空的"));
     }
 
     #[test]
