@@ -977,7 +977,7 @@ mod tests {
         let cmap = format!(
             "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
              /CMapName /Custom def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n\
-             {}beginbfchar\n{}endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n",
+             {} beginbfchar\n{} endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n",
             chars.len(),
             bfchar
         );
@@ -1020,7 +1020,7 @@ mod tests {
 
     /// 同一页里的两行文字，用 `Td` 真正换行。
     fn two_line_page(first: &str, second: &str) -> String {
-        format!("BT /F1 12 Tf 72 720 Td ({first}) Tj 0 -14 Td ({second}) Tj ET")
+        format!("BT /F1 12 Tf 14 TL 72 720 Td ({first}) Tj T* ({second}) Tj ET")
     }
 
     /// 一份被加密字典标记过的 PDF。
@@ -1055,27 +1055,6 @@ mod tests {
     }
 
     #[test]
-    fn __debug_dump() {
-        let quoted = "BT /F1 12 Tf 72 720 Td (Quoted line) ' 0 -14 Td 1 2 (Second line) \" ET";
-        let pdf = build_pdf("1.4", &[quoted], Some("Quoted"), false);
-        let parsed = parse(pdf).unwrap();
-        println!("QUOTE_DUMP>>>{:?}<<<", parsed.chunks[0].content);
-
-        let kerned = "BT /F1 12 Tf 72 720 Td [(Kerned) -500 (Text)] TJ ET";
-        let parsed = parse(build_pdf("1.4", &[kerned], Some("K"), false)).unwrap();
-        println!("KERN_DUMP>>>{:?}<<<", parsed.chunks[0].content);
-
-        let page = two_line_page("Readable Title Line", "rest of the body");
-        let parsed = parse(build_pdf("1.4", &[&page], None, false)).unwrap();
-        println!("TITLE_DUMP>>>{:?}<<<", parsed.chunks[0].content);
-
-        let parsed = parse(build_cjk_pdf("深入理解计算机系统")).unwrap();
-        let body: String = parsed.chunks.iter().map(|c| c.content.as_str()).collect();
-        println!("CJK_DUMP>>>{body}<<<");
-        panic!("debug");
-    }
-
-    #[test]
     fn 简单英文_pdf_按页导入且页码从一开始() {
         let first = simple_page("Page one body");
         let second = simple_page("Page two body");
@@ -1102,15 +1081,24 @@ mod tests {
 
     #[test]
     fn 引号与数组文本算子都能抽出来() {
-        // `'` 与 `"` 都要配一个显式的换行/字距操作符，才是合法的写法
-        let quoted = "BT /F1 12 Tf 72 720 Td (Quoted line) ' 0 -14 Td 1 2 (Second line) \" ET";
+        // `'` 是「换行 + 显示字符串」，单独给一页
+        let quoted = "BT /F1 12 Tf 72 720 Td (Quoted line) ' ET";
         let pdf = build_pdf("1.4", &[quoted], Some("Quoted"), false);
         let parsed = parse(pdf).unwrap();
         assert!(parsed.chunks[0].content.contains("Quoted line"), "实际：{}", parsed.chunks[0].content);
 
-        let kerned = "BT [(Kerned) -500 (Text)] TJ ET";
+        // `"` 的完整形式是 `aw ac string "`
+        let dquoted = "BT /F1 12 Tf 72 720 Td 1 2 (Word spaced) \" ET";
+        let pdf = build_pdf("1.4", &[dquoted], Some("DQuoted"), false);
+        let parsed = parse(pdf).unwrap();
+        assert!(parsed.chunks[0].content.contains("Word spaced"), "实际：{}", parsed.chunks[0].content);
+
+        // TJ 数组里的负数是字距调整，不是要显示的字符
+        let kerned = "BT /F1 12 Tf 72 720 Td [(Kerned) -500 (Text)] TJ ET";
         let pdf = build_pdf("1.4", &[kerned], Some("Kerned"), false);
-        assert!(parse(pdf).unwrap().chunks[0].content.contains("Kerned"));
+        let parsed = parse(pdf).unwrap();
+        assert!(parsed.chunks[0].content.contains("Kerned"), "实际：{}", parsed.chunks[0].content);
+        assert!(!parsed.chunks[0].content.contains("-500"), "字距数值不该混进正文");
     }
 
     #[test]

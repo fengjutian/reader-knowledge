@@ -4719,29 +4719,29 @@ mod tests {
         path
     }
 
-    /// 最小可解析 PDF：有对象表、页面、内容流、标题。
+    /// 最小可解析 PDF：单页、一行正文、带标题元数据。
+    ///
+    /// 用 lopdf 自己写出来，而不是手拼字节 —— 手写的 xref 偏移错一位就
+    /// 会得到一个「结构损坏」的文件，测的就不是导入器而是我的字节拼接了。
     fn sample_pdf_bytes() -> Vec<u8> {
-        let content = "BT /F1 12 Tf 72 720 Td (Hello imported body) Tj ET";
-        let mut bytes = b"%PDF-1.4\n".to_vec();
-        let mut offsets: Vec<usize> = Vec::new();
-        let objects: Vec<String> = vec![
-            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
-            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /MediaBox [0 0 612 792] >>".to_string(),
-            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-            "<< /Title (Sample Doc) /Producer (test) >>".to_string(),
-        ];
-        for (index, body) in objects.iter().enumerate() {
-            offsets.push(bytes.len());
-            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
-        }
-        let xref_start = bytes.len();
-        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-        for offset in &offsets {
-            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref_start}\n", objects.len() + 1).as_bytes());
-        bytes.extend_from_slice(b"%%EOF\n");
+        use lopdf::{dictionary, Document, Object, Stream};
+
+        let mut doc = Document::with_version("1.4");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages_id = doc.new_object_id();
+        let stream = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 12 Tf 72 720 Td (Hello imported body) Tj ET".to_vec()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => stream,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        });
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Count" => 1, "Kids" => vec![page.into()] }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let info = doc.add_object(dictionary! { "Title" => Object::string_literal("Sample Doc"), "Producer" => Object::string_literal("test") });
+        doc.trailer.set("Info", info);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("写出样本 PDF 失败");
         bytes
     }
 
