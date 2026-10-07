@@ -1,6 +1,5 @@
 import { AlertTriangle, FileText, FolderOpen, Globe2, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 // 组件本身有个 `open` prop（控制对话框开关），这里必须取别名，
 // 否则函数体里的 `open(...)` 会解析到那个布尔值上。
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -118,9 +117,7 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
 
   if (!open) return null;
 
-  return createPortal(<>
-      <div className="dialog-overlay" onMouseDown={() => onOpenChange(false)} />
-      <div className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title" aria-describedby="import-dialog-description">
+  return <div className="import-dialog import-dialog--inline" role="dialog" aria-modal="false" aria-labelledby="import-dialog-title" aria-describedby="import-dialog-description">
         <div className="import-dialog__head">
           <div>
             <h2 id="import-dialog-title">导入资料</h2>
@@ -185,8 +182,7 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
             </div>
           </div>
         )}
-      </div>
-  </>, document.body);
+  </div>;
 }
 
 /** 高亮持续的毫秒数：看得清，但不至于让人以为界面卡住。 */

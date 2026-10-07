@@ -17,7 +17,8 @@ export function LibrarySources() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
+  // 导入页的核心操作直接展开，避免桌面 WebView 丢失首次指针事件时入口不可用。
+  const [importOpen, setImportOpen] = useState(true);
   const [detail, setDetail] = useState<SourceDetail | null>(null);
   /** 等待二次确认的删除目标；为空表示不在确认态。 */
   const [confirmPurge, setConfirmPurge] = useState<LibrarySource | null>(null);
@@ -87,10 +88,12 @@ export function LibrarySources() {
     <PageHeader title="导入资料" subtitle="网页、PDF 与 EPUB 的本地副本，可被搜索和 AI 引用。" />
     <div className="library-sources">
       <div className="library-sources__toolbar">
-        <Button variant="primary" onClick={() => setImportOpen(true)}><Import size={15} />导入资料</Button>
+        <Button variant="primary" onPointerDown={() => setImportOpen(true)} onClick={() => setImportOpen(true)}><Import size={15} />导入资料</Button>
         <Button variant="secondary" onClick={() => void load()} disabled={loading}>{loading ? <Loader2 size={14} className="spin" /> : <RotateCcw size={14} />}刷新</Button>
         <span>{sources.length} 份资料</span>
       </div>
+
+      <ImportSourceDialog open={importOpen} onOpenChange={setImportOpen} />
 
       {error && <div className="graph-refresh-error">操作失败：{error}</div>}
 
@@ -132,8 +135,6 @@ export function LibrarySources() {
         <div className="library-source__reader" onClick={closeDetail} />
         <SourceDetailPanel source={detail} locator={sourceDetailLocator} onClose={closeDetail} />
       </>}
-
-      <ImportSourceDialog open={importOpen} onOpenChange={setImportOpen} />
     </div>
   </>;
 }

@@ -36,3 +36,4 @@
 .source-detail__docs article{border-radius:9px;transition:background-color .25s ease,box-shadow .25s ease}
 .source-detail__docs article.source-detail__document--target{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
 @media (prefers-reduced-motion:reduce){.source-detail__docs article{transition:none}}
+.import-dialog--inline{position:relative;z-index:2;top:auto;left:auto;width:100%;max-height:none;margin:0 0 18px;transform:none;box-shadow:0 12px 34px #0002}
