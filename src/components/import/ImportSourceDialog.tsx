@@ -1,6 +1,6 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { AlertTriangle, FileText, FolderOpen, Globe2, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 // 组件本身有个 `open` prop（控制对话框开关），这里必须取别名，
 // 否则函数体里的 `open(...)` 会解析到那个布尔值上。
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -107,16 +107,26 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
 
   useEffect(() => { if (!open) reset(); }, [open, reset]);
 
-  return <Dialog.Root open={open} onOpenChange={value => { if (!value) reset(); onOpenChange(value); }}>
-    <Dialog.Portal>
-      <Dialog.Overlay className="dialog-overlay" />
-      <Dialog.Content className="import-dialog">
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onOpenChange(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open, onOpenChange]);
+
+  if (!open) return null;
+
+  return createPortal(<>
+      <div className="dialog-overlay" onMouseDown={() => onOpenChange(false)} />
+      <div className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title" aria-describedby="import-dialog-description">
         <div className="import-dialog__head">
           <div>
-            <Dialog.Title>导入资料</Dialog.Title>
-            <Dialog.Description>把网页、PDF 或 EPUB 导入本地，之后可以搜索并用于 AI 回答。</Dialog.Description>
+            <h2 id="import-dialog-title">导入资料</h2>
+            <p id="import-dialog-description">把网页、PDF 或 EPUB 导入本地，之后可以搜索并用于 AI 回答。</p>
           </div>
-          <Dialog.Close className="icon-button" aria-label="关闭"><X size={18} /></Dialog.Close>
+          <button type="button" className="icon-button" aria-label="关闭" onClick={() => onOpenChange(false)}><X size={18} /></button>
         </div>
 
         <div className="import-dialog__tabs" role="tablist" aria-label="导入方式">
@@ -175,9 +185,8 @@ export function ImportSourceDialog({ open, onOpenChange }: { open: boolean; onOp
             </div>
           </div>
         )}
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>;
+      </div>
+  </>, document.body);
 }
 
 /** 高亮持续的毫秒数：看得清，但不至于让人以为界面卡住。 */

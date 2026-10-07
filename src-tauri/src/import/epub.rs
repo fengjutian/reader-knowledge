@@ -671,12 +671,31 @@ mod tests {
     }
 
     #[test]
-    fn 高压缩比条目超过上限被拒绝() {
+    fn 高压缩比条目超过上限被跳过而不是整本失败() {
+        // 正常章节 + 一个解压后超限的章节：前者要能导入，后者只给 warning
         let bomb = vec![b'A'; (MAX_ENTRY_BYTES + 1024) as usize];
-        let bytes = EpubBuilder { opf: Some(opf_xml("2.0", false)), ..EpubBuilder::new() }
-            .extra(vec![("OEBPS/text/ch1.xhtml".to_string(), bomb)])
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>炸弹书</dc:title></metadata>
+  <manifest>
+    <item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c3" href="text/ch3.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="c3"/></spine>
+</package>"#;
+        let bytes = EpubBuilder { opf: Some(opf.to_string()), ..EpubBuilder::new() }
+            .extra(vec![
+                ("OEBPS/text/ch1.xhtml".to_string(), chapter("第一章", "第一章的正文内容，凑长度用的填充文字。")),
+                ("OEBPS/text/ch3.xhtml".to_string(), bomb),
+            ])
             .build();
-        let error = parse(bytes).unwrap_err().to_string();
-        assert!(error.contains("过大") || error.contains("正文过短"), "实际：{error}");
+        let parsed = parse(bytes).unwrap();
+        assert_eq!(parsed.title, "炸弹书");
+        assert!(parsed.chunks.iter().all(|chunk| chunk.content.contains("第一章")));
+        assert!(
+            parsed.warnings.iter().any(|w| w.contains("过大") || w.contains("读取失败")),
+            "超限章节应当给出警告，实际：{:?}",
+            parsed.warnings
+        );
     }
 }

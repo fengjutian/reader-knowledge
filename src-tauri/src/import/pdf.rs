@@ -835,11 +835,9 @@ mod tests {
     #[test]
     fn 扫描版_pdf_明确提示不支持_ocr() {
         // 结构合法但没有任何文本算子
-        let mut bytes = b"%PDF-1.4\n".to_vec();
-        bytes.extend_from_slice(b"4 0 obj\n<< /Length 10 >>\nstream\nq Q Q Q \nendstream\nendobj\n");
-        bytes.extend_from_slice(b"3 0 obj\n<< /Type /Page /Contents 4 0 R >>\nendobj\n");
-        let error = parse(bytes).unwrap_err();
-        assert!(error.to_string().contains("暂不支持 OCR"), "{error}");
+        let pdf = build_pdf("1.4", &["q Q Q Q"], None, false);
+        let error = parse(pdf).unwrap_err().to_string();
+        assert!(error.contains("暂不支持 OCR"), "实际：{error}");
     }
 
     #[test]
@@ -972,7 +970,8 @@ mod tests {
         let mut bfchar = String::new();
         for (index, character) in chars.iter().enumerate() {
             let code = index as u32 + 1;
-            let target: Vec<u16> = (*character).encode_utf16().collect();
+            // ToUnicode 的目标值是 UTF-16BE 的码点序列
+            let target: Vec<u16> = character.to_string().encode_utf16().collect();
             bfchar.push_str(&format!("<{code:04X}> <{}>\n", target.iter().map(|unit| format!("{unit:04X}")).collect::<String>()));
         }
         let cmap = format!(
@@ -1019,6 +1018,63 @@ mod tests {
         format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET")
     }
 
+    /// 同一页里的两行文字，用 `Td` 真正换行。
+    fn two_line_page(first: &str, second: &str) -> String {
+        format!("BT /F1 12 Tf 72 720 Td ({first}) Tj 0 -14 Td ({second}) Tj ET")
+    }
+
+    /// 一份被加密字典标记过的 PDF。
+    ///
+    /// 只写入 `/Encrypt` 引用就足以让读取方判定「这是加密文档」，
+    /// 样本不需要真的做 RC4/AES 加密 —— 导入器根本不该尝试解密。
+    fn build_encrypted_pdf() -> Vec<u8> {
+        use lopdf::{dictionary, Document, Object, Stream, StringFormat};
+
+        let mut doc = Document::with_version("1.7");
+        let encrypt = doc.add_object(dictionary! {
+            "Filter" => "Standard", "V" => 2, "R" => 3, "Length" => 128,
+            "O" => Object::String(vec![0u8; 32], StringFormat::Hexadecimal),
+            "U" => Object::String(vec![0u8; 32], StringFormat::Hexadecimal),
+            "P" => -44,
+        });
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages_id = doc.new_object_id();
+        let stream = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 12 Tf 72 720 Td (Secret body text) Tj ET".to_vec()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => stream,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        });
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Count" => 1, "Kids" => vec![page.into()] }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        doc.trailer.set("Encrypt", encrypt);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("写出加密样本失败");
+        bytes
+    }
+
+    #[test]
+    fn __debug_dump() {
+        let quoted = "BT /F1 12 Tf 72 720 Td (Quoted line) ' 0 -14 Td 1 2 (Second line) \" ET";
+        let pdf = build_pdf("1.4", &[quoted], Some("Quoted"), false);
+        let parsed = parse(pdf).unwrap();
+        println!("QUOTE_DUMP>>>{:?}<<<", parsed.chunks[0].content);
+
+        let kerned = "BT /F1 12 Tf 72 720 Td [(Kerned) -500 (Text)] TJ ET";
+        let parsed = parse(build_pdf("1.4", &[kerned], Some("K"), false)).unwrap();
+        println!("KERN_DUMP>>>{:?}<<<", parsed.chunks[0].content);
+
+        let page = two_line_page("Readable Title Line", "rest of the body");
+        let parsed = parse(build_pdf("1.4", &[&page], None, false)).unwrap();
+        println!("TITLE_DUMP>>>{:?}<<<", parsed.chunks[0].content);
+
+        let parsed = parse(build_cjk_pdf("深入理解计算机系统")).unwrap();
+        let body: String = parsed.chunks.iter().map(|c| c.content.as_str()).collect();
+        println!("CJK_DUMP>>>{body}<<<");
+        panic!("debug");
+    }
+
     #[test]
     fn 简单英文_pdf_按页导入且页码从一开始() {
         let first = simple_page("Page one body");
@@ -1046,7 +1102,8 @@ mod tests {
 
     #[test]
     fn 引号与数组文本算子都能抽出来() {
-        let quoted = "BT /F1 12 Tf (Quoted line) ' (Second line) \" ET";
+        // `'` 与 `"` 都要配一个显式的换行/字距操作符，才是合法的写法
+        let quoted = "BT /F1 12 Tf 72 720 Td (Quoted line) ' 0 -14 Td 1 2 (Second line) \" ET";
         let pdf = build_pdf("1.4", &[quoted], Some("Quoted"), false);
         let parsed = parse(pdf).unwrap();
         assert!(parsed.chunks[0].content.contains("Quoted line"), "实际：{}", parsed.chunks[0].content);
@@ -1076,12 +1133,8 @@ mod tests {
 
     #[test]
     fn 加密_pdf_给出加密提示而不是当成扫描版() {
-        let page = simple_page("Secret body text here");
-        let pdf = build_pdf("1.4", &[&page], Some("Locked"), false);
-        // 往 trailer 里塞一个 /Encrypt：解析器据此判定这是加密文档。
-        // 用真实的加密字典最好，但样本只需要走到「识别为加密」这一步。
-        let text = String::from_utf8_lossy(&pdf).replacen("%%EOF", "/Encrypt 9 0 R\n%%EOF", 1);
-        let error = parse(text.into_bytes()).unwrap_err().to_string();
+        let pdf = build_encrypted_pdf();
+        let error = parse(pdf).unwrap_err().to_string();
         assert!(error.contains("加密"), "实际：{error}");
         assert!(!error.contains("扫描版"), "加密 PDF 不能被当成扫描版：{error}");
     }
@@ -1096,7 +1149,7 @@ mod tests {
 
     #[test]
     fn 没有元数据标题时用正文首行() {
-        let page = simple_page("Readable Title Line\nrest of the body");
+        let page = two_line_page("Readable Title Line", "rest of the body");
         let pdf = build_pdf("1.4", &[&page], None, false);
         let parsed = parse(pdf).unwrap();
         assert_eq!(parsed.title, "Readable Title Line");
