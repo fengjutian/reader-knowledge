@@ -125,7 +125,11 @@ export function AI() {
   // 用户手动往上翻时不要把视图拽回底部。
   useEffect(() => {
     if (!stickToBottomRef.current) return;
-    const frame = requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }));
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      // jsdom 等没有实现 scrollTo 的环境直接跳过。
+      if (el && typeof el.scrollTo === "function") el.scrollTo({ top: el.scrollHeight });
+    });
     return () => cancelAnimationFrame(frame);
   }, [turns, stream.draft, stream.status]);
 
@@ -274,16 +278,21 @@ export function AI() {
       </section>}
       <Dialog.Root open={bookPickerOpen} onOpenChange={setBookPickerOpen}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="book-picker-dialog"><div className="book-picker-dialog__head"><div><Dialog.Title>{mode === "summary" ? "选择一本书" : "选择分析书籍"}</Dialog.Title><Dialog.Description>{mode === "summary" ? "仅显示有笔记的书" : "选择 2–100 本书进行跨书分析"}</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭"><X size={19}/></Dialog.Close></div><label className="ai-book-search"><Search size={16}/><input autoFocus value={bookQuery} onChange={event => setBookQuery(event.target.value)} placeholder="搜索书名或作者"/></label><div className="ai-book-options">{visibleBooks.map(book => <label key={book.id} className={draftBookIds.includes(book.id) ? "selected" : ""}><input type={mode === "summary" ? "radio" : "checkbox"} checked={draftBookIds.includes(book.id)} onChange={() => toggleDraftBook(book.id)}/><span><strong>{book.title}</strong><small>{book.author || "未知作者"} · {book.highlightCount + book.thoughtCount} 条笔记</small></span></label>)}</div>{visibleBooks.length === 0 && <p className="ai-book-picker__none">没有找到有笔记的书</p>}<div className="book-picker-dialog__footer"><span className={selectionError ? "book-picker-dialog__error" : ""}>{selectionError || `已选择 ${draftBookIds.length} 本`}</span><div><Dialog.Close className="book-picker-dialog__cancel">取消</Dialog.Close><button type="button" className="book-picker-dialog__confirm" onClick={confirmBookSelection}>完成</button></div></div></Dialog.Content></Dialog.Portal></Dialog.Root>
       </div>
-      <div className="ai-content" ref={scrollRef}>
-      {turns.length === 0 && !loading && !error && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
+      <div className="ai-content" ref={scrollRef} onScroll={event => { const el = event.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+      {turns.length === 0 && !streaming && !error && stream.status === "idle" && <section className="ai-empty"><span><Sparkles size={25}/></span><h2>{modeLabels[mode]}</h2><p>系统会检索相关划线与想法，只把有限上下文发送给已配置模型。</p></section>}
       {error && <div className="ai-error"><strong>无法生成回答</strong><p>{error}</p></div>}
       {turns.length > 0 && <div className="ai-thread">{turns.map((turn, turnIndex) => <section className="answer" key={`${turn.question}-${turnIndex}`}><div className="answer__question">{turn.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><MarkdownAnswer answer={turn.answer} openBook={openBook}/></div></div><div className="answer__sources-head"><h3>引用的笔记</h3><span>检索 {turn.answer.sourcesConsidered} 条 · 引用 {turn.answer.citations.length} 条</span></div>{turn.answer.citations.map(citation => <button className="citation" key={`${turnIndex}-${citation.index}-${citation.note.id}`} onClick={() => openBook(citation.note.bookId, citation.note.id)}><span>{citation.index}</span><div><strong><BookOpen size={14}/>《{citation.note.bookTitle}》 · {citation.note.chapter}</strong><p>{citation.note.content}</p></div></button>)}</section>)}</div>}
-      {loading && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
+      {(streaming || stream.status === "stopped" || stream.status === "error") && (stream.draft || stream.question) && <section className="answer answer--streaming"><div className="answer__question">{stream.question}</div><div className="answer__body"><Sparkles size={18}/><div className="answer__markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.draft}</ReactMarkdown>{streaming && <span className="answer__caret"/>}</div></div>{stream.status === "stopped" && <p className="answer__notice">已停止生成，以上内容未完成。</p>}</section>}
+      {stream.status === "error" && <div className="ai-error"><strong>生成失败</strong><p>{stream.error}</p><button type="button" className="button button--primary" onClick={retry}><RotateCcw size={15}/>重试</button></div>}
+      {streaming && stream.notice && <div className="metadata-message"><Sparkles size={15}/><span>{stream.notice}</span></div>}
+      {streaming && !stream.draft && <div className="ai-thinking"><Sparkles/><div><strong>正在检索证据并组织回答</strong><span>{mode === "ask" ? "从本地知识库筛选相关笔记，并覆盖更多书籍" : mode === "compare" ? `正在分析 ${bookIds.length} 本书，保证每本书都有证据进入上下文` : "正在提取这本书的代表性笔记"}</span></div></div>}
       </div>
       <form className="ask-box" onSubmit={ask}>
         <div className="ask-box__composer">
-          <textarea ref={textareaRef} rows={1} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="问问你的阅读知识库…"/>
-          <button type="submit" aria-label="发送" disabled={!question.trim() || loading}><ArrowUp size={18}/></button>
+          <textarea ref={textareaRef} rows={1} value={question} disabled={streaming} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="问问你的阅读知识库…"/>
+          {streaming
+            ? <button type="button" className="ask-box__stop" aria-label="停止生成" onClick={stopStream}><Square size={15}/></button>
+            : <button type="submit" aria-label="发送" disabled={!question.trim()}><ArrowUp size={18}/></button>}
         </div>
       </form>
       </div>
