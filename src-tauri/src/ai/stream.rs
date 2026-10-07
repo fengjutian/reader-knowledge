@@ -14,6 +14,12 @@ pub struct StreamRegistry {
 }
 
 impl StreamRegistry {
+    /// 活动请求数量。排查「后台还有没有在跑的生成」时用。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn active_count(&self) -> usize {
+        self.active.lock().map(|active| active.len()).unwrap_or(0)
+    }
+
     /// 登记一个新的活动请求。`requestId` 重复说明前端状态串了，直接拒绝。
     pub fn register(&self, request_id: &str) -> Result<Arc<AtomicBool>, AppError> {
         let mut active = self.lock()?;
@@ -35,10 +41,6 @@ impl StreamRegistry {
             }
             None => false,
         }
-    }
-
-    pub fn is_active(&self, request_id: &str) -> bool {
-        self.active.lock().map(|active| active.contains_key(request_id)).unwrap_or(false)
     }
 
     pub fn finish(&self, request_id: &str) {
@@ -73,7 +75,7 @@ mod tests {
         let registry = StreamRegistry::default();
         let token = registry.register("req-1").unwrap();
         assert!(!token.load(Ordering::Relaxed));
-        assert!(registry.is_active("req-1"));
+        assert_eq!(registry.active_count(), 1);
         assert!(registry.cancel("req-1"));
         assert!(token.load(Ordering::Relaxed));
         assert!(!registry.cancel("req-2"));
@@ -93,7 +95,7 @@ mod tests {
         let registry = StreamRegistry::default();
         registry.register("req-1").unwrap();
         registry.finish("req-1");
-        assert!(!registry.is_active("req-1"));
+        assert_eq!(registry.active_count(), 0);
         assert!(!registry.cancel("req-1"));
     }
 

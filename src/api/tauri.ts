@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, GlobalSearchPage, GlobalSearchRequest, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -85,6 +85,7 @@ export const api = {
   openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
   notes: (type?: Note["type"]) => call<Note[]>("list_notes", { noteType: type }),
   search: (query: string, noteType?: Note["type"]) => call<SearchResult[]>("search_notes", { query, noteType }),
+  globalSearch: (request: GlobalSearchRequest) => call<GlobalSearchPage>("global_search", { request }),
   aiSettings: () => call<AiSettings | null>("get_ai_settings"),
   saveAiSettings: (settings: AiSettings, apiKey?: string) => call<void>("save_ai_settings", { settings, apiKey }),
   testAi: (apiKey?: string) => call<boolean>("test_ai", { apiKey }),

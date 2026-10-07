@@ -126,6 +126,49 @@ pub struct SearchResult {
     pub note: Note,
     pub score: f64,
 }
+
+pub const SEARCH_ENTITY_TYPES: [&str; 3] = ["book", "highlight", "thought"];
+
+/// 全局搜索结果。可区分实体的联合模型：书籍 / 划线 / 想法共用一个列表返回。
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSearchResult {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub book_id: String,
+    pub title: String,
+    /// 书籍结果是「作者 · 分类」，笔记结果是章节名。
+    pub subtitle: String,
+    /// 已经在后端截断的纯文本摘要，前端不直接渲染服务端 HTML。
+    pub snippet: String,
+    pub score: f64,
+    pub updated_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSearchRequest {
+    #[serde(default)]
+    pub query: String,
+    /// 空表示全部类型
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub book_id: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSearchPage {
+    pub results: Vec<GlobalSearchResult>,
+    /// 是否还有下一页，前端据此决定是否显示「加载更多」
+    pub has_more: bool,
+}
 #[derive(Serialize, Clone)]
 pub struct SyncProgress {
     pub status: String,

@@ -82,6 +82,8 @@ pub enum AiStreamEvent {
 }
 
 impl AiStreamEvent {
+    /// 事件自带的请求标识。调试多会话串流问题时用来定位是哪一次请求。
+    #[allow(dead_code)]
     pub fn request_id(&self) -> &str {
         match self {
             AiStreamEvent::Started { request_id, .. }

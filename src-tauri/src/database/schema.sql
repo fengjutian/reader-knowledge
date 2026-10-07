@@ -128,3 +128,68 @@ CREATE TABLE IF NOT EXISTS glossary_terms (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_glossary_terms_status ON glossary_terms(status,term);
+-- 迁移标记。books_fts 整体回填按版本号执行一次，之后交给触发器增量维护；
+-- 将来索引结构变了就把版本号 +1，启动时会自动重建。
+CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(book_id UNINDEXED,title,author,category,isbn,tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS books_fts_insert AFTER INSERT ON books
+WHEN NEW.is_deleted=0
+BEGIN
+  INSERT INTO books_fts(book_id,title,author,category,isbn)
+  SELECT NEW.book_id,NEW.title,coalesce(NEW.author,''),coalesce(NEW.category,''),
+         coalesce(
+           (SELECT m.isbn13 FROM book_metadata_sources m WHERE m.book_id=NEW.book_id AND trim(coalesce(m.isbn13,''))<>'' LIMIT 1),
+           (SELECT m.isbn10 FROM book_metadata_sources m WHERE m.book_id=NEW.book_id AND trim(coalesce(m.isbn10,''))<>'' LIMIT 1),
+           '');
+END;
+CREATE TRIGGER IF NOT EXISTS books_fts_update AFTER UPDATE OF title,author,category,is_deleted ON books
+WHEN OLD.title IS NOT NEW.title OR OLD.author IS NOT NEW.author OR OLD.category IS NOT NEW.category OR OLD.is_deleted IS NOT NEW.is_deleted
+BEGIN
+  DELETE FROM books_fts WHERE book_id=OLD.book_id;
+  INSERT INTO books_fts(book_id,title,author,category,isbn)
+  SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),
+         coalesce(
+           (SELECT m.isbn13 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn13,''))<>'' LIMIT 1),
+           (SELECT m.isbn10 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn10,''))<>'' LIMIT 1),
+           '')
+  FROM books b WHERE b.book_id=NEW.book_id AND b.is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS books_fts_delete AFTER DELETE ON books
+BEGIN
+  DELETE FROM books_fts WHERE book_id=OLD.book_id;
+END;
+-- ISBN 存在元数据表里，元数据落库后要把 ISBN 同步进书籍索引。
+CREATE TRIGGER IF NOT EXISTS books_fts_metadata_insert AFTER INSERT ON book_metadata_sources
+BEGIN
+  DELETE FROM books_fts WHERE book_id=NEW.book_id;
+  INSERT INTO books_fts(book_id,title,author,category,isbn)
+  SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),
+         coalesce(
+           (SELECT m.isbn13 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn13,''))<>'' LIMIT 1),
+           (SELECT m.isbn10 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn10,''))<>'' LIMIT 1),
+           '')
+  FROM books b WHERE b.book_id=NEW.book_id AND b.is_deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS books_fts_metadata_update AFTER UPDATE OF isbn10,isbn13 ON book_metadata_sources
+WHEN OLD.isbn10 IS NOT NEW.isbn10 OR OLD.isbn13 IS NOT NEW.isbn13
+BEGIN
+  DELETE FROM books_fts WHERE book_id=NEW.book_id;
+  INSERT INTO books_fts(book_id,title,author,category,isbn)
+  SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),
+         coalesce(
+           (SELECT m.isbn13 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn13,''))<>'' LIMIT 1),
+           (SELECT m.isbn10 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn10,''))<>'' LIMIT 1),
+           '')
+  FROM books b WHERE b.book_id=NEW.book_id AND b.is_deleted=0;
+END;
+INSERT OR IGNORE INTO app_meta(key,value) VALUES('books_fts_version','0');
+DELETE FROM books_fts WHERE (SELECT value FROM app_meta WHERE key='books_fts_version')<>'1';
+INSERT INTO books_fts(book_id,title,author,category,isbn)
+SELECT b.book_id,b.title,coalesce(b.author,''),coalesce(b.category,''),
+       coalesce(
+         (SELECT m.isbn13 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn13,''))<>'' LIMIT 1),
+         (SELECT m.isbn10 FROM book_metadata_sources m WHERE m.book_id=b.book_id AND trim(coalesce(m.isbn10,''))<>'' LIMIT 1),
+         '')
+FROM books b
+WHERE b.is_deleted=0 AND (SELECT value FROM app_meta WHERE key='books_fts_version')<>'1';
+UPDATE app_meta SET value='1' WHERE key='books_fts_version' AND value<>'1';

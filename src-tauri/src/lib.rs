@@ -22,6 +22,14 @@ pub fn run() {
             app.manage(Arc::new(ai::stream::StreamRegistry::default()));
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // 窗口关闭时中止所有还在读的网络流，否则 socket 会被一直持有到进程退出。
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(registry) = window.app_handle().try_state::<Arc<ai::stream::StreamRegistry>>() {
+                    registry.cancel_all();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
             commands::get_database_overview,
@@ -46,6 +54,7 @@ pub fn run() {
             commands::open_external_url,
             commands::list_notes,
             commands::search_notes,
+            commands::global_search,
             commands::save_secret,
             commands::has_secret,
             commands::test_connection,

@@ -585,6 +585,501 @@ pub fn search_notes(
     search_impl(&db, &query, note_type)
 }
 
+const GLOBAL_SEARCH_MAX_LIMIT: i64 = 200;
+const GLOBAL_SEARCH_MAX_OFFSET: i64 = 5_000;
+const GLOBAL_SEARCH_SNIPPET_CHARS: usize = 160;
+
+/// 构造 FTS5 的 MATCH 表达式，返回 `None` 表示没有任何可用词。
+///
+/// 关键点：
+/// - 每个词都用双引号包起来并把内部 `"` 转义成 `""`，用户输入无法逃逸出字符串字面量。
+/// - 纯符号输入（`***`、`(((`）规范化后为空，直接返回 `None` 避免生成空表达式。
+/// - 空表达式会让 FTS5 报 `fts5: syntax error`，所以必须提前拦掉。
+fn fts_match_expression(query: &str) -> Option<String> {
+    let expression = search_terms(query)
+        .into_iter()
+        .filter(|term| !term.is_empty())
+        .take(12)
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    (!expression.is_empty()).then_some(expression)
+}
+
+/// 规范化搜索类型列表，去重并保留「全部」的语义（返回空列表）。
+/// 测试用的默认请求：全部类型、无书籍过滤、首批 30 条。
+#[cfg(test)]
+fn request_default() -> GlobalSearchRequest {
+    GlobalSearchRequest { query: String::new(), types: Vec::new(), book_id: None, limit: Some(30), offset: Some(0) }
+}
+
+fn normalized_search_types(types: &[String]) -> Result<Vec<String>, AppError> {
+    let mut valid: Vec<String> = Vec::new();
+    for kind in types.iter().filter(|value| !value.trim().is_empty()) {
+        let kind = kind.trim();
+        if !SEARCH_ENTITY_TYPES.contains(&kind) {
+            return Err(AppError::Message("不支持的搜索类型".into()));
+        }
+        if !valid.iter().any(|item| item == kind) {
+            valid.push(kind.to_owned());
+        }
+    }
+    Ok(valid)
+}
+
+/// 摘要截断在后端完成，避免把超长正文整段送到前端。
+fn snippet_of(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= GLOBAL_SEARCH_SNIPPET_CHARS {
+        return trimmed.to_owned();
+    }
+    let head: String = trimmed.chars().take(GLOBAL_SEARCH_SNIPPET_CHARS).collect();
+    format!("{head}…")
+}
+
+/// bm25 返回负数，越小越相关；这里统一翻成「越大越相关」。
+/// 读 FTS 分数时统一走这个函数，避免各处自己写符号判断。
+#[cfg(test)]
+fn relevance_from_bm25(bm25: f64) -> f64 {
+    (-bm25).max(0.0)
+}
+
+/// 书籍结果的可解释加权：完全同名 > 前缀匹配 > 包含匹配。
+fn book_title_boost(normalized_query: &str, title: &str, author: &str, category: &str, isbn: &str) -> f64 {
+    if normalized_query.is_empty() {
+        return 0.0;
+    }
+    if title == normalized_query {
+        return 3.0;
+    }
+    if title.starts_with(normalized_query) {
+        return 2.0;
+    }
+    let mut boost = 0.0;
+    if title.contains(normalized_query) {
+        boost += 1.0;
+    }
+    if author.contains(normalized_query) {
+        boost += 0.8;
+    }
+    if category.contains(normalized_query) {
+        boost += 0.4;
+    }
+    if !isbn.is_empty() && isbn.contains(normalized_query) {
+        boost += 2.5;
+    }
+    boost
+}
+
+/// 归一化到 0–1，方便前端按分数排序展示。
+fn normalize_scores(results: &mut [GlobalSearchResult]) {
+    let peak = results.iter().map(|item| item.score).fold(0.0_f64, f64::max);
+    if peak <= 0.0 {
+        for item in results.iter_mut() {
+            item.score = 0.0;
+        }
+        return;
+    }
+    for item in results.iter_mut() {
+        item.score = (item.score / peak).clamp(0.0, 1.0);
+    }
+}
+
+fn recent_book_results(
+    db: &Database,
+    book_id: Option<&String>,
+    limit: i64,
+) -> Result<Vec<GlobalSearchResult>, AppError> {
+    let c = db.connect()?;
+    let mut query = c.prepare(
+        "SELECT book_id,title,coalesce(author,''),coalesce(category,''),
+         coalesce(datetime(coalesce(update_time,read_update_time,synced_at),'unixepoch','localtime'),'')
+         FROM books
+         WHERE is_deleted=0 AND (?1 IS NULL OR book_id=?1)
+         ORDER BY 5 DESC, book_id LIMIT ?2",
+    )?;
+    let rows = query
+        .query_map(rusqlite::params![book_id, limit], |r| {
+            let id: String = r.get(0)?;
+            let author: String = r.get(2)?;
+            let category: String = r.get(3)?;
+            Ok(GlobalSearchResult {
+                book_id: id.clone(),
+                id,
+                entity_type: "book".into(),
+                title: r.get(1)?,
+                subtitle: join_subtitle(&author, &category),
+                snippet: String::new(),
+                score: 0.0,
+                updated_at: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 作者与分类拼成副标题，空的部分不留下多余分隔符。
+fn join_subtitle(author: &str, category: &str) -> String {
+    [author.trim(), category.trim()]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn recent_note_results(
+    db: &Database,
+    types: &[String],
+    book_id: Option<&String>,
+    limit: i64,
+) -> Result<Vec<GlobalSearchResult>, AppError> {
+    let c = db.connect()?;
+    let highlight_filter = types.iter().any(|kind| kind == "highlight");
+    let thought_filter = types.iter().any(|kind| kind == "thought");
+    let mut results = Vec::new();
+    if highlight_filter {
+        let mut query = c.prepare(
+            "SELECT h.bookmark_id,h.book_id,b.title,coalesce(h.chapter_title,''),h.mark_text,
+             coalesce(datetime(h.create_time,'unixepoch','localtime'),'')
+             FROM highlights h JOIN books b ON b.book_id=h.book_id
+             WHERE h.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR h.book_id=?1)
+             ORDER BY 6 DESC, h.bookmark_id LIMIT ?2",
+        )?;
+        for row in query.query_map(rusqlite::params![book_id, limit], |r| {
+            let content: String = r.get(4)?;
+            Ok(GlobalSearchResult {
+                id: r.get(0)?,
+                entity_type: "highlight".into(),
+                book_id: r.get(1)?,
+                title: r.get(2)?,
+                subtitle: r.get(3)?,
+                snippet: snippet_of(&content),
+                score: 0.0,
+                updated_at: r.get(5)?,
+            })
+        })? {
+            results.push(row?);
+        }
+    }
+    if thought_filter {
+        let mut query = c.prepare(
+            "SELECT t.review_id,t.book_id,b.title,coalesce(t.chapter_name,''),t.content,
+             coalesce(datetime(t.create_time,'unixepoch','localtime'),'')
+             FROM thoughts t JOIN books b ON b.book_id=t.book_id
+             WHERE t.is_deleted=0 AND b.is_deleted=0 AND (?1 IS NULL OR t.book_id=?1)
+             ORDER BY 6 DESC, t.review_id LIMIT ?2",
+        )?;
+        for row in query.query_map(rusqlite::params![book_id, limit], |r| {
+            let content: String = r.get(4)?;
+            Ok(GlobalSearchResult {
+                id: r.get(0)?,
+                entity_type: "thought".into(),
+                book_id: r.get(1)?,
+                title: r.get(2)?,
+                subtitle: r.get(3)?,
+                snippet: snippet_of(&content),
+                score: 0.0,
+                updated_at: r.get(5)?,
+            })
+        })? {
+            results.push(row?);
+        }
+    }
+    Ok(results)
+}
+
+/// 书籍打分：FTS 相关度加上可解释的标题 / 作者 / 分类 / ISBN 加权。
+fn score_book(candidate: &BookCandidate, normalized_query: &str) -> f64 {
+    let boost = book_title_boost(
+        normalized_query,
+        &normalize_search_text(&candidate.title),
+        &normalize_search_text(&candidate.author),
+        &normalize_search_text(&candidate.category),
+        &candidate.isbn,
+    );
+    if normalized_query.is_empty() {
+        return candidate.relevance;
+    }
+    let score = candidate.relevance + boost;
+    // 兜底扫描进来的候选必须在 Rust 侧再筛一次，否则会把无关书籍也返回。
+    (score > 0.0).then_some(score).unwrap_or(0.0)
+}
+
+/// 笔记候选行。
+struct NoteCandidate {
+    id: String,
+    entity_type: String,
+    book_id: String,
+    title: String,
+    chapter: String,
+    content: String,
+    updated_at: String,
+    relevance: f64,
+}
+
+fn map_note_candidate(r: &rusqlite::Row<'_>) -> rusqlite::Result<NoteCandidate> {
+    Ok(NoteCandidate {
+        id: r.get(0)?,
+        entity_type: r.get(1)?,
+        book_id: r.get(2)?,
+        title: r.get(3)?,
+        chapter: r.get(4)?,
+        content: r.get(5)?,
+        updated_at: r.get(6)?,
+        relevance: r.get(7)?,
+    })
+}
+
+const NOTE_UPDATED_SQL: &str = "CASE note_type
+    WHEN 'highlight' THEN coalesce((SELECT datetime(create_time,'unixepoch','localtime') FROM highlights WHERE bookmark_id=notes_fts.note_id),'')
+    ELSE coalesce((SELECT datetime(create_time,'unixepoch','localtime') FROM thoughts WHERE review_id=notes_fts.note_id),'')
+  END";
+
+/// 笔记候选集。
+///
+/// `unicode61` 不切分中文，FTS 对中文查询必然落空。这里沿用现有 `hybrid_search`
+/// 的做法：先用 FTS 收敛（拉丁文/ISBN 场景有效），落空时退回一次限量扫描，
+/// 再由调用方用 Rust 侧包含匹配打分。
+fn note_candidates(
+    db: &Database,
+    types: &[String],
+    book_id: Option<&String>,
+    match_query: Option<&str>,
+    limit: i64,
+) -> Result<Vec<NoteCandidate>, AppError> {
+    let c = db.connect()?;
+    let kind = if types.iter().any(|item| item == "highlight") && !types.iter().any(|item| item == "thought") {
+        Some("highlight")
+    } else if types.iter().any(|item| item == "thought") && !types.iter().any(|item| item == "highlight") {
+        Some("thought")
+    } else {
+        None
+    };
+    if let Some(match_query) = match_query {
+        let sql = format!(
+            "SELECT note_id,note_type,book_id,title,chapter_title,content,{NOTE_UPDATED_SQL},bm25(notes_fts)
+             FROM notes_fts
+             WHERE notes_fts MATCH ?1 AND (?2 IS NULL OR note_type=?2) AND (?3 IS NULL OR book_id=?3)
+             ORDER BY bm25(notes_fts) LIMIT ?4"
+        );
+        let mut query = c.prepare(&sql)?;
+        let rows = query
+            .query_map(rusqlite::params![match_query, kind, book_id, limit], map_note_candidate)?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+    // 兜底：不限 MATCH 的限量扫描，中文靠上层包含匹配过滤。
+    let sql = format!(
+        "SELECT note_id,note_type,book_id,title,chapter_title,content,{NOTE_UPDATED_SQL},0.0
+         FROM notes_fts
+         WHERE (?1 IS NULL OR note_type=?1) AND (?2 IS NULL OR book_id=?2) LIMIT ?3"
+    );
+    let mut query = c.prepare(&sql)?;
+    let rows = query
+        .query_map(rusqlite::params![kind, book_id, limit], map_note_candidate)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 书籍候选行。
+struct BookCandidate {
+    book_id: String,
+    title: String,
+    author: String,
+    category: String,
+    isbn: String,
+    updated_at: String,
+    relevance: f64,
+}
+
+fn map_book_candidate(r: &rusqlite::Row<'_>) -> rusqlite::Result<BookCandidate> {
+    Ok(BookCandidate {
+        book_id: r.get(0)?,
+        title: r.get(1)?,
+        author: r.get(2)?,
+        category: r.get(3)?,
+        isbn: r.get(4)?,
+        updated_at: r.get(5)?,
+        relevance: r.get(6)?,
+    })
+}
+
+const BOOK_UPDATED_SQL: &str = "coalesce(datetime(coalesce(b.update_time,b.read_update_time,b.synced_at),'unixepoch','localtime'),'')";
+
+/// 书籍候选集，兜底策略与笔记一致。
+fn book_candidates(
+    db: &Database,
+    book_id: Option<&String>,
+    match_query: Option<&str>,
+    limit: i64,
+) -> Result<Vec<BookCandidate>, AppError> {
+    let c = db.connect()?;
+    if let Some(match_query) = match_query {
+        // MATCH 里必须写表名本身：给 FTS 表起别名后 MATCH 会静默返回空结果。
+        let sql = format!(
+            "SELECT books_fts.book_id,books_fts.title,coalesce(books_fts.author,''),coalesce(books_fts.category,''),
+             coalesce(books_fts.isbn,''),{BOOK_UPDATED_SQL},bm25(books_fts)
+             FROM books_fts JOIN books b ON b.book_id=books_fts.book_id
+             WHERE books_fts MATCH ?1 AND b.is_deleted=0 AND (?2 IS NULL OR books_fts.book_id=?2)
+             ORDER BY bm25(books_fts) LIMIT ?3"
+        );
+        let mut query = c.prepare(&sql)?;
+        let rows = query
+            .query_map(rusqlite::params![match_query, book_id, limit], map_book_candidate)?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+    let mut query = c.prepare(&format!(
+        "SELECT books_fts.book_id,books_fts.title,coalesce(books_fts.author,''),coalesce(books_fts.category,''),
+         coalesce(books_fts.isbn,''),{BOOK_UPDATED_SQL},0.0
+         FROM books_fts JOIN books b ON b.book_id=books_fts.book_id
+         WHERE b.is_deleted=0 AND (?1 IS NULL OR books_fts.book_id=?1) LIMIT ?2"
+    ))?;
+    let rows = query
+        .query_map(rusqlite::params![book_id, limit], map_book_candidate)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 笔记打分：整段包含权重最高，其次标题、章节，最后按词命中次数累计。
+fn score_note(candidate: &NoteCandidate, normalized_query: &str, terms: &[String]) -> f64 {
+    let content = normalize_search_text(&candidate.content);
+    let title = normalize_search_text(&candidate.title);
+    let chapter = normalize_search_text(&candidate.chapter);
+    let mut score = candidate.relevance;
+    if !normalized_query.is_empty() {
+        if content.contains(normalized_query) {
+            score += 12.0;
+        } else if terms.iter().any(|term| content.contains(term)) {
+            score += 4.0;
+        } else {
+            return 0.0;
+        }
+    }
+    for term in terms {
+        if title.contains(term) {
+            score += 5.0;
+        }
+        if chapter.contains(term) {
+            score += 3.0;
+        }
+        score += content.match_indices(term).count().min(4) as f64;
+    }
+    score
+}
+
+/// 全局搜索：书籍 + 划线 + 想法，支持类型过滤与书籍过滤。
+#[tauri::command]
+pub fn global_search(db: State<'_, Database>, request: GlobalSearchRequest) -> Result<GlobalSearchPage, AppError> {
+    global_search_impl(&db, &request)
+}
+
+fn global_search_impl(db: &Database, request: &GlobalSearchRequest) -> Result<GlobalSearchPage, AppError> {
+    let types = normalized_search_types(&request.types)?;
+    let active_types = if types.is_empty() {
+        SEARCH_ENTITY_TYPES.iter().map(|kind| kind.to_string()).collect::<Vec<_>>()
+    } else {
+        types
+    };
+    let limit = request.limit.unwrap_or(30).clamp(1, GLOBAL_SEARCH_MAX_LIMIT);
+    let offset = request.offset.unwrap_or(0).clamp(0, GLOBAL_SEARCH_MAX_OFFSET);
+    let query = request.query.trim().to_owned();
+    let book_id = request
+        .book_id
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+
+    if query.is_empty() {
+        // 空查询不跑 FTS，只返回最近更新的内容，数量同样受限。
+        let mut results = recent_note_results(&db, &active_types, book_id.as_ref(), limit + 1)?;
+        if active_types.iter().any(|kind| kind == "book") {
+            results.extend(recent_book_results(&db, book_id.as_ref(), limit + 1)?);
+        }
+        // 同分按更新时间倒序，书名稳定排序避免同毫秒抖动。
+        results.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.title.cmp(&right.title))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let has_more = results.len() > limit as usize;
+        results.truncate(limit as usize);
+        let page = results.into_iter().skip(offset as usize).collect::<Vec<_>>();
+        return Ok(GlobalSearchPage { results: page, has_more });
+    }
+
+    // 中文沿用现有 search_terms 策略：整词 + bigram，书籍与笔记统一。
+    let terms = search_terms(&query);
+    let match_query = fts_match_expression(&query);
+    let normalized_query = normalize_search_text(&query);
+
+    // 候选集放大后再打分，最后才分页。纯符号输入没有可用词，跳过 FTS 直接走兜底。
+    let candidate_limit = (limit + offset).saturating_mul(3).clamp(30, 500);
+    let mut results = Vec::new();
+    if active_types.iter().any(|kind| kind == "highlight" || kind == "thought") {
+        for candidate in note_candidates(&db, &active_types, book_id.as_ref(), match_query.as_deref(), candidate_limit)? {
+            let score = score_note(&candidate, &normalized_query, &terms);
+            if score <= 0.0 {
+                continue;
+            }
+            results.push(GlobalSearchResult {
+                id: candidate.id,
+                entity_type: candidate.entity_type,
+                subtitle: candidate.chapter,
+                book_id: candidate.book_id,
+                title: candidate.title,
+                snippet: snippet_of(&candidate.content),
+                score,
+                updated_at: candidate.updated_at,
+            });
+        }
+    }
+    if active_types.iter().any(|kind| kind == "book") {
+        for candidate in book_candidates(&db, book_id.as_ref(), match_query.as_deref(), candidate_limit)? {
+            let score = score_book(&candidate, &normalized_query);
+            if score <= 0.0 {
+                continue;
+            }
+            results.push(GlobalSearchResult {
+                id: candidate.book_id.clone(),
+                entity_type: "book".into(),
+                book_id: candidate.book_id,
+                subtitle: join_subtitle(&candidate.author, &candidate.category),
+                title: candidate.title,
+                snippet: if candidate.isbn.is_empty() { String::new() } else { format!("ISBN {}", candidate.isbn) },
+                score,
+                updated_at: candidate.updated_at,
+            });
+        }
+    }
+    if results.is_empty() {
+        return Ok(GlobalSearchPage { results: Vec::new(), has_more: false });
+    }
+    // 同分按更新时间倒序，保证分页稳定。
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    normalize_scores(&mut results);
+    let has_more = results.len() > (limit + offset) as usize;
+    let page = results
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    Ok(GlobalSearchPage { results: page, has_more })
+}
+
 fn search_impl(
     db: &Database,
     query: &str,
@@ -1712,10 +2207,12 @@ fn semantic_bigrams(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_google_books_status, database_row_query, fts_query, normalize_recommendations,
-        parse_relation_analysis, search_terms, validate_secret_kind, weread_reader_id,
-        MetadataBatchFuture, MetadataFetchResult, AppError,
+        book_title_boost, classify_google_books_status, database_row_query, fts_match_expression,
+        fts_query, global_search_impl, normalize_recommendations, normalize_scores, parse_relation_analysis,
+        relevance_from_bm25, request_default, search_terms, snippet_of, validate_secret_kind, weread_reader_id,
+        MetadataBatchFuture, MetadataFetchResult, AppError, GLOBAL_SEARCH_SNIPPET_CHARS,
     };
+    use crate::{database::Database, models::{GlobalSearchPage, GlobalSearchRequest, GlobalSearchResult}};
     use std::{
         future::Future,
         sync::{Arc, Mutex},
@@ -1980,5 +2477,314 @@ mod tests {
         assert!(terms.contains(&"组织管理".into()));
         assert!(terms.contains(&"组织".into()));
         assert!(terms.contains(&"管理".into()));
+    }
+
+    // ---------- 全局搜索 ----------
+
+    /// 建一个只含 schema.sql 的临时库，不碰用户数据。
+    fn search_test_db() -> (tempfile::TempDir, Database) {
+        let dir = tempfile::tempdir().expect("创建临时目录失败");
+        let db = Database::open(dir.path().join("test.db")).expect("打开临时数据库失败");
+        (dir, db)
+    }
+
+    fn seed_book(db: &Database, book_id: &str, title: &str, author: &str, category: &str) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO books(book_id,title,author,category,is_deleted,created_at,synced_at,update_time)
+                 VALUES(?1,?2,?3,?4,0,0,0,1700000000)",
+                rusqlite::params![book_id, title, author, category],
+            )
+            .unwrap();
+    }
+
+    fn seed_highlight(db: &Database, id: &str, book_id: &str, chapter: &str, text: &str) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO highlights(bookmark_id,book_id,chapter_title,mark_text,is_deleted,synced_at,create_time)
+                 VALUES(?1,?2,?3,?4,0,0,1700000000)",
+                rusqlite::params![id, book_id, chapter, text],
+            )
+            .unwrap();
+    }
+
+    fn seed_thought(db: &Database, id: &str, book_id: &str, chapter: &str, text: &str) {
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO thoughts(review_id,book_id,chapter_name,content,is_deleted,synced_at,create_time)
+                 VALUES(?1,?2,?3,?4,0,0,1700000000)",
+                rusqlite::params![id, book_id, chapter, text],
+            )
+            .unwrap();
+    }
+
+    fn search(db: &Database, request: GlobalSearchRequest) -> GlobalSearchPage {
+        // command 签名带 State，直接测内部实现。
+        global_search_impl(db, &request).expect("全局搜索不应报错")
+    }
+
+    fn titles(page: &GlobalSearchPage) -> Vec<String> {
+        page.results.iter().map(|item| item.title.clone()).collect()
+    }
+
+    #[test]
+    fn global_search_matches_title_author_and_isbn() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "置身事内", "兰小欢", "社科");
+        seed_book(&db, "b2", "中国历代政治得失", "钱穆", "历史");
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO book_metadata_sources(book_id,source,source_id,raw_json,fetched_at,isbn13)
+                 VALUES('b2','douban','x','{}',0,'9787508660752')",
+                [],
+            )
+            .unwrap();
+
+        // 书名精确命中
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "置身事内".into(), ..request_default() })).contains(&"置身事内".to_string()));
+        // 作者命中
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "钱穆".into(), ..request_default() })).contains(&"中国历代政治得失".to_string()));
+        // ISBN 命中
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "9787508660752".into(), ..request_default() })).contains(&"中国历代政治得失".to_string()));
+        // 分类命中
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "社科".into(), ..request_default() })).contains(&"置身事内".to_string()));
+    }
+
+    #[test]
+    fn global_search_matches_highlights_and_thoughts() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "置身事内", "兰小欢", "社科");
+        seed_highlight(&db, "h1", "b1", "第一章", "地方政府的债务问题");
+        seed_thought(&db, "t1", "b1", "第二章", "我对地方融资的想法");
+
+        let page = search(&db, GlobalSearchRequest { query: "地方政府".into(), ..request_default() });
+        assert!(page.results.iter().any(|item| item.entity_type == "highlight" && item.id == "h1"));
+
+        let page = search(&db, GlobalSearchRequest { query: "地方融资".into(), ..request_default() });
+        assert!(page.results.iter().any(|item| item.entity_type == "thought" && item.id == "t1"));
+    }
+
+    #[test]
+    fn global_search_chinese_phrase_hits_notes() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "书", "作者", "分类");
+        seed_highlight(&db, "h1", "b1", "第一章", "组织管理非常重要");
+        let page = search(&db, GlobalSearchRequest { query: "组织管理".into(), ..request_default() });
+        assert!(page.results.iter().any(|item| item.id == "h1"));
+    }
+
+    #[test]
+    fn global_search_type_and_book_filters_combine() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "甲书", "作者甲", "社科");
+        seed_book(&db, "b2", "乙书", "作者乙", "历史");
+        seed_highlight(&db, "h1", "b1", "第一章", "共同关键词内容");
+        seed_highlight(&db, "h2", "b2", "第一章", "共同关键词内容");
+        seed_thought(&db, "t1", "b1", "第二章", "共同关键词内容");
+
+        // 只搜划线：想法不出现
+        let page = search(&db, GlobalSearchRequest { query: "共同关键词".into(), types: vec!["highlight".into()], ..request_default() });
+        assert!(page.results.iter().all(|item| item.entity_type == "highlight"));
+        assert_eq!(page.results.len(), 2);
+
+        // 只搜想法
+        let page = search(&db, GlobalSearchRequest { query: "共同关键词".into(), types: vec!["thought".into()], ..request_default() });
+        assert_eq!(page.results.len(), 1);
+        assert_eq!(page.results[0].id, "t1");
+
+        // 类型 + 书籍组合
+        let page = search(&db, GlobalSearchRequest { query: "共同关键词".into(), types: vec!["highlight".into()], book_id: Some("b2".into()), ..request_default() });
+        assert_eq!(page.results.len(), 1);
+        assert_eq!(page.results[0].id, "h2");
+
+        // 只要书籍类型时不应返回笔记
+        let page = search(&db, GlobalSearchRequest { query: "甲书".into(), types: vec!["book".into()], ..request_default() });
+        assert!(page.results.iter().all(|item| item.entity_type == "book"));
+    }
+
+    #[test]
+    fn global_search_skips_soft_deleted_books_and_notes() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "活着的书", "作者", "分类");
+        seed_book(&db, "b2", "已删的书", "作者", "分类");
+        seed_highlight(&db, "h1", "b1", "第一章", "命中关键词");
+        seed_highlight(&db, "h2", "b2", "第一章", "命中关键词");
+        db.connect().unwrap().execute("UPDATE books SET is_deleted=1 WHERE book_id='b2'", []).unwrap();
+        db.connect().unwrap().execute("UPDATE highlights SET is_deleted=1 WHERE bookmark_id='h2'", []).unwrap();
+
+        let page = search(&db, GlobalSearchRequest { query: "命中关键词".into(), ..request_default() });
+        assert!(page.results.iter().all(|item| item.book_id == "b1"));
+        assert!(!page.results.iter().any(|item| item.id == "h2"));
+
+        let page = search(&db, GlobalSearchRequest { query: "书".into(), types: vec!["book".into()], ..request_default() });
+        assert!(!titles(&page).contains(&"已删的书".to_string()));
+    }
+
+    #[test]
+    fn global_search_renamed_book_stops_matching_old_title() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "旧书名", "作者", "分类");
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "旧书名".into(), ..request_default() })).contains(&"旧书名".to_string()));
+
+        db.connect().unwrap().execute("UPDATE books SET title='新书名' WHERE book_id='b1'", []).unwrap();
+
+        let page = search(&db, GlobalSearchRequest { query: "旧书名".into(), ..request_default() });
+        assert!(!titles(&page).contains(&"旧书名".to_string()));
+        assert!(titles(&search(&db, GlobalSearchRequest { query: "新书名".into(), ..request_default() })).contains(&"新书名".to_string()));
+    }
+
+    #[test]
+    fn global_search_survives_quotes_and_sql_injection_attempts() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "正常书名", "作者", "分类");
+        seed_highlight(&db, "h1", "b1", "第一章", "正常内容");
+
+        for hostile in [
+            "\" OR 1=1 --",
+            "'; DROP TABLE books; --",
+            "a\"b",
+            "NEAR(",
+            "*",
+            "(((((",
+            "正向内容\"\"\"",
+            "^abc",
+            "a:b(c)",
+            "***",
+            "x\".x",
+        ] {
+            // 关键点是不能 panic、不能返回数据库错误，更不能把表删掉。
+            // FTS5 语法错误会直接冒泡成 Err，所以这一条同时覆盖了 MATCH 转义。
+            if let Err(error) = global_search_impl(&db, &GlobalSearchRequest { query: hostile.into(), ..request_default() }) {
+                panic!("输入 {hostile:?} 触发了错误：{error}");
+            }
+        }
+        // 表结构与数据都还在
+        assert_eq!(
+            db.connect().unwrap().query_row("SELECT count(*) FROM books", [], |r| r.get::<_, i64>(0)).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.connect().unwrap().query_row("SELECT count(*) FROM notes_fts", [], |r| r.get::<_, i64>(0)).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn fts_match_expression_quotes_every_term_and_rejects_symbols_only() {
+        // 引号在规范化阶段被剔除，剩下纯字母词；关键是结果里每个词都被双引号包住
+        assert_eq!(fts_match_expression("a\"b").as_deref(), Some("\"ab\""));
+        // 纯符号没有可用词，必须返回 None，否则空表达式会让 FTS5 报语法错误
+        assert_eq!(fts_match_expression("***"), None);
+        assert_eq!(fts_match_expression("((("), None);
+        assert_eq!(fts_match_expression("   "), None);
+        // 中文仍然走 search_terms 的整词 + bigram
+        let expression = fts_match_expression("组织管理").expect("中文查询应当有可用词");
+        assert!(expression.contains("\"组织管理\""));
+        assert!(expression.contains("\"组织\""));
+        assert!(expression.contains("\"管理\""));
+    }
+
+    #[test]
+    fn global_search_paginates_without_duplicating_rows() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "书", "作者", "分类");
+        for index in 0..12 {
+            seed_highlight(&db, &format!("h{index}"), "b1", "第一章", &format!("共同关键词第 {index} 条"));
+        }
+        let all = search(&db, GlobalSearchRequest { query: "共同关键词".into(), limit: Some(30), ..request_default() });
+        let mut ids = all.results.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        let total = ids.len();
+        ids.sort();
+
+        let mut paged = Vec::new();
+        for offset in [0, 5, 10] {
+            let page = search(&db, GlobalSearchRequest { query: "共同关键词".into(), limit: Some(5), offset: Some(offset), ..request_default() });
+            paged.extend(page.results.iter().map(|item| item.id.clone()));
+        }
+        paged.sort();
+        assert_eq!(paged, ids, "分页结果应当与一次性取全量一致");
+        assert_eq!(paged.len(), total);
+    }
+
+    #[test]
+    fn global_search_empty_query_returns_recent_items() {
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "甲书", "作者甲", "社科");
+        seed_highlight(&db, "h1", "b1", "第一章", "最近的一条划线");
+
+        let page = search(&db, request_default());
+        assert!(!page.results.is_empty());
+        // 空查询不跑 FTS，但仍然有明确上限
+        let page = search(&db, GlobalSearchRequest { limit: Some(1), ..request_default() });
+        assert_eq!(page.results.len(), 1);
+    }
+
+    #[test]
+    fn global_search_rejects_unknown_type() {
+        let (_dir, db) = search_test_db();
+        let error = global_search_impl(&db, &GlobalSearchRequest { types: vec!["chapter".into()], ..request_default() }).unwrap_err();
+        assert!(error.to_string().contains("不支持的搜索类型"));
+    }
+
+    #[test]
+    fn global_search_snippet_is_truncated_in_backend() {
+        let long = "字".repeat(GLOBAL_SEARCH_SNIPPET_CHARS + 100);
+        let snippet = snippet_of(&long);
+        assert!(snippet.chars().count() <= GLOBAL_SEARCH_SNIPPET_CHARS + 1);
+        assert!(snippet.ends_with('…'));
+        assert_eq!(snippet_of("  短句  "), "短句");
+    }
+
+    #[test]
+    fn bm25_sign_is_flipped_into_larger_is_better() {
+        // FTS5 的 bm25 返回负数，越小越相关；统一翻成「越大越相关」。
+        assert!(relevance_from_bm25(-12.0) > relevance_from_bm25(-2.0));
+        assert_eq!(relevance_from_bm25(3.0), 0.0, "异常正数不应变成负分");
+    }
+
+    #[test]
+    fn global_search_normalizes_scores_into_zero_to_one() {
+        let mut results = vec![
+            GlobalSearchResult { id: "a".into(), entity_type: "highlight".into(), book_id: "b".into(), title: "t".into(), subtitle: String::new(), snippet: String::new(), score: 10.0, updated_at: String::new() },
+            GlobalSearchResult { id: "b".into(), entity_type: "highlight".into(), book_id: "b".into(), title: "t".into(), subtitle: String::new(), snippet: String::new(), score: 5.0, updated_at: String::new() },
+        ];
+        normalize_scores(&mut results);
+        assert!((results[0].score - 1.0).abs() < 1e-9);
+        assert!((results[1].score - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn book_title_boost_prefers_exact_then_prefix_then_contains() {
+        let exact = book_title_boost("置身事内", "置身事内", "", "", "");
+        let prefix = book_title_boost("置身事", "置身事内", "", "", "");
+        let contains = book_title_boost("事内", "置身事内", "", "", "");
+        assert!(exact > prefix && prefix > contains);
+        assert_eq!(contains, 1.0);
+        // ISBN 命中比标题包含更值钱
+        assert!(book_title_boost("9787", "无关书名", "", "", "9787508660752") > contains);
+    }
+
+    #[test]
+    fn books_fts_backfill_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            seed_book(&db, "b1", "甲书", "作者甲", "社科");
+            seed_book(&db, "b2", "乙书", "作者乙", "历史");
+        }
+        let count_indexed = |db: &Database| -> i64 {
+            db.connect().unwrap().query_row("SELECT count(*) FROM books_fts", [], |r| r.get(0)).unwrap()
+        };
+        // 再次打开（模拟重复启动）不会重复插入
+        for _ in 0..3 {
+            Database::open(&path).unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        assert_eq!(count_indexed(&db), 2);
     }
 }

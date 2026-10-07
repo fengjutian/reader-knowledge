@@ -111,6 +111,29 @@ export interface ReadingStats {
 }
 
 export interface SearchResult extends Note { score: number }
+export type SearchEntityType = "book" | "highlight" | "thought";
+/** 全局搜索结果：书籍 / 划线 / 想法共用一个列表，靠 type 区分。 */
+export interface GlobalSearchResult {
+  id: string;
+  type: SearchEntityType;
+  bookId: string;
+  title: string;
+  /** 书籍结果是「作者 · 分类」，笔记结果是章节名。 */
+  subtitle: string;
+  /** 后端已截断的纯文本摘要。 */
+  snippet: string;
+  score: number;
+  updatedAt: string;
+}
+export interface GlobalSearchRequest {
+  query?: string;
+  /** 空表示全部类型。 */
+  types?: SearchEntityType[];
+  bookId?: string;
+  limit?: number;
+  offset?: number;
+}
+export interface GlobalSearchPage { results: GlobalSearchResult[]; hasMore: boolean }
 export interface Citation { index: number; note: Note }
 export interface GlossaryCitation { index:number;term:string;definition:string;source:string;sourceUrl:string }
 export interface AiAnswer { content: string; citations: Citation[]; glossaryCitations?: GlossaryCitation[]; sourcesConsidered: number }
