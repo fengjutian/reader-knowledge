@@ -197,13 +197,34 @@ fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+/// EPUB 的 mimetype 条目内容。EPUB 规范要求它是 ZIP 里的第一个条目、
+/// 且不压缩，内容必须恰好是这串。
+pub const EPUB_MIMETYPE: &str = "application/epub+zip";
+
+/// 校验 `mimetype` 条目。
+///
+/// 这是把「普通 ZIP 改名成 .epub」挡在外面的关键一步：ZIP 只保证有 PK 头，
+/// EPUB 还要求声明自己的媒体类型。
+pub fn validate_mimetype(raw: &[u8]) -> Result<(), AppError> {
+    // 有些打包工具会在末尾多写一个换行，这里容忍换行但不容忍别的内容
+    let value = String::from_utf8_lossy(raw);
+    let value = value.trim();
+    if value != EPUB_MIMETYPE {
+        return Err(AppError::Message(format!(
+            "文件不是标准 EPUB：mimetype 应该是 {EPUB_MIMETYPE}，实际是 {value}"
+        )));
+    }
+    Ok(())
+}
+
 /// 解析整个 EPUB。
 pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
-    if bytes.len() < 4 || &bytes[..2] != b"PK" {
-        return Err(AppError::Message("这不是有效的 EPUB（缺少 ZIP 结构）".into()));
+    match crate::import::file_signature(&bytes) {
+        "zip" => {}
+        _ => return Err(AppError::Message("这不是有效的 EPUB（缺少 ZIP 结构）".into())),
     }
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|error| AppError::Message(format!("EPUB 结构无法解析：{error}")))?;
+        .map_err(|_| AppError::Message("EPUB 结构无法解析，文件可能已损坏".into()))?;
 
     let entry_count = archive.len();
     // 先收集文件名再逐个取大小：file_names() 持有不可变借用，不能同时 by_name。
@@ -215,6 +236,19 @@ pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
         }
     }
     validate_archive_limits(entry_count, total_uncompressed)?;
+
+    // mimetype 必须存在且内容正确，否则就是一个改名的普通 ZIP
+    let mimetype = archive
+        .by_name("mimetype")
+        .map_err(|_| AppError::Message("文件不是标准 EPUB：缺少 mimetype 条目".into()))
+        .and_then(|mut entry| {
+            let mut buffer = Vec::new();
+            entry
+                .read_to_end(&mut buffer)
+                .map_err(|_| AppError::Message("EPUB 的 mimetype 条目无法读取".into()))?;
+            Ok(buffer)
+        })?;
+    validate_mimetype(&mimetype)?;
 
     let container = read_entry(&mut archive, "META-INF/container.xml")?;
     let opf_path = parse_opf_path(&container)?;

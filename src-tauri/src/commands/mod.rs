@@ -2875,34 +2875,11 @@ fn read_local_file(input: &str) -> Result<(crate::import::ParsedSource, String),
     Ok((parsed, fingerprint))
 }
 
-/// 读本地文件并按扩展名分派。
-fn read_local_file(path: &str) -> Result<crate::import::ParsedSource, AppError> {
-    let path = std::path::Path::new(path);
-    let extension = path
-        .extension()
-        .map(|value| value.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    if !matches!(extension.as_str(), "pdf" | "epub") {
-        return Err(AppError::Message("目前只支持导入 PDF 与 EPUB 文件".into()));
-    }
-    let metadata = std::fs::metadata(path).map_err(|error| AppError::Message(format!("无法读取文件：{error}")))?;
-    if !metadata.is_file() {
-        return Err(AppError::Message("这不是一个文件".into()));
-    }
-    let bytes = std::fs::read(path).map_err(|error| AppError::Message(format!("无法读取文件：{error}")))?;
-    let mut parsed = match extension.as_str() {
-        "pdf" => crate::import::pdf::parse(bytes)?,
-        _ => crate::import::epub::parse(bytes)?,
-    };
-    parsed.origin = Some(path.to_string_lossy().to_string());
-    let kind = parsed.kind.ok_or_else(|| AppError::Message("无法识别资料类型".into()))?;
-    crate::import::validate_size(kind, &parsed.chunks)?;
-    Ok(parsed)
-}
-
-/// 用户确认后正式入库。网页会重新抓一次（预览时内容可能已变）。
+/// 用户确认后正式入库。网页会重新抓一次（本地文件会重新读一次），
+/// 预览与确认之间内容可能已经变了，所以每次确认都重新解析、重新去重。
 #[tauri::command]
 pub async fn confirm_import(app: AppHandle, db: State<'_, Database>, request: ConfirmImportRequest) -> Result<ImportPreview, AppError> {
+    let mut fingerprint: Option<String> = None;
     let parsed = match request.source_type.as_str() {
         "web" => {
             let url = request.url.clone().ok_or_else(|| AppError::Message("缺少网页地址".into()))?;
@@ -2914,7 +2891,15 @@ pub async fn confirm_import(app: AppHandle, db: State<'_, Database>, request: Co
         }
         "pdf" | "epub" => {
             let path = request.path.clone().ok_or_else(|| AppError::Message("缺少文件路径".into()))?;
-            let mut parsed = read_local_file(&path)?;
+            let (mut parsed, current) = read_local_file(&path)?;
+            // 预览时的指纹对不上：文件在预览之后被换掉或改写了，
+            // 不能拿旧预览的标题把新内容入库。
+            if let Some(expected) = request.file_fingerprint.as_deref() {
+                if !expected.is_empty() && expected != current {
+                    return Err(AppError::Message("这个文件在预览之后发生了变化，请重新预览后再导入".into()));
+                }
+            }
+            fingerprint = Some(current);
             parsed.title = request.title.clone();
             parsed.author = request.author.clone();
             // 用户改了标题时 origin 仍按实际来源记录
@@ -2938,6 +2923,7 @@ pub async fn confirm_import(app: AppHandle, db: State<'_, Database>, request: Co
             warnings: parsed.warnings,
             duplicate: true,
             duplicate_of: Some(existing),
+            file_fingerprint: fingerprint,
         });
     }
     let id = persist_source(&db, &app, &parsed)?;
@@ -2952,6 +2938,7 @@ pub async fn confirm_import(app: AppHandle, db: State<'_, Database>, request: Co
         warnings: parsed.warnings,
         duplicate: false,
         duplicate_of: Some(id),
+        file_fingerprint: fingerprint,
     })
 }
 

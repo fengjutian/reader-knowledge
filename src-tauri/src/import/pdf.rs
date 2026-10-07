@@ -1,16 +1,22 @@
 //! PDF 导入：按页提取文本。
 //!
-//! 依赖里没有可用的 PDF 库（离线环境拉不到 lopdf / pdf-extract），
-//! 所以这里实现一个**最小可用子集**：
-//! 1. 顺序扫描 `N M obj … endobj`，建一张对象表（不做 xref 解析）。
-//! 2. 找 `/Type /Page` 的页面对象，按对象号排序当作页序。
-//! 3. 读取每页 `/Contents` 引用的流，FlateDecode 解压后抽取文本算子。
-//! 4. 识别 `BT/ET` 之间的 `Tj` / `TJ` / `'` / `"` 文本算子。
+//! 两条路径，主次分明：
 //!
-//! 明确不支持（会在结果里如实说明，而不是静默返回空）：
-//! - 扫描版 PDF（只有图片、没有文本算子）→ 提示「暂不支持 OCR」
-//! - 对象流 / 交叉引用流（PDF 1.5+ 的对象压缩）→ 尝试顺序扫描兜底
-//! - 嵌入字体的自定义 CID 编码 → 能取出字符但可能不是可读文字
+//! 1. **主路径 `parse_with_primary_engine`**：用 `lopdf` 打开文档并逐页取文本。
+//!    它能正确处理 xref 表与 xref 流（PDF 1.5+ 的对象压缩）、FlateDecode、
+//!    以及嵌入字体的 `ToUnicode` 映射 —— 这些正是手写解析器搞不定、
+//!    导致真实中文 PDF 变成乱码的部分。
+//! 2. **兜底 `parse_with_legacy_fallback`**：本文件原有的手写顺序扫描器。
+//!    它不做 xref 解析、不认识对象流，只在主路径整个失败时才启用，
+//!    命中时会在 warnings 里如实说明用的是兼容路径。
+//!
+//! 明确不支持（会明确提示，而不是静默返回空）：
+//! - 扫描版 PDF（只有图片、没有文本层）→ 提示「暂不支持 OCR」
+//! - 加密 / 密码保护的 PDF → 明确说「已加密」，不能当成扫描版
+//! - 字体编码无法识别的页面 → 跳过该页并给出 warning，整本都乱码则拒绝导入
+//!
+//! 页码定位由两条路径统一保证：页码从 1 开始，一页拆成多个块时都带同一个页码，
+//! 绝不把相邻页合并成一个无法定位的块。
 
 use crate::error::AppError;
 use crate::import::{chunker, Locator, ParsedSource, SourceKind};
@@ -429,21 +435,196 @@ pub fn extract_title(objects: &ObjectTable) -> Option<String> {
     None
 }
 
-/// 解析 PDF 并按页生成文档块。
-pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
-    if bytes.len() as u64 > MAX_PDF_BYTES {
-        return Err(AppError::Message("PDF 体积超过导入上限".into()));
+/// 加密 / 密码保护的 PDF 给用户的固定提示。
+///
+/// 不能把它当成扫描版：两者要走的建议完全不同，用户需要知道是哪种问题。
+pub const ENCRYPTED_MESSAGE: &str = "这份 PDF 已加密或受密码保护，暂时无法导入。";
+
+/// 扫描版（整本没有文字层）的固定提示。
+pub const SCANNED_MESSAGE: &str = "这份 PDF 没有可提取的文字，可能是扫描版；暂不支持 OCR，已跳过导入。";
+
+/// 文本质量：用来识别「提取出来了但其实是乱码」的情况。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextQuality {
+    /// 可打印字符占比
+    pub printable_ratio: f64,
+    /// Unicode 替换字符 U+FFFD 占比
+    pub replacement_ratio: f64,
+    /// 控制字符占比
+    pub control_ratio: f64,
+}
+
+impl TextQuality {
+    /// 是否明显是乱码。
+    ///
+    /// 阈值故意放得比较宽：真正能读的正文即使排版再差，可打印占比也很高；
+    /// 而 CID 字体映射失败的典型产物是大量 `�`、空字符或私用区码位。
+    pub fn is_garbled(&self) -> bool {
+        self.printable_ratio < 0.80 || self.replacement_ratio > 0.05 || self.control_ratio > 0.10
     }
-    let header = &bytes[..bytes.len().min(5)];
-    if !header.starts_with(b"%PDF-") {
-        return Err(AppError::Message("这不是有效的 PDF（缺少 %PDF- 头）".into()));
+}
+
+/// 统计一段提取文本的可读性。
+pub fn assess_text_quality(text: &str) -> TextQuality {
+    let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if chars.is_empty() {
+        return TextQuality { printable_ratio: 0.0, replacement_ratio: 0.0, control_ratio: 0.0 };
     }
-    let objects = scan_objects(&bytes);
+    let total = chars.len() as f64;
+    let printable = chars.iter().filter(|c| !c.is_control() && **c != '\u{FFFD}').count() as f64;
+    let replacement = chars.iter().filter(|c| **c == '\u{FFFD}').count() as f64;
+    let control = chars.iter().filter(|c| c.is_control()).count() as f64;
+    TextQuality { printable_ratio: printable / total, replacement_ratio: replacement / total, control_ratio: control / total }
+}
+
+/// 清理主解析器给出的整页文本。
+///
+/// lopdf 会把每个文本算子的结果直接拼起来，行内常有用于对齐的尾随空格，
+/// 中文 PDF 里还常出现「汉 字」这种被拆开的空格，这些都会影响检索质量。
+pub fn clean_extracted_text(input: &str) -> String {
+    let normalized = normalize_page_text(input);
+    let chars: Vec<char> = normalized.chars().collect();
+    let mut output = String::with_capacity(chars.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let current = chars[index];
+        if current == ' ' && index + 1 < chars.len() {
+            let next = chars[index + 1];
+            let previous = output.chars().last();
+            // 中文之间的对齐空格直接去掉：不影响语义，还原本来就没有的排版
+            let between_cjk = previous.map(is_cjk).unwrap_or(false) && is_cjk(next);
+            // 中文标点前后的空格同理
+            let before_punctuation = is_cjk_punctuation(next) || (previous.map(is_cjk_punctuation).unwrap_or(false) && is_cjk(next));
+            if between_cjk || before_punctuation {
+                index += 1;
+                continue;
+            }
+        }
+        output.push(current);
+        index += 1;
+    }
+    output
+}
+
+fn is_cjk(value: char) -> bool {
+    matches!(value as u32, 0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2FA1F)
+}
+
+fn is_cjk_punctuation(value: char) -> bool {
+    matches!(value, '。' | '，' | '、' | '；' | '：' | '？' | '！' | '“' | '”' | '‘' | '’' | '（' | '）' | '《' | '》' | '【' | '】' | '…' | '—' | '·')
+}
+
+/// 从 lopdf 的文档信息字典里取标题。
+fn lopdf_title(doc: &lopdf::Document) -> Option<String> {
+    let Ok(lopdf::Object::Reference(info_id)) = doc.trailer.get(b"Info") else { return None };
+    let Ok(lopdf::Object::Dictionary(info)) = doc.get(info_id).ok()? else { return None };
+    let Ok(lopdf::Object::String(raw, _)) = info.get(b"Title") else { return None };
+    let text = decode_pdf_string(raw);
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// 主解析路径：用成熟库按页取文本。
+///
+/// lopdf 会正确处理 xref / xref 流（PDF 1.5+ 对象流）、FlateDecode、
+/// 以及嵌入字体的 `ToUnicode` 映射 —— 这些正是手写解析器搞不定、
+/// 导致真实中文 PDF 变成乱码的部分。
+fn parse_with_primary_engine(bytes: &[u8]) -> Result<ParsedSource, AppError> {
+    let doc = lopdf::Document::load_mem(bytes)
+        .map_err(|error| AppError::Message(format!("PDF 结构无法解析，可能已损坏：{error}")))?;
+    if doc.is_encrypted() {
+        return Err(AppError::Message(ENCRYPTED_MESSAGE.into()));
+    }
+    let pages = doc.get_pages();
+    if pages.is_empty() {
+        return Err(AppError::Message("PDF 里没有找到任何页面，文件可能已损坏".into()));
+    }
+
+    let mut parsed = ParsedSource {
+        title: lopdf_title(&doc).unwrap_or_default(),
+        author: None,
+        origin: None,
+        kind: Some(SourceKind::Pdf),
+        cover: None,
+        cover_extension: None,
+        page_count: pages.len() as u32,
+        chunks: Vec::new(),
+        warnings: Vec::new(),
+    };
+
+    let mut position = 0usize;
+    let mut pages_with_text = 0usize;
+    let mut garbled_pages = 0usize;
+    let mut failed_pages = 0usize;
+
+    for page_number in pages.keys() {
+        // 带上限的版本：内容流解压后超过 32 MB 会被拒绝，防解压炸弹
+        let extracted = doc.extract_text_with_limit(&[*page_number], MAX_STREAM_BYTES);
+        let text = match extracted {
+            Ok(text) => clean_extracted_text(&text),
+            Err(_) => {
+                failed_pages += 1;
+                continue;
+            }
+        };
+        let text: String = text.chars().take(MAX_PAGE_CHARS).collect();
+        if text.trim().is_empty() {
+            continue;
+        }
+        // 提取到了字符但读不出来 —— 不要静默入库
+        if assess_text_quality(&text).is_garbled() {
+            garbled_pages += 1;
+            continue;
+        }
+        pages_with_text += 1;
+        let heading = format!("第 {} 页", page_number);
+        let locator = Locator { page: Some(*page_number), chapter: None, heading: Some(heading.clone()) };
+        let chunks = chunker::split_into_chunks(&heading, &text, position, &locator);
+        position += chunks.len();
+        parsed.chunks.extend(chunks);
+        if position >= crate::import::MAX_DOCUMENTS_PER_SOURCE {
+            parsed.add_warning("页数过多，只导入了前一部分".into());
+            break;
+        }
+    }
+
+    if parsed.chunks.is_empty() {
+        if garbled_pages > 0 {
+            return Err(AppError::Message(
+                "这份 PDF 的字体编码无法识别，提取出的文字全是乱码；换一份带文字层的 PDF 试试。".into(),
+            ));
+        }
+        if failed_pages == pages.len() {
+            return Err(AppError::Message("PDF 的正文流无法读取，可能已损坏".into()));
+        }
+        return Err(AppError::Message(SCANNED_MESSAGE.into()));
+    }
+    if parsed.title.is_empty() {
+        parsed.title = first_line_title(&parsed.chunks);
+    }
+
+    let without_text = pages.len() - pages_with_text;
+    if without_text > 0 {
+        parsed.add_warning(format!("共 {} 页，其中 {without_text} 页没有可用文字层（可能是图片页）", pages.len()));
+    }
+    if garbled_pages > 0 {
+        parsed.add_warning(format!("有 {garbled_pages} 页的字体编码无法完整识别，这些页已跳过"));
+    }
+    if failed_pages > 0 {
+        parsed.add_warning(format!("有 {failed_pages} 页的正文流无法解压，已跳过"));
+    }
+    Ok(parsed)
+}
+
+/// 兜底路径：原有���手写顺序扫描解析器。
+///
+/// 只在主解析器整个失败时才用：它不认识对象流，命中率低，
+/// 但对极简单、结构规整的文件仍然有效，留着比删掉强。
+fn parse_with_legacy_fallback(bytes: &[u8]) -> Result<ParsedSource, AppError> {
+    let objects = scan_objects(bytes);
     if objects.is_empty() {
         return Err(AppError::Message("PDF 结构无法解析，可能已损坏".into()));
     }
-
-    // 页面对象：含 /Type /Page 且带 /Contents
     let mut page_numbers: Vec<u32> = objects
         .iter()
         .filter(|(_, body)| dict_has_name(body, "Page") && !dict_has_name(body, "Pages") && dict_value(body, "Contents").is_some())
@@ -462,45 +643,62 @@ pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
         chunks: Vec::new(),
         warnings: Vec::new(),
     };
-
-    let mut position = 0;
-    let mut pages_with_text = 0;
-    for (index, number) in page_numbers.iter().enumerate() {
+    let mut position = 0usize;
+    let mut pages_with_text = 0usize;
+    for number in &page_numbers {
         let Some(body) = objects.get(number) else { continue };
-        let content = match collect_page_content(&objects, body) {
-            Some(bytes) => bytes,
-            None => continue,
-        };
-        let text = extract_text_from_content(&content);
-        let text: String = text.chars().take(MAX_PAGE_CHARS).collect();
+        let Some(content) = collect_page_content(&objects, body) else { continue };
+        let text: String = extract_text_from_content(&content).chars().take(MAX_PAGE_CHARS).collect();
         if text.trim().is_empty() {
             continue;
         }
         pages_with_text += 1;
-        let heading = format!("第 {} 页", index + 1);
-        let locator = Locator { page: Some((index + 1) as u32), chapter: None, heading: Some(heading.clone()) };
+        let page_number = page_index_of(&page_numbers, *number);
+        let heading = format!("第 {page_number} 页");
+        let locator = Locator { page: Some(page_number), chapter: None, heading: Some(heading.clone()) };
         let chunks = chunker::split_into_chunks(&heading, &text, position, &locator);
         position += chunks.len();
         parsed.chunks.extend(chunks);
         if position >= crate::import::MAX_DOCUMENTS_PER_SOURCE {
-            parsed.add_warning("页数过多，只导入了前一部分");
             break;
         }
     }
-
+    if parsed.chunks.is_empty() {
+        return Err(AppError::Message(SCANNED_MESSAGE.into()));
+    }
     if parsed.title.is_empty() {
         parsed.title = first_line_title(&parsed.chunks);
-    }
-    if parsed.chunks.is_empty() {
-        // 计划 9.4.4：扫描版 PDF 明确提示，不导入空资料
-        return Err(AppError::Message(
-            "这份 PDF 没有可提取的文字，可能是扫描版；暂不支持 OCR，已跳过导入".into(),
-        ));
     }
     if pages_with_text < page_numbers.len() {
         parsed.add_warning(format!("共 {} 页，其中 {} 页没有文字层（可能是图片页）", page_numbers.len(), page_numbers.len() - pages_with_text));
     }
+    parsed.add_warning("这份 PDF 用的是兼容解析路径，部分页面可能不完整".into());
     Ok(parsed)
+}
+
+fn page_index_of(page_numbers: &[u32], number: u32) -> u32 {
+    page_numbers.iter().position(|value| *value == number).map(|index| index as u32 + 1).unwrap_or(1)
+}
+
+/// 解析 PDF 并按页生成文档块。
+pub fn parse(bytes: Vec<u8>) -> Result<ParsedSource, AppError> {
+    if bytes.len() as u64 > MAX_PDF_BYTES {
+        return Err(AppError::Message(format!(
+            "PDF 体积超过 {} MB 的导入上限",
+            MAX_PDF_BYTES / 1024 / 1024
+        )));
+    }
+    crate::import::check_file_signature(SourceKind::Pdf, &bytes)?;
+
+    // 主路径优先；只有主路径失败才退回手写解析器。
+    // 两条路都失败时以主路径的错误为准：它更能说明真实原因（加密 / 扫描版 / 损坏）。
+    match parse_with_primary_engine(&bytes) {
+        Ok(parsed) => Ok(parsed),
+        Err(primary) => match parse_with_legacy_fallback(&bytes) {
+            Ok(parsed) => Ok(parsed),
+            Err(_) => Err(primary),
+        },
+    }
 }
 
 /// 收集一页的内容流。`/Contents` 可能是单个引用，也可能是引用数组。
@@ -529,11 +727,22 @@ fn collect_page_content(objects: &ObjectTable, page_body: &[u8]) -> Option<Vec<u
 }
 
 /// 没有元数据标题时，用正文第一行当标题。
+///
+/// 页眉页脚会被过滤掉：纯页码、「第 N 页」这类行当书名毫无意义，
+/// 而且不同文件抽到的行数还不一样，会让去重 hash 抖动。
 fn first_line_title(chunks: &[crate::import::DocumentChunk]) -> String {
+    let is_noise = |line: &str| {
+        let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.is_empty() || compact.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+        // 「第 12 页」「第 3 页 - 书名」这类页眉页脚不能当书名
+        compact.starts_with('第') && compact.ends_with('页') && compact.chars().skip(1).all(|c| c.is_ascii_digit() || c == '页')
+    };
     chunks
         .first()
-        .and_then(|chunk| chunk.content.lines().find(|line| !line.trim().is_empty()))
-        .map(|line| line.trim().chars().take(60).collect::<String>())
+        .and_then(|chunk| chunk.content.lines().map(str::trim).find(|line| !is_noise(line)))
+        .map(|line| line.chars().take(60).collect::<String>())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| "未命名 PDF".to_owned())
 }
