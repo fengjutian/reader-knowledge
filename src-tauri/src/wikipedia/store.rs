@@ -69,7 +69,10 @@ impl JobStatus {
 
     /// 是否终态。终态不再接受任何迁移。
     pub fn is_terminal(&self) -> bool {
-        matches!(self, JobStatus::Completed | JobStatus::Cancelled | JobStatus::Failed)
+        matches!(
+            self,
+            JobStatus::Completed | JobStatus::Cancelled | JobStatus::Failed
+        )
     }
 
     /// 合法迁移表。paused 可以从任意进行中状态进入，
@@ -80,7 +83,10 @@ impl JobStatus {
             return false;
         }
         match self {
-            Pending => matches!(next, Downloading | Verifying | Parsing | Failed | Cancelled | Paused),
+            Pending => matches!(
+                next,
+                Downloading | Verifying | Parsing | Failed | Cancelled | Paused
+            ),
             Downloading => matches!(next, Verifying | Failed | Cancelled | Paused),
             Verifying => matches!(next, Parsing | Failed | Cancelled | Paused),
             Parsing => matches!(next, ResolvingRedirects | Failed | Cancelled | Paused),
@@ -89,7 +95,19 @@ impl JobStatus {
             ReadyToPublish => matches!(next, Publishing | Completed | Failed | Cancelled | Paused),
             Publishing => matches!(next, Completed | Failed | Cancelled | Paused),
             // 从 paused 恢复只能回到记录下来的阶段，由上层显式给出目标状态。
-            Paused => matches!(next, Downloading | Verifying | Parsing | ResolvingRedirects | Validating | ReadyToPublish | Publishing | Failed | Cancelled),
+            Paused => matches!(
+                next,
+                Pending
+                    | Downloading
+                    | Verifying
+                    | Parsing
+                    | ResolvingRedirects
+                    | Validating
+                    | ReadyToPublish
+                    | Publishing
+                    | Failed
+                    | Cancelled
+            ),
             // 终态：is_terminal 已经拦掉了，这里只是让 match 穷尽。
             Completed | Cancelled | Failed => false,
         }
@@ -217,8 +235,20 @@ pub fn create_job(
             request
                 .source_url
                 .clone()
-                .map(|base| format!("{}{}", base.trim_end_matches('/'), "/zhwiki-latest-pages-articles-multistream.xml.bz2"))
-                .or_else(|| Some(format!("{}{}", config.base_url.trim_end_matches('/'), "/zhwiki-latest-pages-articles-multistream.xml.bz2")))
+                .map(|base| {
+                    format!(
+                        "{}{}",
+                        base.trim_end_matches('/'),
+                        "/zhwiki-latest-pages-articles-multistream.xml.bz2"
+                    )
+                })
+                .or_else(|| {
+                    Some(format!(
+                        "{}{}",
+                        config.base_url.trim_end_matches('/'),
+                        "/zhwiki-latest-pages-articles-multistream.xml.bz2"
+                    ))
+                })
         })
         .unwrap_or_default();
     let dump_version = request
@@ -258,7 +288,12 @@ pub fn create_job(
             now
         ],
     )?;
-    audit(&connection, "job_created", Some(&id), &format!("mode={}", mode.as_str()))?;
+    audit(
+        &connection,
+        "job_created",
+        Some(&id),
+        &format!("mode={}", mode.as_str()),
+    )?;
     get_job(db, &id)?.ok_or_else(|| AppError::Message("任务创建后读不到".to_string()))
 }
 
@@ -300,7 +335,9 @@ fn map_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImportJob> {
 
 pub fn get_job(db: &Database, id: &str) -> Result<Option<ImportJob>, AppError> {
     let connection = db.connect()?;
-    let mut statement = connection.prepare(&format!("SELECT {JOB_COLUMNS} FROM glossary_import_jobs WHERE id = ?1"))?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {JOB_COLUMNS} FROM glossary_import_jobs WHERE id = ?1"
+    ))?;
     let job = statement
         .query_row([id], map_job)
         .optional()
@@ -324,7 +361,11 @@ pub fn list_jobs(db: &Database, limit: usize) -> Result<Vec<ImportJob>, AppError
 pub fn job_config(db: &Database, id: &str) -> Result<serde_json::Value, AppError> {
     let connection = db.connect()?;
     let raw: String = connection
-        .query_row("SELECT config_json FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT config_json FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?
         .unwrap_or_else(|| "{}".to_string());
     Ok(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default())))
@@ -336,9 +377,17 @@ pub fn transition(db: &Database, id: &str, next: JobStatus) -> Result<(), AppErr
     transition_on(&connection, id, next)
 }
 
-pub fn transition_on(connection: &rusqlite::Connection, id: &str, next: JobStatus) -> Result<(), AppError> {
+pub fn transition_on(
+    connection: &rusqlite::Connection,
+    id: &str,
+    next: JobStatus,
+) -> Result<(), AppError> {
     let current: String = connection
-        .query_row("SELECT status FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT status FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?
         .ok_or_else(|| AppError::Message(format!("任务不存在：{id}")))?;
     let current = JobStatus::parse(&current)?;
@@ -369,7 +418,11 @@ pub fn mark_failed(db: &Database, id: &str, message: &str) -> Result<(), AppErro
     let connection = db.connect()?;
     let now = now_seconds();
     let status: Option<String> = connection
-        .query_row("SELECT status FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT status FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?;
     let Some(status) = status else {
         return Ok(());
@@ -445,12 +498,24 @@ pub fn set_publish_counts(
             inserted_count = ?2, updated_count = ?3, skipped_count = ?4,
             conflict_count = ?5, error_count = ?6, updated_at = ?7
           WHERE id = ?1",
-        params![id, inserted, updated, skipped, conflicts, errors, now_seconds()],
+        params![
+            id,
+            inserted,
+            updated,
+            skipped,
+            conflicts,
+            errors,
+            now_seconds()
+        ],
     )?;
     Ok(())
 }
 
-pub fn save_checkpoint(db: &Database, id: &str, checkpoint: &serde_json::Value) -> Result<(), AppError> {
+pub fn save_checkpoint(
+    db: &Database,
+    id: &str,
+    checkpoint: &serde_json::Value,
+) -> Result<(), AppError> {
     let connection = db.connect()?;
     connection.execute(
         "UPDATE glossary_import_jobs SET checkpoint_json = ?2, updated_at = ?3 WHERE id = ?1",
@@ -462,7 +527,11 @@ pub fn save_checkpoint(db: &Database, id: &str, checkpoint: &serde_json::Value) 
 pub fn load_checkpoint(db: &Database, id: &str) -> Result<serde_json::Value, AppError> {
     let connection = db.connect()?;
     let raw: Option<String> = connection
-        .query_row("SELECT checkpoint_json FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT checkpoint_json FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?;
     Ok(raw
         .and_then(|value| serde_json::from_str(&value).ok())
@@ -473,7 +542,11 @@ pub fn load_checkpoint(db: &Database, id: &str) -> Result<serde_json::Value, App
 pub fn pause_job(db: &Database, id: &str) -> Result<(), AppError> {
     let connection = db.connect()?;
     let current: String = connection
-        .query_row("SELECT status FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT status FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?
         .ok_or_else(|| AppError::Message(format!("任务不存在：{id}")))?;
     let status = JobStatus::parse(&current)?;
@@ -494,10 +567,13 @@ pub fn pause_job(db: &Database, id: &str) -> Result<(), AppError> {
 
 /// 恢复：回到 checkpoint 里记录的阶段。
 pub fn resume_job(db: &Database, id: &str) -> Result<JobStatus, AppError> {
-    let current = get_job(db, id)?
-        .ok_or_else(|| AppError::Message(format!("导入任务不存在：{id}")))?;
+    let current =
+        get_job(db, id)?.ok_or_else(|| AppError::Message(format!("导入任务不存在：{id}")))?;
     if JobStatus::parse(&current.status)? != JobStatus::Paused {
-        return Err(AppError::Message(format!("只有 paused 任务可以继续，当前是 {}", current.status)));
+        return Err(AppError::Message(format!(
+            "只有 paused 任务可以继续，当前是 {}",
+            current.status
+        )));
     }
     let checkpoint = load_checkpoint(db, id)?;
     let resume_to = checkpoint
@@ -551,7 +627,11 @@ pub fn save_report(db: &Database, id: &str, report: &serde_json::Value) -> Resul
 pub fn get_report(db: &Database, id: &str) -> Result<Option<serde_json::Value>, AppError> {
     let connection = db.connect()?;
     let raw: Option<String> = connection
-        .query_row("SELECT report_json FROM glossary_import_jobs WHERE id = ?1", [id], |row| row.get(0))
+        .query_row(
+            "SELECT report_json FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
         .optional()?;
     Ok(raw.and_then(|value| serde_json::from_str(&value).ok()))
 }
@@ -614,7 +694,16 @@ pub fn log_issue(
     retryable: bool,
 ) -> Result<(), AppError> {
     let connection = db.connect()?;
-    log_issue_on(&connection, job_id, record_type, code, message, page_id, title, retryable)
+    log_issue_on(
+        &connection,
+        job_id,
+        record_type,
+        code,
+        message,
+        page_id,
+        title,
+        retryable,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -734,7 +823,9 @@ pub fn validate_batch(db: &Database, job_id: &str) -> Result<BatchValidation, Ap
               WHERE job_id = ?1 GROUP BY filter_status",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(AppError::from)?;
         for row in rows {
             let (status, count) = row.map_err(AppError::from)?;
@@ -771,7 +862,9 @@ pub fn validate_batch(db: &Database, job_id: &str) -> Result<BatchValidation, Ap
         )
         .optional()?
         .unwrap_or_default() as u64;
-    validation.publishable = validation.accepted.saturating_sub(validation.title_conflicts);
+    validation.publishable = validation
+        .accepted
+        .saturating_sub(validation.title_conflicts);
     Ok(validation)
 }
 
@@ -779,7 +872,14 @@ pub fn validate_batch(db: &Database, job_id: &str) -> Result<BatchValidation, Ap
 pub fn reason_distribution(
     db: &Database,
     job_id: &str,
-) -> Result<(HashMap<String, u64>, HashMap<String, u64>, HashMap<String, u64>), AppError> {
+) -> Result<
+    (
+        HashMap<String, u64>,
+        HashMap<String, u64>,
+        HashMap<String, u64>,
+    ),
+    AppError,
+> {
     let connection = db.connect()?;
     let mut filters: HashMap<String, u64> = HashMap::new();
     {
@@ -790,7 +890,9 @@ pub fn reason_distribution(
               GROUP BY filter_reason",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(AppError::from)?;
         for row in rows {
             let (reason, count) = row.map_err(AppError::from)?;
@@ -803,7 +905,9 @@ pub fn reason_distribution(
             "SELECT record_type, count(*) FROM glossary_import_issues WHERE job_id = ?1 GROUP BY record_type",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(AppError::from)?;
         for row in rows {
             let (kind, count) = row.map_err(AppError::from)?;
@@ -816,7 +920,9 @@ pub fn reason_distribution(
             "SELECT code, count(*) FROM glossary_import_issues WHERE job_id = ?1 GROUP BY code ORDER BY count(*) DESC",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(AppError::from)?;
         for row in rows {
             let (code, count) = row.map_err(AppError::from)?;
@@ -840,7 +946,9 @@ pub fn resolve_batch_redirects(
               WHERE job_id = ?1 AND filter_status = 'redirect' AND redirect_title IS NOT NULL",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(AppError::from)?;
         let mut map = HashMap::new();
         for row in rows {
@@ -880,14 +988,20 @@ pub fn resolve_batch_redirects(
                 ))
             })
             .map_err(AppError::from)?;
-        mapped.collect::<Result<Vec<_>, _>>().map_err(AppError::from)?
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?
     };
 
     let mut resolved = 0_u64;
     let mut broken = 0_u64;
     let transaction = connection.unchecked_transaction()?;
     for (page_id, title, target) in rows {
-        let outcome = super::redirect::resolve_redirect(&normalize_search_key(&target), &redirect_map, max_depth);
+        let outcome = super::redirect::resolve_redirect(
+            &normalize_search_key(&target),
+            &redirect_map,
+            max_depth,
+        );
         let resolved_key = match &outcome {
             RedirectOutcome::Resolved { final_title, .. } => final_title.clone(),
             other => {
@@ -985,7 +1099,10 @@ pub fn publish_batch(
                                 PublishOutcome::Conflict => PUBLISH_CONFLICT,
                             },
                             match outcome {
-                                PublishOutcome::Inserted | PublishOutcome::Updated | PublishOutcome::Skipped => publish_row_target_id(&transaction, id, job_id),
+                                PublishOutcome::Inserted
+                                | PublishOutcome::Updated
+                                | PublishOutcome::Skipped =>
+                                    publish_row_target_id(&transaction, id, job_id),
                                 PublishOutcome::Conflict => None,
                             }
                         ],
@@ -1067,7 +1184,9 @@ fn fetch_publish_chunk(
             ))
         })
         .map_err(AppError::from)?;
-    let rows = rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)?;
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::from)?;
     Ok(rows)
 }
 
@@ -1106,7 +1225,8 @@ fn publish_row(
         )
         .optional()?;
 
-    let Some((term_id, source, external_page_id, content_hash, manually_edited, _snapshot)) = existing
+    let Some((term_id, source, external_page_id, content_hash, manually_edited, _snapshot)) =
+        existing
     else {
         // 情况 1：没有同名记录 -> 新建待确认候选。
         transaction.execute(
@@ -1205,7 +1325,11 @@ fn publish_row(
         transaction,
         job_id,
         "name_conflict",
-        if source == "wikipedia" { "page_id_mismatch" } else { "manual_name_conflict" },
+        if source == "wikipedia" {
+            "page_id_mismatch"
+        } else {
+            "manual_name_conflict"
+        },
         &format!(
             "{} 已存在（来源 {}，外部 id {}），维基 page {} 不自动合并",
             row.normalized_title, source, external_page_id, row.page_id
@@ -1238,7 +1362,8 @@ pub fn publish_aliases(db: &Database, job_id: &str, _dump_version: &str) -> Resu
                 ))
             })
             .map_err(AppError::from)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)?
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?
     };
     if pairs.is_empty() {
         return Ok(0);
@@ -1276,15 +1401,18 @@ fn sync_aliases_json(connection: &rusqlite::Connection, job_id: &str) -> Result<
               WHERE s.job_id = ?1 AND s.filter_status = 'redirect'",
         )?;
         let rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(AppError::from)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)?
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?
     };
-    let mut update = connection.prepare("UPDATE glossary_terms SET aliases_json = ?2 WHERE id = ?1")?;
+    let mut update =
+        connection.prepare("UPDATE glossary_terms SET aliases_json = ?2 WHERE id = ?1")?;
     for (term_id, _) in targets {
-        let mut alias_statement = connection.prepare(
-            "SELECT alias FROM glossary_term_aliases WHERE term_id = ?1 ORDER BY alias",
-        )?;
+        let mut alias_statement = connection
+            .prepare("SELECT alias FROM glossary_term_aliases WHERE term_id = ?1 ORDER BY alias")?;
         let mut aliases: Vec<String> = alias_statement
             .query_map([term_id], |row| row.get::<_, String>(0))
             .map_err(AppError::from)?
@@ -1337,7 +1465,9 @@ pub fn count_by_status(db: &Database) -> Result<Vec<(String, i64)>, AppError> {
         "SELECT status, count(*) FROM glossary_terms GROUP BY status ORDER BY count(*) DESC",
     )?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(AppError::from)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
 }

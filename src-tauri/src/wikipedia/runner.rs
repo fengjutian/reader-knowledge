@@ -11,7 +11,9 @@ use crate::wikipedia::parser::{self, Flow, ParseIssue, WikiPage};
 use crate::wikipedia::redirect::DEFAULT_MAX_REDIRECT_DEPTH;
 use crate::wikipedia::store::{self, ImportRequest, JobStatus, PublishSummary, StagingRow};
 use crate::wikipedia::title::{looks_like_list_page, normalize_search_key, normalize_title};
-use crate::wikipedia::wikitext::{SummaryOptions, SummaryQuality, extract_summary, soft_redirect_target};
+use crate::wikipedia::wikitext::{
+    extract_summary, soft_redirect_target, SummaryOptions, SummaryQuality,
+};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -44,8 +46,14 @@ pub fn run_pipeline(
 ) -> Result<RunSummary, AppError> {
     config.ensure_temp_dir()?;
     let lock_path = config.temp_dir.join(format!("wikipedia-job-{job_id}.lock"));
-    let lock_file = OpenOptions::new().create(true).read(true).write(true).open(&lock_path)
-        .map_err(|error| AppError::Message(format!("无法打开任务锁 {}：{error}", lock_path.display())))?;
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            AppError::Message(format!("无法打开任务锁 {}：{error}", lock_path.display()))
+        })?;
     if lock_file.try_lock().is_err() {
         let current = store::get_job(&db, &job_id)?
             .ok_or_else(|| AppError::Message(format!("导入任务不存在：{job_id}")))?;
@@ -100,6 +108,10 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         .and_then(json_u64)
         .unwrap_or(config.batch_size as u64)
         .max(1) as usize;
+    let max_retries = job_config
+        .get("maxRetries")
+        .and_then(json_u64)
+        .unwrap_or(config.max_retries as u64) as u32;
     let mode = ImportMode::parse(&job.mode)?;
     let filter_disambiguation = job_config
         .get("filterDisambiguation")
@@ -126,28 +138,42 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
     };
 
     // 只有下载/校验/解析阶段需要 dump。后续阶段恢复时直接从 staging 继续。
-    let needs_dump = matches!(status, JobStatus::Pending | JobStatus::Downloading | JobStatus::Verifying | JobStatus::Parsing);
-    let dump_path: Option<PathBuf> = if needs_dump { Some(match request.local_file.clone() {
-        Some(path) => {
-            if !path.exists() {
-                return Err(AppError::Message(format!("本地 dump 不存在：{}", path.display())));
+    let needs_dump = matches!(
+        status,
+        JobStatus::Pending | JobStatus::Downloading | JobStatus::Verifying | JobStatus::Parsing
+    );
+    let dump_path: Option<PathBuf> = if needs_dump {
+        Some(match request.local_file.clone() {
+            Some(path) => {
+                if !path.exists() {
+                    return Err(AppError::Message(format!(
+                        "本地 dump 不存在：{}",
+                        path.display()
+                    )));
+                }
+                path
             }
-            path
-        }
-        None => {
-            if let Some(signal) = control_signal(db, job_id)? {
-                return Ok(match signal {
-                    Signal::Pause => paused_summary(job_id, status),
-                    Signal::Cancel => cancelled_summary(job_id),
-                });
+            None => {
+                if let Some(signal) = control_signal(db, job_id)? {
+                    return Ok(match signal {
+                        Signal::Pause => paused_summary(job_id, status),
+                        Signal::Cancel => cancelled_summary(job_id),
+                    });
+                }
+                if status == JobStatus::Pending {
+                    store::transition(db, job_id, JobStatus::Downloading)?;
+                }
+                let path = download_dump(db, job_id, &job, config, max_retries)?;
+                if status != JobStatus::Verifying {
+                    store::transition(db, job_id, JobStatus::Verifying)?;
+                }
+                verify_dump(&path, config)?;
+                path
             }
-            if status == JobStatus::Pending { store::transition(db, job_id, JobStatus::Downloading)?; }
-            let path = download_dump(db, job_id, &job, config)?;
-            if status != JobStatus::Verifying { store::transition(db, job_id, JobStatus::Verifying)?; }
-            verify_dump(&path, config)?;
-            path
-        }
-    }) } else { None };
+        })
+    } else {
+        None
+    };
 
     if control_signal(db, job_id)? == Some(Signal::Cancel) {
         return Ok(cancelled_summary(job_id));
@@ -159,72 +185,81 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         status = JobStatus::Parsing;
     }
     if needs_dump {
-      let staged = stage_pages(
-        db,
-        job_id,
-        dump_path.as_deref().expect("dump path is present while parsing"),
-        config,
-        &summary_options,
-        mode,
-        filter_disambiguation,
-        filter_list_pages,
-        handle_redirects,
-        max_items,
-        batch_size,
-      )?;
-      if staged == Some(Signal::Pause) {
-        return Ok(paused_summary(job_id, JobStatus::Parsing));
-      }
-      if staged == Some(Signal::Cancel) {
-        return Ok(cancelled_summary(job_id));
-      }
-      status = JobStatus::Parsing;
+        let staged = stage_pages(
+            db,
+            job_id,
+            dump_path
+                .as_deref()
+                .expect("dump path is present while parsing"),
+            config,
+            &summary_options,
+            mode,
+            filter_disambiguation,
+            filter_list_pages,
+            handle_redirects,
+            max_items,
+            batch_size,
+        )?;
+        if staged == Some(Signal::Pause) {
+            return Ok(paused_summary(job_id, JobStatus::Parsing));
+        }
+        if staged == Some(Signal::Cancel) {
+            return Ok(cancelled_summary(job_id));
+        }
+        status = JobStatus::Parsing;
     }
 
     // ---------- 3. 重定向解析 ----------
     if status == JobStatus::Parsing {
-      store::transition(db, job_id, JobStatus::ResolvingRedirects)?;
-      status = JobStatus::ResolvingRedirects;
+        store::transition(db, job_id, JobStatus::ResolvingRedirects)?;
+        status = JobStatus::ResolvingRedirects;
     }
     if status == JobStatus::ResolvingRedirects {
-      if let Some(signal) = control_signal(db, job_id)? {
-        return Ok(match signal { Signal::Pause => paused_summary(job_id, status), Signal::Cancel => cancelled_summary(job_id) });
-      }
-      let (resolved, broken) = store::resolve_batch_redirects(db, job_id, DEFAULT_MAX_REDIRECT_DEPTH)?;
-      if resolved > 0 || broken > 0 {
-        store::log_issue(
-            db,
-            job_id,
-            "validation_error",
-            "redirect_summary",
-            &format!("重定向解析完成：成功 {resolved}，异常 {broken}"),
-            None,
-            "",
-            false,
-        )?;
-      }
-      store::transition(db, job_id, JobStatus::Validating)?;
-      status = JobStatus::Validating;
+        if let Some(signal) = control_signal(db, job_id)? {
+            return Ok(match signal {
+                Signal::Pause => paused_summary(job_id, status),
+                Signal::Cancel => cancelled_summary(job_id),
+            });
+        }
+        let (resolved, broken) =
+            store::resolve_batch_redirects(db, job_id, DEFAULT_MAX_REDIRECT_DEPTH)?;
+        if resolved > 0 || broken > 0 {
+            store::log_issue(
+                db,
+                job_id,
+                "validation_error",
+                "redirect_summary",
+                &format!("重定向解析完成：成功 {resolved}，异常 {broken}"),
+                None,
+                "",
+                false,
+            )?;
+        }
+        store::transition(db, job_id, JobStatus::Validating)?;
+        status = JobStatus::Validating;
     }
 
     // ---------- 4. 批次校验 ----------
     if status == JobStatus::Validating {
-      if let Some(signal) = control_signal(db, job_id)? {
-        return Ok(match signal { Signal::Pause => paused_summary(job_id, status), Signal::Cancel => cancelled_summary(job_id) });
-      }
-      let validation = store::validate_batch(db, job_id)?;
-    store::save_checkpoint(
-        db,
-        job_id,
-        &serde_json::json!({
-            "stage": "ready_to_publish",
-            "publishable": validation.publishable,
-            "titleConflicts": validation.title_conflicts,
-            "aliasConflicts": validation.alias_conflicts,
-        }),
-    )?;
-      store::transition(db, job_id, JobStatus::ReadyToPublish)?;
-      status = JobStatus::ReadyToPublish;
+        if let Some(signal) = control_signal(db, job_id)? {
+            return Ok(match signal {
+                Signal::Pause => paused_summary(job_id, status),
+                Signal::Cancel => cancelled_summary(job_id),
+            });
+        }
+        let validation = store::validate_batch(db, job_id)?;
+        store::save_checkpoint(
+            db,
+            job_id,
+            &serde_json::json!({
+                "stage": "ready_to_publish",
+                "publishable": validation.publishable,
+                "titleConflicts": validation.title_conflicts,
+                "aliasConflicts": validation.alias_conflicts,
+            }),
+        )?;
+        store::transition(db, job_id, JobStatus::ReadyToPublish)?;
+        status = JobStatus::ReadyToPublish;
     }
 
     // ---------- 5. 发布 ----------
@@ -268,7 +303,10 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
             .as_ref()
             .and_then(|job| JobStatus::parse(&job.status).ok())
             .unwrap_or(JobStatus::ReadyToPublish),
-        scanned: final_job.as_ref().map(|job| job.scanned_count).unwrap_or_default() as u64,
+        scanned: final_job
+            .as_ref()
+            .map(|job| job.scanned_count)
+            .unwrap_or_default() as u64,
         published,
         message: if job.auto_publish {
             "已完成".to_string()
@@ -293,6 +331,7 @@ fn download_dump(
     job_id: &str,
     job: &store::ImportJob,
     config: &WikipediaConfig,
+    max_retries: u32,
 ) -> Result<PathBuf, AppError> {
     let temp_dir = config.ensure_temp_dir()?;
     let client = download::build_client(&config.user_agent, Duration::from_secs(60))?;
@@ -303,13 +342,14 @@ fn download_dump(
     let started = Instant::now();
     let mut last_flush = Instant::now();
     let mut last_bytes = 0_u64;
-    let download_result = download::download_with_resume(&client, &remote, &temp_dir, |bytes| {
+    let mut progress = |bytes| {
         // 进度写库要节流：最多每秒一次。
         if last_flush.elapsed() < Duration::from_millis(config.progress_interval_ms) {
             return;
         }
         let elapsed = started.elapsed().as_secs_f64().max(0.001);
-        let speed = (bytes as f64 - last_bytes as f64) / elapsed.max(config.progress_interval_ms as f64 / 1000.0);
+        let speed = (bytes as f64 - last_bytes as f64)
+            / elapsed.max(config.progress_interval_ms as f64 / 1000.0);
         let _ = store::update_progress(
             db,
             job_id,
@@ -324,7 +364,23 @@ fn download_dump(
         );
         last_flush = Instant::now();
         last_bytes = bytes;
-    })?;
+    };
+    let mut attempt = 0_u32;
+    let download_result = loop {
+        match download::download_with_resume(&client, &remote, &temp_dir, &mut progress) {
+            Ok(result) => break result,
+            Err(error) if attempt < max_retries => {
+                attempt += 1;
+                store::set_error_message(
+                    db,
+                    job_id,
+                    &format!("下载失败，正在重试 {attempt}/{max_retries}：{error}"),
+                )?;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    store::set_error_message(db, job_id, "")?;
     store::update_progress(
         db,
         job_id,
@@ -381,7 +437,9 @@ fn stage_pages(
             "SELECT page_id, coalesce(revision_id, 0) FROM glossary_import_staging WHERE job_id = ?1",
         )?;
         let mut rows = statement
-            .query_map([job_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([job_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(AppError::from)?;
         let mut map = HashMap::new();
         while let Some(row) = rows.next() {
@@ -503,15 +561,7 @@ fn stage_pages(
     parser::parse_dump(reader, &mut on_page, &mut on_issue)?;
     flush(db, job_id, &mut batch, &counters)?;
     let parse_errors = count_issue_kind(db, job_id, "parse_error")?;
-    store::set_publish_counts(
-        db,
-        job_id,
-        0,
-        0,
-        counters.skipped as i64,
-        0,
-        parse_errors,
-    )?;
+    store::set_publish_counts(db, job_id, 0, 0, counters.skipped as i64, 0, parse_errors)?;
     store::save_checkpoint(
         db,
         job_id,
@@ -599,7 +649,10 @@ fn cancelled_summary(job_id: &str) -> RunSummary {
 
 #[derive(Debug)]
 enum PageDecision {
-    Accept { summary: String, quality: SummaryQuality },
+    Accept {
+        summary: String,
+        quality: SummaryQuality,
+    },
     Redirect(String),
     Skip(&'static str),
 }
@@ -626,14 +679,19 @@ fn classify(
     if soft_redirect_target(&page.text).is_some() {
         return PageDecision::Skip("soft_redirect");
     }
-    if filter_disambiguation && (is_disambiguation_title(&title) || has_disambiguation_template(&page.text)) {
+    if filter_disambiguation
+        && (is_disambiguation_title(&title) || has_disambiguation_template(&page.text))
+    {
         return PageDecision::Skip("disambiguation");
     }
     if filter_list_pages && looks_like_list_page(&title) {
         return PageDecision::Skip("list_page");
     }
     if matches!(mode, ImportMode::TitlesOnly) {
-        return PageDecision::Accept { summary: String::new(), quality: SummaryQuality::Short };
+        return PageDecision::Accept {
+            summary: String::new(),
+            quality: SummaryQuality::Short,
+        };
     }
     let cleaned = extract_summary(&page.text, *summary_options);
     let summary = cleaned.summary;
@@ -643,7 +701,10 @@ fn classify(
     if summary.chars().count() < MIN_USEFUL_CHARS {
         return PageDecision::Skip("too_short");
     }
-    PageDecision::Accept { summary, quality: cleaned.quality }
+    PageDecision::Accept {
+        summary,
+        quality: cleaned.quality,
+    }
 }
 
 fn is_disambiguation_title(title: &str) -> bool {
@@ -672,7 +733,11 @@ fn has_disambiguation_template(wikitext: &str) -> bool {
 /// 摘要级内容哈希：用于判断“这次导入是否真的带来新内容”。
 /// 哈希的是清洗后的摘要而不是原始 wikitext：模板或排版变化不应该被当成内容更新。
 pub fn content_hash(normalized_title: &str, summary: &str) -> String {
-    let payload = format!("{}\u{1}{}", normalize_search_key(normalized_title), summary.trim());
+    let payload = format!(
+        "{}\u{1}{}",
+        normalize_search_key(normalized_title),
+        summary.trim()
+    );
     format!("{:x}", md5::compute(payload.as_bytes()))
 }
 
@@ -708,13 +773,19 @@ mod tests {
     }
 
     fn options() -> SummaryOptions {
-        SummaryOptions { min_chars: 1, max_chars: 600 }
+        SummaryOptions {
+            min_chars: 1,
+            max_chars: 600,
+        }
     }
 
     #[test]
     fn 普通词条被接受() {
         let decision = classify(
-            &page("人工智能", "人工智能是研究如何让机器表现出类似人类智能的学科，广泛应用于搜索、翻译与推荐。"),
+            &page(
+                "人工智能",
+                "人工智能是研究如何让机器表现出类似人类智能的学科，广泛应用于搜索、翻译与推荐。",
+            ),
             &options(),
             ImportMode::Summary,
             true,
@@ -747,33 +818,72 @@ mod tests {
 
     #[test]
     fn 消歧义页被过滤() {
-        let by_title = classify(&page("苹果 (消歧义)", "苹果属多种植物。"), &options(), ImportMode::Summary, true, true);
+        let by_title = classify(
+            &page("苹果 (消歧义)", "苹果属多种植物。"),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        );
         assert!(matches!(by_title, PageDecision::Skip("disambiguation")));
-        let by_template = classify(&page("苹果属", "{{消歧义}}\n苹果属是苹果属的植物。"), &options(), ImportMode::Summary, true, true);
+        let by_template = classify(
+            &page("苹果属", "{{消歧义}}\n苹果属是苹果属的植物。"),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        );
         assert!(matches!(by_template, PageDecision::Skip("disambiguation")));
     }
 
     #[test]
     fn 列表页被过滤() {
-        let decision = classify(&page("中国电视剧列表", "以下是中国电视剧的完整列表。"), &options(), ImportMode::Summary, true, true);
+        let decision = classify(
+            &page("中国电视剧列表", "以下是中国电视剧的完整列表。"),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        );
         assert!(matches!(decision, PageDecision::Skip("list_page")));
     }
 
     #[test]
     fn 关闭过滤后列表页仍然进入() {
-        let decision = classify(&page("中国电视剧列表", "以下是中国电视剧的完整列表，收录了数百部剧集作品。"), &options(), ImportMode::Summary, false, false);
+        let decision = classify(
+            &page(
+                "中国电视剧列表",
+                "以下是中国电视剧的完整列表，收录了数百部剧集作品。",
+            ),
+            &options(),
+            ImportMode::Summary,
+            false,
+            false,
+        );
         assert!(matches!(decision, PageDecision::Accept { .. }));
     }
 
     #[test]
     fn 空页面被过滤() {
-        let decision = classify(&page("空页面", "{{Infobox|x}}"), &options(), ImportMode::Summary, true, true);
+        let decision = classify(
+            &page("空页面", "{{Infobox|x}}"),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        );
         assert!(matches!(decision, PageDecision::Skip("empty_page")));
     }
 
     #[test]
     fn 过短摘要被过滤() {
-        let decision = classify(&page("短条目", "太短。"), &options(), ImportMode::Summary, true, true);
+        let decision = classify(
+            &page("短条目", "太短。"),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        );
         assert!(matches!(decision, PageDecision::Skip("too_short")));
     }
 
@@ -783,12 +893,25 @@ mod tests {
         // 正文必须够长（超过 MIN_USEFUL_CHARS），否则会先被 too_short 拦掉。
         let body = "这是一段真实的中文说明文字。".repeat(3);
         // 注意 format! 里 `{{` 是转义花括号，模板字面量要写成 `{{{{`。
-        let text = format!("{{{{Infobox|x}}}}{}\n{}", "{{{{嵌套|内容}}}}".repeat(80), body);
-        match classify(&page("复杂页面", &text), &options(), ImportMode::Summary, true, true) {
+        let text = format!(
+            "{{{{Infobox|x}}}}{}\n{}",
+            "{{{{嵌套|内容}}}}".repeat(80),
+            body
+        );
+        match classify(
+            &page("复杂页面", &text),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        ) {
             PageDecision::Accept { quality, .. } => assert_eq!(quality, SummaryQuality::Degraded),
             PageDecision::Skip(reason) => {
                 let plain = extract_summary(&text, options());
-                panic!("应该被接受但带质量标记，实际被过滤为 {reason}，摘要={:?}", plain.summary);
+                panic!(
+                    "应该被接受但带质量标记，实际被过滤为 {reason}，摘要={:?}",
+                    plain.summary
+                );
             }
             other => panic!("应该被接受但带质量标记，实际是 {other:?}"),
         }
@@ -797,7 +920,13 @@ mod tests {
     #[test]
     fn 正文占比高时质量正常() {
         let text = "这是一段真实的中文正文内容。".repeat(40);
-        match classify(&page("正常页面", &text), &options(), ImportMode::Summary, true, true) {
+        match classify(
+            &page("正常页面", &text),
+            &options(),
+            ImportMode::Summary,
+            true,
+            true,
+        ) {
             PageDecision::Accept { quality, .. } => assert_ne!(quality, SummaryQuality::Degraded),
             other => panic!("正常页面不该 degraded，实际是 {other:?}"),
         }
@@ -808,12 +937,21 @@ mod tests {
         let first = content_hash("人工智能", "  摘要内容  ");
         let second = content_hash("人工智能", "摘要内容");
         assert_eq!(first, second, "首尾空白不应影响哈希");
-        assert_ne!(content_hash("人工智能", "摘要内容"), content_hash("机器学习", "摘要内容"));
+        assert_ne!(
+            content_hash("人工智能", "摘要内容"),
+            content_hash("机器学习", "摘要内容")
+        );
     }
 
     #[test]
     fn 标题模式不需要正文() {
-        let decision = classify(&page("仅标题", ""), &options(), ImportMode::TitlesOnly, true, true);
+        let decision = classify(
+            &page("仅标题", ""),
+            &options(),
+            ImportMode::TitlesOnly,
+            true,
+            true,
+        );
         match decision {
             PageDecision::Accept { summary, .. } => assert!(summary.is_empty()),
             _ => panic!("titles_only 应该接受"),

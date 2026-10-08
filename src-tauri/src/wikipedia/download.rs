@@ -144,7 +144,12 @@ pub fn probe(client: &Client, url: &str, allowed_hosts: &[String]) -> Result<Rem
                 .get(reqwest::header::ACCEPT_RANGES)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.contains("bytes"));
-            return Ok(RemoteFile { url: url.to_string(), file_name, total_bytes, supports_range });
+            return Ok(RemoteFile {
+                url: url.to_string(),
+                file_name,
+                total_bytes,
+                supports_range,
+            });
         }
     }
 
@@ -164,8 +169,18 @@ pub fn probe(client: &Client, url: &str, allowed_hosts: &[String]) -> Result<Rem
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.rsplit('/').next().and_then(|total| total.trim().parse().ok()));
-    Ok(RemoteFile { url: url.to_string(), file_name, total_bytes, supports_range: partial })
+        .and_then(|value| {
+            value
+                .rsplit('/')
+                .next()
+                .and_then(|total| total.trim().parse().ok())
+        });
+    Ok(RemoteFile {
+        url: url.to_string(),
+        file_name,
+        total_bytes,
+        supports_range: partial,
+    })
 }
 
 /// 续传决策。纯函数，方便单测覆盖各种组合。
@@ -215,7 +230,12 @@ where
     match plan {
         DownloadPlan::Complete => {
             on_progress(existing);
-            return Ok(DownloadResult { path: part, bytes: existing, resumed_from: existing, elapsed_ms: 0 });
+            return Ok(DownloadResult {
+                path: part,
+                bytes: existing,
+                resumed_from: existing,
+                elapsed_ms: 0,
+            });
         }
         DownloadPlan::Restart => {
             let _ = fs::remove_file(&part);
@@ -280,7 +300,8 @@ where
         written += read as u64;
         on_progress(written);
     }
-    file.flush().map_err(|error| AppError::Message(format!("刷新文件失败：{error}")))?;
+    file.flush()
+        .map_err(|error| AppError::Message(format!("刷新文件失败：{error}")))?;
     drop(file);
     if let Some(total) = remote.total_bytes {
         if written != total {
@@ -312,8 +333,12 @@ pub fn parse_md5sums(content: &str) -> HashMap<String, String> {
             let mut parts = line.split_whitespace();
             let digest = parts.next()?;
             let name = parts.next()?;
-            (digest.len() == 32 && digest.chars().all(|c| c.is_ascii_hexdigit()))
-                .then(|| (name.trim_start_matches('*').to_string(), digest.to_lowercase()))
+            (digest.len() == 32 && digest.chars().all(|c| c.is_ascii_hexdigit())).then(|| {
+                (
+                    name.trim_start_matches('*').to_string(),
+                    digest.to_lowercase(),
+                )
+            })
         })
         .collect()
 }
@@ -324,7 +349,11 @@ pub fn fetch_md5sums(
     base_url: &str,
     allowed_hosts: &[String],
 ) -> Result<HashMap<String, String>, AppError> {
-    let url = format!("{}{}", base_url.trim_end_matches('/'), "/zhwiki-latest-md5sums.txt");
+    let url = format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        "/zhwiki-latest-md5sums.txt"
+    );
     validate_source_url(&url, allowed_hosts)?;
     let response = client
         .get(&url)
@@ -343,8 +372,8 @@ pub fn fetch_md5sums(
 }
 
 pub fn file_md5(path: &Path) -> Result<String, AppError> {
-    let mut file =
-        File::open(path).map_err(|error| AppError::Message(format!("打开文件计算 MD5 失败：{error}")))?;
+    let mut file = File::open(path)
+        .map_err(|error| AppError::Message(format!("打开文件计算 MD5 失败：{error}")))?;
     let mut context = Md5Context::new();
     let mut buffer = vec![0_u8; CHUNK_SIZE];
     loop {
@@ -389,18 +418,24 @@ mod tests {
 
     #[test]
     fn 白名单域名通过() {
-        assert!(validate_source_url("https://dumps.wikimedia.org/zhwiki/latest/x.bz2", &hosts()).is_ok());
+        assert!(
+            validate_source_url("https://dumps.wikimedia.org/zhwiki/latest/x.bz2", &hosts())
+                .is_ok()
+        );
     }
 
     #[test]
     fn 非白名单域名被拒绝() {
-        let error = validate_source_url("https://evil.example.com/x.bz2", &hosts()).expect_err("应拒绝");
+        let error =
+            validate_source_url("https://evil.example.com/x.bz2", &hosts()).expect_err("应拒绝");
         assert!(error.to_string().contains("不在允许清单"));
     }
 
     #[test]
     fn 相似域名不能绕过白名单() {
-        assert!(validate_source_url("https://dumps.wikimedia.org.evil.com/x.bz2", &hosts()).is_err());
+        assert!(
+            validate_source_url("https://dumps.wikimedia.org.evil.com/x.bz2", &hosts()).is_err()
+        );
         assert!(validate_source_url("https://evil-dumps.wikimedia.org/x.bz2", &hosts()).is_err());
     }
 
@@ -435,7 +470,10 @@ mod tests {
     #[test]
     fn 续传决策覆盖各种情况() {
         assert_eq!(plan_download(0, Some(100), true), DownloadPlan::Restart);
-        assert_eq!(plan_download(40, Some(100), true), DownloadPlan::ResumeFrom(40));
+        assert_eq!(
+            plan_download(40, Some(100), true),
+            DownloadPlan::ResumeFrom(40)
+        );
         assert_eq!(plan_download(100, Some(100), true), DownloadPlan::Complete);
         assert_eq!(plan_download(120, Some(100), true), DownloadPlan::Restart);
         // 服务端不支持 Range：只能重来。
@@ -452,11 +490,15 @@ mod tests {
              短行不是校验和\n";
         let parsed = parse_md5sums(content);
         assert_eq!(
-            parsed.get("zhwiki-latest-pages-articles-multistream.xml.bz2").map(String::as_str),
+            parsed
+                .get("zhwiki-latest-pages-articles-multistream.xml.bz2")
+                .map(String::as_str),
             Some("0123456789abcdef0123456789abcdef")
         );
         assert_eq!(
-            parsed.get("zhwiki-latest-all-titles-in-ns0.gz").map(String::as_str),
+            parsed
+                .get("zhwiki-latest-all-titles-in-ns0.gz")
+                .map(String::as_str),
             Some("fedcba9876543210fedcba9876543210")
         );
         assert_eq!(parsed.len(), 2);

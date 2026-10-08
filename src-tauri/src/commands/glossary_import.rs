@@ -95,21 +95,22 @@ fn spawn_pipeline(app: AppHandle, db: &Database, job_id: String, config: Wikiped
 }
 
 #[tauri::command]
-pub fn list_glossary_imports(db: State<'_, Database>, limit: Option<usize>) -> Result<Vec<ImportJob>, AppError> {
+pub fn list_glossary_imports(
+    db: State<'_, Database>,
+    limit: Option<usize>,
+) -> Result<Vec<ImportJob>, AppError> {
     store::list_jobs(db.inner(), limit.unwrap_or(50))
 }
 
 #[tauri::command]
 pub fn get_glossary_import(db: State<'_, Database>, id: String) -> Result<ImportJob, AppError> {
-    store::get_job(db.inner(), &id)?
-        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
+    store::get_job(db.inner(), &id)?.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]
 pub fn pause_glossary_import(db: State<'_, Database>, id: String) -> Result<ImportJob, AppError> {
     store::pause_job(db.inner(), &id)?;
-    store::get_job(db.inner(), &id)?
-        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
+    store::get_job(db.inner(), &id)?.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]
@@ -121,19 +122,21 @@ pub fn resume_glossary_import(
     let config = import_config(&app)?;
     store::resume_job(db.inner(), &id)?;
     spawn_pipeline(app, db.inner(), id.clone(), config);
-    store::get_job(db.inner(), &id)?
-        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
+    store::get_job(db.inner(), &id)?.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]
 pub fn cancel_glossary_import(db: State<'_, Database>, id: String) -> Result<ImportJob, AppError> {
     store::cancel_job(db.inner(), &id)?;
-    store::get_job(db.inner(), &id)?
-        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
+    store::get_job(db.inner(), &id)?.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]
-pub fn publish_glossary_import(app: AppHandle, db: State<'_, Database>, id: String) -> Result<ImportJob, AppError> {
+pub fn publish_glossary_import(
+    app: AppHandle,
+    db: State<'_, Database>,
+    id: String,
+) -> Result<ImportJob, AppError> {
     let job = store::get_job(db.inner(), &id)?
         .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))?;
     let status = JobStatus::parse(&job.status)?;
@@ -146,8 +149,7 @@ pub fn publish_glossary_import(app: AppHandle, db: State<'_, Database>, id: Stri
     store::transition(db.inner(), &id, JobStatus::Publishing)?;
     let config = import_config(&app)?;
     spawn_pipeline(app, db.inner(), id.clone(), config);
-    store::get_job(db.inner(), &id)?
-        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
+    store::get_job(db.inner(), &id)?.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]
@@ -157,11 +159,19 @@ pub fn glossary_import_errors(
     record_type: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<ImportIssue>, AppError> {
-    store::list_issues(db.inner(), &id, record_type.as_deref(), limit.unwrap_or(200))
+    store::list_issues(
+        db.inner(),
+        &id,
+        record_type.as_deref(),
+        limit.unwrap_or(200),
+    )
 }
 
 #[tauri::command]
-pub fn glossary_import_report(db: State<'_, Database>, id: String) -> Result<serde_json::Value, AppError> {
+pub fn glossary_import_report(
+    db: State<'_, Database>,
+    id: String,
+) -> Result<serde_json::Value, AppError> {
     report::build_report(db.inner(), &id)
 }
 
@@ -175,7 +185,12 @@ pub fn cleanup_glossary_import(
     let config = import_config(&app)?;
     let days = retention_days.unwrap_or(config.staging_retention_days);
     let removed = store::prune_staging(db.inner(), days)?;
-    store::audit(&db.connect()?, "staging_pruned", None, &format!("retention_days={days} rows={removed}"))?;
+    store::audit(
+        &db.connect()?,
+        "staging_pruned",
+        None,
+        &format!("retention_days={days} rows={removed}"),
+    )?;
     Ok(removed)
 }
 

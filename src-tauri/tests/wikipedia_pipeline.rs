@@ -4,13 +4,13 @@
 //! 走的是真实写库路径（Database::open + schema + 迁移），不是 mock。
 //! 单测覆盖不到"写进库之后能不能搜到"，所以必须在这里过一遍。
 
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use wereader_lib::database::Database;
 use wereader_lib::wikipedia::config::{ImportMode, WikipediaConfig};
 use wereader_lib::wikipedia::runner;
 use wereader_lib::wikipedia::store::{self, ImportRequest, JobStatus};
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
 
 /// 6 个页面，覆盖普通页、重定向链、软重定向、消歧义、列表页、目标缺失的断链。
 fn fixture_xml() -> String {
@@ -34,10 +34,25 @@ fn fixture_xml() -> String {
         redirect("ML", 1003, "机器学习"),
         redirect("ML算法", 1004, "ML"),
         page("软重定向页", 1005, 2005, "#REDIRECT [[人工智能]]"),
-        page("苹果 (消歧义)", 1006, 2006, "{{消歧义}}\n苹果可能指苹果属植物、苹果公司或苹果果实。"),
-        page("中国电视剧列表", 1007, 2007, "以下是中国大陆电视剧的完整列表，收录了数百部作品。"),
+        page(
+            "苹果 (消歧义)",
+            1006,
+            2006,
+            "{{消歧义}}\n苹果可能指苹果属植物、苹果公司或苹果果实。",
+        ),
+        page(
+            "中国电视剧列表",
+            1007,
+            2007,
+            "以下是中国大陆电视剧的完整列表，收录了数百部作品。",
+        ),
         redirect("指向空处的别名", 1008, "并不存在的词条"),
-        page("细胞", 1009, 2009, "细胞是生物体结构和功能的基本单位，也是生命活动的基本单位之一。"),
+        page(
+            "细胞",
+            1009,
+            2009,
+            "细胞是生物体结构和功能的基本单位，也是生命活动的基本单位之一。",
+        ),
         page("模板页", 1010, 2010, "模板内容"),
     ]
     .join("")
@@ -66,7 +81,12 @@ fn seed_job(db: &Database, dump: &Path, config: &WikipediaConfig) -> String {
     seed_job_with(db, dump, config, true)
 }
 
-fn seed_job_with(db: &Database, dump: &Path, config: &WikipediaConfig, auto_publish: bool) -> String {
+fn seed_job_with(
+    db: &Database,
+    dump: &Path,
+    config: &WikipediaConfig,
+    auto_publish: bool,
+) -> String {
     let request = ImportRequest {
         local_file: Some(dump.to_path_buf()),
         mode: Some(ImportMode::Summary),
@@ -74,7 +94,9 @@ fn seed_job_with(db: &Database, dump: &Path, config: &WikipediaConfig, auto_publ
         batch_size: Some(2),
         ..ImportRequest::default()
     };
-    store::create_job(db, &request, config).expect("create job").id
+    store::create_job(db, &request, config)
+        .expect("create job")
+        .id
 }
 
 /// 把 dump 里的某个标题片段整段去掉，模拟"该页在新 dump 中消失"。
@@ -86,7 +108,10 @@ fn dump_without(xml: &str, title: &str) -> String {
         let (head, tail) = rest.split_at(index);
         // 从 `<page>` 开始回退，删到对应的 `</page>`。
         let page_start = head.rfind("<page>").unwrap_or(0);
-        let tail_start = tail.find("</page>").map(|value| value + "</page>".len()).unwrap_or(tail.len());
+        let tail_start = tail
+            .find("</page>")
+            .map(|value| value + "</page>".len())
+            .unwrap_or(tail.len());
         out.push_str(&head[..page_start]);
         rest = &tail[tail_start..];
     }
@@ -123,15 +148,25 @@ fn 小样本导入到发布全流程() {
     let summary = runner::run_pipeline(Arc::new(db.reopen().expect("reopen")), id.clone(), config)
         .expect("pipeline should succeed");
     assert_eq!(summary.status, JobStatus::Completed, "{}", summary.message);
-    let finished = store::get_job(&db, &id).expect("job").expect("job row").finished_at;
-    assert!(finished > 0, "成功任务必须记录 finished_at，供报告和 staging 清理使用");
+    let finished = store::get_job(&db, &id)
+        .expect("job")
+        .expect("job row")
+        .finished_at;
+    assert!(
+        finished > 0,
+        "成功任务必须记录 finished_at，供报告和 staging 清理使用"
+    );
 
     // 普通词条成为待确认候选
-    let (term_id, status, definition, edited) = term_of(&db, "人工智能").expect("人工智能 should exist");
+    let (term_id, status, definition, edited) =
+        term_of(&db, "人工智能").expect("人工智能 should exist");
     assert_eq!(status, "pending", "新导入数据默认待确认");
     assert!(!definition.is_empty());
     assert_eq!(edited, 0);
-    assert!(definition.contains("人工智能"), "摘要应包含词条名: {definition}");
+    assert!(
+        definition.contains("人工智能"),
+        "摘要应包含词条名: {definition}"
+    );
 
     // 主命名空间过滤：模板页没有落到名词表
     assert!(term_of(&db, "模板页").is_none(), "ns=10 不应导入");
@@ -144,7 +179,9 @@ fn 小样本导入到发布全流程() {
     // 重定向链解析成别名
     let connection = db.connect().expect("connect");
     let alias_count: i64 = connection
-        .query_row("SELECT count(*) FROM glossary_term_aliases", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM glossary_term_aliases", [], |row| {
+            row.get(0)
+        })
         .expect("alias count");
     assert!(alias_count >= 1, "重定向应产生别名，实际 {alias_count}");
     let aliased: String = connection
@@ -178,7 +215,10 @@ fn 后置阶段暂停后按阶段恢复而不重新解析() {
     store::transition(&db, &id, JobStatus::Parsing).expect("to parsing");
     store::transition(&db, &id, JobStatus::ResolvingRedirects).expect("to redirects");
     store::pause_job(&db, &id).expect("pause redirects");
-    assert_eq!(store::resume_job(&db, &id).expect("resume redirects"), JobStatus::ResolvingRedirects);
+    assert_eq!(
+        store::resume_job(&db, &id).expect("resume redirects"),
+        JobStatus::ResolvingRedirects
+    );
 
     let summary = runner::run_pipeline(Arc::new(db.reopen().expect("reopen")), id.clone(), config)
         .expect("resume from redirects must succeed");
@@ -205,25 +245,46 @@ fn 同一份_dump_重复运行不产生重复名词() {
     let dump = write_fixture(dir.path());
 
     let first = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), first.clone(), config.clone()).expect("first run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        first.clone(),
+        config.clone(),
+    )
+    .expect("first run");
     let count_after_first = count_terms(&db);
     let published_first = store::get_job(&db, &first).unwrap().unwrap().inserted_count;
     assert!(published_first > 0, "第一次应该真的插入了数据");
 
     // 第二个任务用同一份 dump
     let second = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), second.clone(), config.clone()).expect("second run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        second.clone(),
+        config.clone(),
+    )
+    .expect("second run");
 
     let count_after_second = count_terms(&db);
-    assert_eq!(count_after_first, count_after_second, "重复导入不能让名词数量变化");
+    assert_eq!(
+        count_after_first, count_after_second,
+        "重复导入不能让名词数量变化"
+    );
     // 别名唯一约束是 (term_id, normalized_alias, alias_type)，
     // 同一条目重复导入不会产生重复别名。
     let aliases_first = count_aliases(&db);
 
     let job = store::get_job(&db, &second).unwrap().unwrap();
     assert_eq!(job.inserted_count, 0, "第二次不应该再插入新名词");
-    assert!(job.skipped_count > 0, "第二次应该全部走跳过: {}", job.skipped_count);
-    assert_eq!(job.conflict_count, 0, "同一 page id 不该算冲突: {}", job.conflict_count);
+    assert!(
+        job.skipped_count > 0,
+        "第二次应该全部走跳过: {}",
+        job.skipped_count
+    );
+    assert_eq!(
+        job.conflict_count, 0,
+        "同一 page id 不该算冲突: {}",
+        job.conflict_count
+    );
     assert_eq!(count_aliases(&db), aliases_first, "别名不该翻倍");
     assert_eq!(job.status, "completed");
 }
@@ -238,7 +299,9 @@ fn count_terms(db: &Database) -> i64 {
 fn count_aliases(db: &Database) -> i64 {
     db.connect()
         .unwrap()
-        .query_row("SELECT count(*) FROM glossary_term_aliases", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM glossary_term_aliases", [], |row| {
+            row.get(0)
+        })
         .unwrap()
 }
 
@@ -280,7 +343,11 @@ fn 人工创建的同名词条不被覆盖() {
     let issues = store::list_issues(&db, &id, Some("name_conflict"), 20).expect("issues");
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].code, "manual_name_conflict");
-    assert!(issues[0].message.contains("不自动合并"), "{}", issues[0].message);
+    assert!(
+        issues[0].message.contains("不自动合并"),
+        "{}",
+        issues[0].message
+    );
 }
 
 #[test]
@@ -292,7 +359,12 @@ fn 人工编辑过的维基词条只更新来源快照() {
 
     // 第一轮：正常导入并发布
     let first = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), first.clone(), config.clone()).expect("first run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        first.clone(),
+        config.clone(),
+    )
+    .expect("first run");
 
     // 人工改写解释（保留 wikipedia 来源，标记 manually_edited）
     let connection = db.connect().expect("connect");
@@ -323,7 +395,12 @@ fn 人工编辑过的维基词条只更新来源快照() {
     encoder.finish().expect("finish");
 
     let second = seed_job(&db, &second_path, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), second.clone(), config.clone()).expect("second run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        second.clone(),
+        config.clone(),
+    )
+    .expect("second run");
 
     let connection = db.connect().expect("connect");
     let (definition, snapshot): (String, String) = connection
@@ -349,9 +426,19 @@ fn 来源相同且内容未变时只更新同步元数据() {
     let dump = write_fixture(dir.path());
 
     let first = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), first.clone(), config.clone()).expect("first run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        first.clone(),
+        config.clone(),
+    )
+    .expect("first run");
     let second = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), second.clone(), config.clone()).expect("second run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        second.clone(),
+        config.clone(),
+    )
+    .expect("second run");
 
     let job = store::get_job(&db, &second).unwrap().unwrap();
     assert_eq!(job.updated_count, 0, "内容没变不应算更新");
@@ -367,12 +454,20 @@ fn 全量导入把消失的来源标记为失效() {
     let dump = write_fixture(dir.path());
 
     let first = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), first.clone(), config.clone()).expect("first run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        first.clone(),
+        config.clone(),
+    )
+    .expect("first run");
     assert!(term_of(&db, "细胞").is_some(), "第一轮应有细胞");
 
     // 第二份 dump 里整页删掉“细胞”
     let reduced = dump_without(&fixture_xml(), "细胞");
-    assert!(!reduced.contains("<title>细胞</title>"), "夹具构造要真的删掉这一页");
+    assert!(
+        !reduced.contains("<title>细胞</title>"),
+        "夹具构造要真的删掉这一页"
+    );
     let second_path = dir.path().join("reduced.xml.bz2");
     let mut encoder = bzip2::write::BzEncoder::new(
         std::fs::File::create(&second_path).expect("create"),
@@ -386,7 +481,12 @@ fn 全量导入把消失的来源标记为失效() {
     encoder.finish().expect("finish");
 
     let second = seed_job(&db, &second_path, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), second.clone(), config.clone()).expect("second run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        second.clone(),
+        config.clone(),
+    )
+    .expect("second run");
 
     let (_, status, _, _) = term_of(&db, "细胞").expect("来源失效不能物理删除");
     assert_eq!(status, "source_missing", "消失的来源应标记失效");
@@ -400,7 +500,12 @@ fn 限量的部分导入不会误标来源失效() {
     let dump = write_fixture(dir.path());
 
     let first = seed_job(&db, &dump, &config);
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), first.clone(), config.clone()).expect("first run");
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        first.clone(),
+        config.clone(),
+    )
+    .expect("first run");
     assert!(term_of(&db, "细胞").is_some());
 
     // 只处理前 2 页：没扫到的词条不能被当成"来源消失"
@@ -412,8 +517,15 @@ fn 限量的部分导入不会误标来源失效() {
         batch_size: Some(2),
         ..ImportRequest::default()
     };
-    let limited = store::create_job(&db, &request, &config).expect("create limited job").id;
-    runner::run_pipeline(Arc::new(db.reopen().unwrap()), limited.clone(), config.clone()).expect("limited run");
+    let limited = store::create_job(&db, &request, &config)
+        .expect("create limited job")
+        .id;
+    runner::run_pipeline(
+        Arc::new(db.reopen().unwrap()),
+        limited.clone(),
+        config.clone(),
+    )
+    .expect("limited run");
 
     let (_, status, _, _) = term_of(&db, "细胞").expect("细胞仍在");
     assert_ne!(status, "source_missing", "部分导入不能标来源失效");
@@ -445,13 +557,18 @@ fn 中断后可以恢复且不重复发布() {
     // 恢复到记录的阶段，续跑
     let resumed_to = store::resume_job(&db, &id).expect("resume");
     assert_eq!(resumed_to, JobStatus::Parsing, "应回到暂停时的阶段");
-    let summary = runner::run_pipeline(Arc::new(db.reopen().unwrap()), id.clone(), config).expect("resume run");
+    let summary = runner::run_pipeline(Arc::new(db.reopen().unwrap()), id.clone(), config)
+        .expect("resume run");
     assert_eq!(summary.status, JobStatus::Completed);
 
     // 之前手写的那行 staging 不该被重复插入名词
     let connection = db.connect().expect("connect");
     let count: i64 = connection
-        .query_row("SELECT count(*) FROM glossary_terms WHERE term='人工智能'", [], |row| row.get(0))
+        .query_row(
+            "SELECT count(*) FROM glossary_terms WHERE term='人工智能'",
+            [],
+            |row| row.get(0),
+        )
         .expect("count");
     assert_eq!(count, 1, "同一 page id 只能有一条名词");
     drop(connection);
@@ -462,7 +579,10 @@ fn 非法状态迁移被拒绝() {
     use wereader_lib::wikipedia::store::JobStatus as S;
     assert!(S::Pending.can_transition_to(S::Parsing));
     assert!(!S::Pending.can_transition_to(S::Publishing));
-    assert!(!S::Completed.can_transition_to(S::Parsing), "终态不能再迁移");
+    assert!(
+        !S::Completed.can_transition_to(S::Parsing),
+        "终态不能再迁移"
+    );
     assert!(!S::Cancelled.can_transition_to(S::Completed));
     assert!(!S::Failed.can_transition_to(S::Downloading));
     assert!(S::Paused.can_transition_to(S::Parsing));
@@ -472,7 +592,8 @@ fn 非法状态迁移被拒绝() {
     let config = config(dir.path());
     let dump = write_fixture(dir.path());
     let id = seed_job(&db, &dump, &config);
-    let error = store::transition(&db, &id, JobStatus::Publishing).expect_err("pending -> publishing 应被拒绝");
+    let error = store::transition(&db, &id, JobStatus::Publishing)
+        .expect_err("pending -> publishing 应被拒绝");
     assert!(error.to_string().contains("非法状态迁移"), "{error}");
     let job = store::get_job(&db, &id).unwrap().unwrap();
     assert_eq!(job.status, "pending", "被拒绝的迁移不应改状态");
@@ -492,7 +613,8 @@ fn 取消任务不会留下半发布状态() {
     assert_eq!(job.status, "cancelled");
     assert!(job.finished_at > 0, "取消要写结束时间");
 
-    let summary = runner::run_pipeline(Arc::new(db.reopen().unwrap()), id.clone(), config).expect("rerun on cancelled");
+    let summary = runner::run_pipeline(Arc::new(db.reopen().unwrap()), id.clone(), config)
+        .expect("rerun on cancelled");
     assert_eq!(summary.status, JobStatus::Cancelled);
     assert_eq!(count_terms(&db), 0, "取消的任务不应写入名词");
 }
@@ -525,7 +647,10 @@ fn 导入报告包含关键统计() {
     assert_eq!(report["conclusion"], "success");
     assert!(report["counts"]["scanned"].as_i64().unwrap() > 0);
     let filters = report["filterReasons"].as_object().expect("filterReasons");
-    assert!(filters.contains_key("disambiguation"), "应记录消歧义过滤数: {filters:?}");
+    assert!(
+        filters.contains_key("disambiguation"),
+        "应记录消歧义过滤数: {filters:?}"
+    );
     assert!(filters.contains_key("list_page"), "应记录列表页过滤数");
     let source = &report["source"];
     assert_eq!(source["license"], "CC BY-SA 4.0");
@@ -568,12 +693,32 @@ fn 被过滤的行也会留在_staging_并记录原因() {
     drop(statement);
     drop(connection);
 
-    assert_eq!(distribution.get(&("accepted".to_string(), String::new())), Some(&3), "3 个普通词条可发布: {distribution:?}");
-    assert_eq!(distribution.get(&("redirect".to_string(), String::new())), Some(&2), "2 条重定向进别名: {distribution:?}");
-    assert_eq!(distribution.get(&("filtered".to_string(), "disambiguation".to_string())), Some(&1));
-    assert_eq!(distribution.get(&("filtered".to_string(), "list_page".to_string())), Some(&1));
-    assert_eq!(distribution.get(&("filtered".to_string(), "soft_redirect".to_string())), Some(&1));
-    assert_eq!(distribution.get(&("filtered".to_string(), "broken_redirect".to_string())), Some(&1));
+    assert_eq!(
+        distribution.get(&("accepted".to_string(), String::new())),
+        Some(&3),
+        "3 个普通词条可发布: {distribution:?}"
+    );
+    assert_eq!(
+        distribution.get(&("redirect".to_string(), String::new())),
+        Some(&2),
+        "2 条重定向进别名: {distribution:?}"
+    );
+    assert_eq!(
+        distribution.get(&("filtered".to_string(), "disambiguation".to_string())),
+        Some(&1)
+    );
+    assert_eq!(
+        distribution.get(&("filtered".to_string(), "list_page".to_string())),
+        Some(&1)
+    );
+    assert_eq!(
+        distribution.get(&("filtered".to_string(), "soft_redirect".to_string())),
+        Some(&1)
+    );
+    assert_eq!(
+        distribution.get(&("filtered".to_string(), "broken_redirect".to_string())),
+        Some(&1)
+    );
     // 每个被过滤的行都带原因，没有空原因的
     for (status, reason) in distribution.keys() {
         if status == "filtered" {

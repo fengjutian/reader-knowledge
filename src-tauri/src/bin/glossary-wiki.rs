@@ -133,7 +133,9 @@ fn default_db_path() -> Result<PathBuf, String> {
     let base = std::env::var("APPDATA")
         .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/share")))
         .map_err(|_| "无法定位应用数据目录，请用 --db 指定数据库路径".to_string())?;
-    Ok(PathBuf::from(base).join("com.wereader.app").join("readflow.db"))
+    Ok(PathBuf::from(base)
+        .join("com.wereader.app")
+        .join("readflow.db"))
 }
 
 fn config_from(flags: &HashMap<String, String>) -> Result<WikipediaConfig, String> {
@@ -179,8 +181,11 @@ fn run(command: &str, flags: &HashMap<String, String>) -> Result<serde_json::Val
 /// 探测官方 dump 目录：只发 HEAD 请求，不下载正文。
 fn inspect(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::Value, String> {
     let config = config_from(flags)?;
-    let client = wereader_lib::wikipedia::download::build_client(&config.user_agent, std::time::Duration::from_secs(30))
-        .map_err(|error| error.to_string())?;
+    let client = wereader_lib::wikipedia::download::build_client(
+        &config.user_agent,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| error.to_string())?;
     let base = format!("{}/", config.base_url.trim_end_matches('/'));
     let mut files = Vec::new();
     for name in [
@@ -196,7 +201,9 @@ fn inspect(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json:
                 "bytes": remote.total_bytes,
                 "supportsRange": remote.supports_range,
             })),
-            Err(error) => files.push(serde_json::json!({ "file": name, "error": error.to_string() })),
+            Err(error) => {
+                files.push(serde_json::json!({ "file": name, "error": error.to_string() }))
+            }
         }
     }
     let _ = db;
@@ -205,7 +212,9 @@ fn inspect(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json:
 
 fn import(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::Value, String> {
     let config = config_from(flags)?;
-    config.ensure_temp_dir().map_err(|error| error.to_string())?;
+    config
+        .ensure_temp_dir()
+        .map_err(|error| error.to_string())?;
     let mode = match flag(flags, "mode") {
         None => ImportMode::Summary,
         Some(value) => ImportMode::parse(value).map_err(|error| error.to_string())?,
@@ -222,8 +231,12 @@ fn import(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::
         ..ImportRequest::default()
     };
     let job = store::create_job(db, &request, &config).map_err(|error| error.to_string())?;
-    let summary = runner::run_pipeline(Arc::new(db.reopen().map_err(|error| error.to_string())?), job.id.clone(), config)
-        .map_err(|error| error.to_string())?;
+    let summary = runner::run_pipeline(
+        Arc::new(db.reopen().map_err(|error| error.to_string())?),
+        job.id.clone(),
+        config,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(serde_json::json!({
         "ok": true,
         "jobId": summary.job_id,
@@ -244,8 +257,12 @@ fn resume(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::
     let config = config_from(flags)?;
     let id = job_id(flags)?;
     let status = store::resume_job(db, &id).map_err(|error| error.to_string())?;
-    let summary = runner::run_pipeline(Arc::new(db.reopen().map_err(|error| error.to_string())?), id.clone(), config)
-        .map_err(|error| error.to_string())?;
+    let summary = runner::run_pipeline(
+        Arc::new(db.reopen().map_err(|error| error.to_string())?),
+        id.clone(),
+        config,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(serde_json::json!({
         "ok": true,
         "jobId": id,
@@ -277,12 +294,21 @@ fn publish(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json:
     }
     store::transition(db, &id, JobStatus::Publishing).map_err(|error| error.to_string())?;
     let config = config_from(flags)?;
-    let summary = runner::run_pipeline(std::sync::Arc::new(db.reopen().map_err(|e| e.to_string())?), id.clone(), config)
-        .map_err(|error| error.to_string())?;
-    Ok(serde_json::json!({ "ok": true, "jobId": id, "status": summary.status.as_str(), "published": summary.published }))
+    let summary = runner::run_pipeline(
+        std::sync::Arc::new(db.reopen().map_err(|e| e.to_string())?),
+        id.clone(),
+        config,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(
+        serde_json::json!({ "ok": true, "jobId": id, "status": summary.status.as_str(), "published": summary.published }),
+    )
 }
 
-fn report_command(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::Value, String> {
+fn report_command(
+    db: &Database,
+    flags: &HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
     let id = job_id(flags)?;
     let value = report::build_report(db, &id).map_err(|error| error.to_string())?;
     Ok(value)
@@ -300,7 +326,8 @@ fn cleanup(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json:
             return Err(format!("任务还在 {} 状态，拒绝清理", status.as_str()));
         }
     }
-    let removed = store::prune_staging(db, config.staging_retention_days).map_err(|error| error.to_string())?;
+    let removed = store::prune_staging(db, config.staging_retention_days)
+        .map_err(|error| error.to_string())?;
     Ok(serde_json::json!({
         "ok": true,
         "removedStagingRows": removed,
@@ -312,4 +339,3 @@ fn list(db: &Database) -> Result<serde_json::Value, String> {
     let jobs = store::list_jobs(db, 50).map_err(|error| error.to_string())?;
     Ok(serde_json::json!({ "ok": true, "jobs": jobs }))
 }
-
