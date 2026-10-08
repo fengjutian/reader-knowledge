@@ -276,6 +276,12 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
     }
     if status == JobStatus::Publishing {
         let mut summary = store::publish_batch(db, job_id, &job.dump_version, batch_size.max(50))?;
+        if let Some(signal) = control_signal(db, job_id)? {
+            return Ok(match signal {
+                Signal::Pause => paused_summary(job_id, JobStatus::Publishing),
+                Signal::Cancel => cancelled_summary(job_id),
+            });
+        }
         // 只有整批导入才允许判定“来源失效”，--limit 的部分批次不能做这件事，
         // 否则没扫到的词条会被误标成来源消失。
         if max_items.is_none() {

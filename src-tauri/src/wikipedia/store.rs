@@ -1069,6 +1069,7 @@ pub fn publish_batch(
     let mut summary = PublishSummary::default();
     let mut connection = db.connect()?;
     let mut cursor = 0_i64;
+    let mut interrupted = false;
     loop {
         let transaction = connection.transaction()?;
         let rows = fetch_publish_chunk(&transaction, job_id, cursor, chunk)?;
@@ -1128,8 +1129,19 @@ pub fn publish_batch(
             }
         }
         transaction.commit()?;
+        let status: String = connection.query_row(
+            "SELECT status FROM glossary_import_jobs WHERE id = ?1",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        if matches!(status.as_str(), "paused" | "cancelled") {
+            interrupted = true;
+            break;
+        }
     }
-    summary.aliases_inserted = publish_aliases(db, job_id, dump_version)?;
+    if !interrupted {
+        summary.aliases_inserted = publish_aliases(db, job_id, dump_version)?;
+    }
     Ok(summary)
 }
 
