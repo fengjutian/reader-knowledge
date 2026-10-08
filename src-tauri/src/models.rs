@@ -101,9 +101,42 @@ pub struct BookMetadataSourceDetail {
     pub author_name: String, pub author_avatar: String, pub author_url: String,
     pub author_bio: String, pub table_of_contents: String,
 }
+/// 名词。source 承担 source_type（manual|wikipedia|other），
+/// status 承担 review_status（pending|confirmed|ignored|conflict|source_missing），
+/// 维基来源的条目额外带 page id / revision / dump 版本 / 许可证等可追溯字段。
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GlossaryTerm { pub id:i64,pub term:String,pub canonical_name:String,pub aliases:Vec<String>,pub definition:String,pub source:String,pub source_title:String,pub source_url:String,pub wikipedia_snapshot:String,pub status:String,pub updated_at:i64 }
+pub struct GlossaryTerm {
+    pub id: i64,
+    pub term: String,
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub definition: String,
+    pub source: String,
+    pub source_title: String,
+    pub source_url: String,
+    pub wikipedia_snapshot: String,
+    pub status: String,
+    pub updated_at: i64,
+    #[serde(default)]
+    pub external_page_id: i64,
+    #[serde(default)]
+    pub source_revision_id: i64,
+    #[serde(default)]
+    pub source_dump_version: String,
+    #[serde(default)]
+    pub source_updated_at: i64,
+    #[serde(default)]
+    pub source_synced_at: i64,
+    #[serde(default)]
+    pub license_code: String,
+    #[serde(default)]
+    pub manually_edited: bool,
+    #[serde(default)]
+    pub source_content_hash: String,
+    #[serde(default)]
+    pub published_batch_id: String,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WikipediaCandidate { pub title:String,pub description:String,pub excerpt:String,pub url:String }

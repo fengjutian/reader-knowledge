@@ -47,8 +47,17 @@ export interface BookMetadataSourceDetail {
   description:string; rating?:number; ratingCount?:number; fetchedAt:string;
   authorName:string; authorAvatar:string; authorUrl:string; authorBio:string; tableOfContents:string;
 }
-export interface GlossaryTerm { id:number;term:string;canonicalName:string;aliases:string[];definition:string;source:"manual"|"wikipedia";sourceTitle:string;sourceUrl:string;wikipediaSnapshot:string;status:"confirmed"|"pending";updatedAt:number }
+/** 名词来源：manual 人工创建/编辑，wikipedia 维基导入，other 其他。 */
+export type GlossarySource = "manual"|"wikipedia"|"other";
+/** 审核状态：pending 待确认，confirmed 已确认，ignored 已忽略，conflict 同名冲突，source_missing 来源失效。 */
+export type GlossaryStatus = "pending"|"confirmed"|"ignored"|"conflict"|"source_missing";
+export interface GlossaryTerm { id:number;term:string;canonicalName:string;aliases:string[];definition:string;source:GlossarySource;sourceTitle:string;sourceUrl:string;wikipediaSnapshot:string;status:GlossaryStatus;updatedAt:number;externalPageId:number;sourceRevisionId:number;sourceDumpVersion:string;sourceUpdatedAt:number;sourceSyncedAt:number;licenseCode:string;manuallyEdited:boolean;sourceContentHash:string;publishedBatchId:string }
 export interface WikipediaCandidate { title:string;description:string;excerpt:string;url:string }
+export type GlossaryImportJobStatus = "pending"|"downloading"|"verifying"|"parsing"|"resolving_redirects"|"validating"|"ready_to_publish"|"publishing"|"completed"|"paused"|"cancelled"|"failed";
+export interface GlossaryImportJob { id:string;sourceType:string;dumpVersion:string;sourceUrl:string;mode:string;status:GlossaryImportJobStatus;totalBytes:number;downloadedBytes:number;scannedCount:number;acceptedCount:number;redirectCount:number;filteredCount:number;insertedCount:number;updatedCount:number;skippedCount:number;conflictCount:number;errorCount:number;currentFile:string;bytesPerSecond:number;errorMessage:string;autoPublish:boolean;startedAt:number;finishedAt:number;createdAt:number;updatedAt:number }
+export interface GlossaryImportIssue { id:number;pageId:number|null;title:string;recordType:string;code:string;message:string;retryable:boolean;createdAt:number }
+export interface GlossaryImportRequest { sourceUrl?:string;dumpVersion?:string;mode?:string;handleRedirects?:boolean;filterDisambiguation?:boolean;filterListPages?:boolean;autoPublish?:boolean;maxItems?:number;batchSize?:number;concurrency?:number;maxRetries?:number;tempDir?:string;localFile?:string }
+export interface GlossaryPublishSummary { inserted:number;updated:number;skipped:number;conflicts:number;aliasesInserted:number;sourceMissing:number }
 
 export interface Note {
   id: string;

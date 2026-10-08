@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, ConceptGraph, ConceptGraphQuery, ConceptScanResult, ConfirmImportRequest, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, ImportPreview, KnowledgeEntity, LibrarySource, RerankerSettings, SourceDetail, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
+import type { AiAnswer, AiRequest, AiSettings, AiStreamEvent, Book, ConceptGraph, ConceptGraphQuery, ConceptScanResult, ConfirmImportRequest, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, ImportPreview, KnowledgeEntity, LibrarySource, RerankerSettings, SourceDetail, BookDetail, BookMetadataRow, BookMetadataSourceDetail, BookPage, BookRecommendations, DashboardStats, DatabaseOverview, DatabaseRows, EmbeddingSettings, GlossaryImportIssue, GlossaryImportJob, GlossaryImportRequest, GlossaryPublishSummary, GlossaryStatus, GlossaryTerm, LocalModelStatus, MetadataFetchResult, Note, ReadingPeriod, ReadingStats, RecommendedBook, RelationAnalysis, SearchResult, SemanticRelation, SyncProgress, WikipediaCandidate } from "../types/domain";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -75,10 +75,22 @@ export const api = {
   fetchBookMetadata: (bookId: string, source: string, force = false) => call<MetadataFetchResult>("fetch_book_metadata", { bookId, source, force }),
   fetchDoubanBookMetadata: (bookId: string, url: string) => call<MetadataFetchResult>("fetch_douban_book_metadata", { bookId, url }),
   fetchBooksMetadata: (bookIds: string[], source: string, force = false) => call<MetadataFetchResult[]>("fetch_books_metadata", { bookIds, source, force }),
-  glossaryTerms: (query = "") => call<GlossaryTerm[]>("list_glossary_terms", { query }),
+  glossaryTerms: (query = "", source = "", status = "") => call<GlossaryTerm[]>("list_glossary_terms", { query, source, status }),
   saveGlossaryTerm: (term: GlossaryTerm) => call<void>("save_glossary_term", { term }),
   deleteGlossaryTerm: (id: number) => call<void>("delete_glossary_term", { id }),
+  setGlossaryTermStatus: (id: number, status: GlossaryStatus) => call<void>("set_glossary_term_status", { id, status }),
+  bulkGlossaryTermStatus: (ids: number[], status: GlossaryStatus) => call<number>("bulk_set_glossary_term_status", { ids, status }),
   searchWikipedia: (term: string) => call<WikipediaCandidate[]>("search_wikipedia", { term }),
+  createGlossaryImport: (request?: GlossaryImportRequest) => call<GlossaryImportJob>("create_glossary_import", { request }),
+  glossaryImports: (limit = 30) => call<GlossaryImportJob[]>("list_glossary_imports", { limit }),
+  glossaryImport: (id: string) => call<GlossaryImportJob>("get_glossary_import", { id }),
+  pauseGlossaryImport: (id: string) => call<GlossaryImportJob>("pause_glossary_import", { id }),
+  resumeGlossaryImport: (id: string) => call<GlossaryImportJob>("resume_glossary_import", { id }),
+  cancelGlossaryImport: (id: string) => call<GlossaryImportJob>("cancel_glossary_import", { id }),
+  publishGlossaryImport: (id: string) => call<GlossaryPublishSummary>("publish_glossary_import", { id }),
+  glossaryImportErrors: (id: string, recordType?: string, limit = 100) => call<GlossaryImportIssue[]>("glossary_import_errors", { id, recordType: recordType ?? null, limit }),
+  glossaryImportReport: (id: string) => call<Record<string, unknown>>("glossary_import_report", { id }),
+  cleanupGlossaryImport: (retentionDays?: number) => call<number>("cleanup_glossary_import", { retentionDays: retentionDays ?? null }),
   book: (bookId: string) => call<BookDetail>("get_book", { bookId }),
   bookNotes: (bookId: string) => call<Note[]>("list_book_notes", { bookId }),
   openBook: (bookId: string) => call<void>("open_book", { bookId }),

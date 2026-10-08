@@ -1,7 +1,7 @@
 mod ai;
 mod commands;
-mod database;
-mod error;
+pub mod database;
+pub mod error;
 mod http;
 mod import;
 mod rag;
@@ -9,6 +9,7 @@ mod models;
 mod metadata;
 mod sync;
 mod weread;
+pub mod wikipedia;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -51,6 +52,19 @@ pub fn run() {
             commands::list_glossary_terms,
             commands::save_glossary_term,
             commands::delete_glossary_term,
+            commands::glossary_import::create_glossary_import,
+            commands::glossary_import::list_glossary_imports,
+            commands::glossary_import::get_glossary_import,
+            commands::glossary_import::pause_glossary_import,
+            commands::glossary_import::resume_glossary_import,
+            commands::glossary_import::cancel_glossary_import,
+            commands::glossary_import::publish_glossary_import,
+            commands::glossary_import::glossary_import_errors,
+            commands::glossary_import::glossary_import_report,
+            commands::glossary_import::cleanup_glossary_import,
+            commands::glossary_import::list_glossary_review_queue,
+            commands::glossary_import::set_glossary_term_status,
+            commands::glossary_import::bulk_set_glossary_term_status,
             commands::search_wikipedia,
             commands::get_book,
             commands::list_book_notes,

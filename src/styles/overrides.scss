@@ -943,3 +943,262 @@ body { background-color:var(--bg); }
 .discover-scroll {
   scrollbar-gutter: auto;
 }
+
+/* ---------- 名词库：维基导入面板、来源筛选、来源与许可证 ---------- */
+.glossary-import {
+  flex: none;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.glossary-import__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.glossary-import__head strong {
+  font-size: 13px;
+}
+.glossary-import__note {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.glossary-import__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.glossary-import__form label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  gap: 5px;
+}
+.glossary-import__form input[type='number'] {
+  width: 110px;
+}
+.glossary-import__form label:nth-child(2) input {
+  width: min(420px, 46vw);
+}
+.glossary-import__check {
+  flex-direction: row !important;
+  align-items: center;
+  padding-bottom: 8px;
+  white-space: nowrap;
+}
+.glossary-import__jobs {
+  display: grid;
+  max-height: 320px;
+  margin-top: 12px;
+  overflow: auto;
+  gap: 8px;
+}
+.glossary-import__job {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.glossary-import__job header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.glossary-import__job header code {
+  color: var(--secondary);
+  font-size: 11px;
+}
+.glossary-import__job header time {
+  margin-left: auto;
+}
+.glossary-import__badge {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--surface-hover);
+  color: var(--secondary);
+  white-space: nowrap;
+}
+.glossary-import__badge--completed {
+  background: #27875a1f;
+  color: #27875a;
+}
+.glossary-import__badge--failed,
+.glossary-import__badge--cancelled {
+  background: #b743351f;
+  color: #b74335;
+}
+.glossary-import__badge--paused,
+.glossary-import__badge--ready_to_publish {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.glossary-import__progress {
+  width: 100%;
+  height: 4px;
+  margin: 8px 0 2px;
+  accent-color: var(--accent);
+}
+.glossary-import__job dl {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 8px 0 0;
+  gap: 4px 14px;
+}
+.glossary-import__job dl div {
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+}
+.glossary-import__job dt {
+  color: var(--muted);
+}
+.glossary-import__job dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.glossary-import__error {
+  margin: 8px 0 0;
+  color: #b74335;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.glossary-import__job footer {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  gap: 6px;
+}
+.glossary-import__empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.glossary-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--muted);
+  gap: 8px;
+}
+.glossary-filters select {
+  min-width: 118px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.glossary-filters__clear {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+}
+.glossary-status--confirmed {
+  background: #27875a1f;
+  color: #27875a;
+}
+.glossary-status--ignored,
+.glossary-status--source_missing {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+.glossary-status--conflict {
+  background: #b743351f;
+  color: #b74335;
+}
+.glossary-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.glossary-icon-button {
+  display: inline-flex;
+  padding: 6px;
+}
+
+.glossary-attribution {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.glossary-attribution p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.7;
+}
+.glossary-attribution a {
+  color: var(--accent);
+}
+.glossary-attribution dl {
+  display: grid;
+  margin: 10px 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 12px;
+}
+.glossary-attribution dl div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.glossary-attribution dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+.glossary-attribution dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glossary-attribution button {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  gap: 5px;
+}
+.glossary-attribution__diff {
+  margin-top: 10px;
+  font-size: 11px;
+}
+.glossary-attribution__diff summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.glossary-attribution__diff p {
+  margin-top: 6px;
+  line-height: 1.7;
+}
+.glossary-edited-hint {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 10px;
+  color: #b5743a;
+  font-size: 11px;
+  line-height: 1.6;
+  gap: 6px;
+}

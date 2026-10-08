@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "glossary:wiki": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin glossary-wiki --"
   },
   "dependencies": {
     "@nivo/bar": "^0.99.0",

@@ -7,6 +7,8 @@ use std::{collections::{HashMap, HashSet}, future::Future, pin::Pin, sync::Arc, 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+pub mod glossary_import;
+
 #[tauri::command]
 pub fn get_dashboard(db: State<'_, Database>) -> Result<DashboardStats, AppError> {
     let c = db.connect()?;
@@ -387,18 +389,86 @@ pub async fn fetch_books_metadata(db: State<'_, Database>, book_ids: Vec<String>
 }
 
 #[tauri::command]
-pub fn list_glossary_terms(db:State<'_,Database>,query:Option<String>)->Result<Vec<GlossaryTerm>,AppError>{
-    let pattern=format!("%{}%",query.unwrap_or_default()); let c=db.connect()?;
-    let mut q=c.prepare("SELECT id,term,canonical_name,aliases_json,definition,source,coalesce(source_title,''),coalesce(source_url,''),coalesce(wikipedia_snapshot,''),status,updated_at FROM glossary_terms WHERE term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1 ORDER BY updated_at DESC")?;
-    let rows=q.query_map([pattern],|r|Ok(GlossaryTerm{id:r.get(0)?,term:r.get(1)?,canonical_name:r.get(2)?,aliases:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or_default(),definition:r.get(4)?,source:r.get(5)?,source_title:r.get(6)?,source_url:r.get(7)?,wikipedia_snapshot:r.get(8)?,status:r.get(9)?,updated_at:r.get(10)?}))?.collect::<Result<Vec<_>,_>>()?;
+pub fn list_glossary_terms(db:State<'_,Database>,query:Option<String>,source:Option<String>,status:Option<String>)->Result<Vec<GlossaryTerm>,AppError>{
+    glossary_terms_for_review(db.inner(), query.as_deref(), source.as_deref(), status.as_deref())
+}
+
+/// 名词库列表。排序按需求 7.10：标准名称精确 > 别名精确 > 标题前缀 > 摘要包含。
+/// 没有引入 FTS：项目现有 FTS 用 unicode61 分词，对中文整句只会切成一个 token，
+/// 摘要全文匹配走 LIKE 反而更准，代价是名词规模变大后需要另加 trigram 索引。
+pub(crate) fn glossary_terms_for_review(db:&Database,query:Option<&str>,source:Option<&str>,status:Option<&str>)->Result<Vec<GlossaryTerm>,AppError>{
+    let trimmed=query.unwrap_or_default().trim().to_string();
+    let pattern=format!("%{}%",trimmed);
+    let prefix=format!("{}%",trimmed);
+    let normalized=crate::wikipedia::title::normalize_search_key(&trimmed);
+    let c=db.connect()?;
+    let mut q=c.prepare("SELECT id,term,canonical_name,aliases_json,definition,source,coalesce(source_title,''),coalesce(source_url,''),coalesce(wikipedia_snapshot,''),status,updated_at,coalesce(external_page_id,0),coalesce(source_revision_id,0),coalesce(source_dump_version,''),coalesce(source_updated_at,0),coalesce(source_synced_at,0),coalesce(license_code,''),coalesce(manually_edited,0),coalesce(source_content_hash,''),coalesce(published_batch_id,'') FROM glossary_terms WHERE (term LIKE ?1 OR canonical_name LIKE ?1 OR definition LIKE ?1 OR EXISTS(SELECT 1 FROM glossary_term_aliases a WHERE a.term_id=glossary_terms.id AND a.normalized_alias LIKE ?1)) AND (?2='' OR source=?2) AND (?3='' OR status=?3) ORDER BY CASE WHEN canonical_name=?4 THEN 0 WHEN term=?4 THEN 1 WHEN EXISTS(SELECT 1 FROM glossary_term_aliases a WHERE a.term_id=glossary_terms.id AND a.normalized_alias=?5) THEN 2 WHEN term LIKE ?6 THEN 3 ELSE 4 END, updated_at DESC")?;
+    let rows=q.query_map(rusqlite::params![pattern,source.unwrap_or_default(),status.unwrap_or_default(),trimmed,normalized,prefix],|r|Ok(GlossaryTerm{id:r.get(0)?,term:r.get(1)?,canonical_name:r.get(2)?,aliases:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or_default(),definition:r.get(4)?,source:r.get(5)?,source_title:r.get(6)?,source_url:r.get(7)?,wikipedia_snapshot:r.get(8)?,status:r.get(9)?,updated_at:r.get(10)?,external_page_id:r.get(11)?,source_revision_id:r.get(12)?,source_dump_version:r.get(13)?,source_updated_at:r.get(14)?,source_synced_at:r.get(15)?,license_code:r.get(16)?,manually_edited:r.get::<_,i64>(17)?!=0,source_content_hash:r.get(18)?,published_batch_id:r.get(19)?}))?.collect::<Result<Vec<_>,_>>()?;
     Ok(rows)
+}
+
+pub(crate) const GLOSSARY_STATUSES:[&str;5]=["pending","confirmed","ignored","conflict","source_missing"];
+
+/// 单条审核：确认 / 忽略 / 退回待确认。只改审核状态，不碰来源与人工内容。
+pub(crate) fn set_glossary_term_status(db:&Database,id:i64,status:&str)->Result<(),AppError>{
+    if !GLOSSARY_STATUSES.contains(&status){return Err(AppError::Message(format!("未知的名词状态：{status}")));}
+    let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let changed=db.connect()?.execute("UPDATE glossary_terms SET status=?2,updated_at=?3 WHERE id=?1",rusqlite::params![id,status,now])?;
+    if changed==0{return Err(AppError::Message("名词不存在".into()));}
+    Ok(())
+}
+
+pub(crate) fn bulk_set_glossary_term_status(db:&Database,ids:&[i64],status:&str)->Result<u64,AppError>{
+    if !GLOSSARY_STATUSES.contains(&status){return Err(AppError::Message(format!("未知的名词状态：{status}")));}
+    if ids.is_empty(){return Ok(0);}
+    let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let list=ids.iter().map(|id|id.to_string()).collect::<Vec<_>>().join(",");
+    let changed=db.connect()?.execute(&format!("UPDATE glossary_terms SET status=?1,updated_at=?2 WHERE id IN ({list})"),rusqlite::params![status,now])?;
+    Ok(changed as u64)
 }
 
 #[tauri::command]
 pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),AppError>{
     if term.term.trim().is_empty()||term.definition.trim().is_empty(){return Err(AppError::Message("名词和解释不能为空".into()));}
+    if !term.status.is_empty()&&!GLOSSARY_STATUSES.contains(&term.status.as_str()){return Err(AppError::Message(format!("未知的名词状态：{}",term.status)));}
     let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-    db.connect()?.execute("INSERT INTO glossary_terms(id,term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at) VALUES(nullif(?1,0),?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(term) DO UPDATE SET canonical_name=excluded.canonical_name,aliases_json=excluded.aliases_json,definition=excluded.definition,source=excluded.source,source_title=excluded.source_title,source_url=excluded.source_url,wikipedia_snapshot=excluded.wikipedia_snapshot,status=excluded.status,updated_at=excluded.updated_at",rusqlite::params![term.id,term.term.trim(),term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),term.source,term.source_title,term.source_url,term.wikipedia_snapshot,term.status,now])?; Ok(())
+    let c=db.connect()?;
+    // 维基来源的词条必须保留全部来源字段：人工编辑只改展示内容（需求 5.1 / 7.8.7）。
+    let existing:Option<(i64,String,Option<i64>,String,String,i64)>=c.query_row("SELECT id,source,external_page_id,definition,canonical_name,coalesce(manually_edited,0) FROM glossary_terms WHERE term=?1",[term.term.trim()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+    let Some((row_id,stored_source,external_page_id,stored_definition,stored_canonical,manually_edited))=existing else {
+        c.execute("INSERT INTO glossary_terms(id,term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(nullif(?1,0),?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",rusqlite::params![term.id,term.term.trim(),term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(term.term.trim())])?;
+        if term.id>0{return Ok(())}
+        return Ok(());
+    };
+    let definition=term.definition.trim();
+    let canonical=term.canonical_name.trim();
+    if stored_source=="wikipedia"{
+        // 展示内容被人改过就标记 manually_edited，后续同步只更新来源快照。
+        let edited=if manually_edited==1{1}else if definition!=stored_definition||canonical!=stored_canonical{1}else{0};
+        c.execute("UPDATE glossary_terms SET canonical_name=?2,definition=?3,status=coalesce(nullif(?4,''),status),manually_edited=?5,updated_at=?6 WHERE id=?1",rusqlite::params![row_id,canonical,definition,term.status,edited,now])?;
+        sync_human_aliases(&c,row_id,&term.aliases,now)?;
+    } else {
+        c.execute("UPDATE glossary_terms SET canonical_name=?2,definition=?3,aliases_json=?4,source=?5,source_title=?6,source_url=?7,wikipedia_snapshot=?8,status=coalesce(nullif(?9,''),status),manually_edited=1,updated_at=?10 WHERE id=?1",rusqlite::params![row_id,canonical,definition,serde_json::to_string(&term.aliases)?,if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,term.status,now])?;
+    }
+    let _=external_page_id;
+    Ok(())
+}
+
+/// 人工在维基词条上加的别名进 alias 表（alias_type='manual'），
+/// 并把 alias 表里的重定向别名并回 aliases_json，保证 AI 抽取还能看到别名。
+fn sync_human_aliases(c:&rusqlite::Connection,term_id:i64,aliases:&[String],now:i64)->Result<(),AppError>{
+    for alias in aliases{
+        let alias=alias.trim();
+        if alias.is_empty(){continue}
+        let normalized=crate::wikipedia::title::normalize_search_key(alias);
+        if normalized.is_empty(){continue}
+        c.execute("INSERT INTO glossary_term_aliases(term_id,alias,normalized_alias,alias_type,source,created_at,updated_at) VALUES(?1,?2,?3,'manual','manual',?4,?4) ON CONFLICT(term_id,normalized_alias,alias_type) DO NOTHING",rusqlite::params![term_id,alias,normalized,now])?;
+    }
+    let mut statement=c.prepare("SELECT alias FROM glossary_term_aliases WHERE term_id=?1 ORDER BY alias")?;
+    let merged:Vec<String>=statement.query_map([term_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+    drop(statement);
+    c.execute("UPDATE glossary_terms SET aliases_json=?2 WHERE id=?1",rusqlite::params![term_id,serde_json::to_string(&merged)?])?;
+    Ok(())
 }
 
 #[tauri::command]

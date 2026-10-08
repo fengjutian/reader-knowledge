@@ -17,6 +17,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
 }));
 
+// jsdom 没有 ResizeObserver，@radix-ui/react-scroll-area（DataTable 在用）
+// 挂载时会直接抛错。用最小可用实现补上，只满足"存在即可调用"。
+if (!("ResizeObserver" in globalThis)) {
+  class TestResizeObserver implements ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = TestResizeObserver;
+}
+
 afterEach(() => {
   cleanup();
 });

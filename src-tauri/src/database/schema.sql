@@ -299,3 +299,117 @@ CREATE TRIGGER IF NOT EXISTS source_docs_fts_source_delete AFTER DELETE ON libra
 BEGIN
   DELETE FROM source_docs_fts WHERE source_id=OLD.id;
 END;
+
+-- ==========================================================================
+-- 维基百科名词导入（dump -> staging -> publish）
+-- glossary_terms 的新增列由 database::migrations 按版本号补齐，schema.sql 只放新表。
+-- 复用说明：glossary_terms.source 承担 source_type（manual|wikipedia|other），
+-- glossary_terms.status 承担 review_status（pending|confirmed|ignored|conflict|source_missing），
+-- wikipedia_snapshot 存最后一次由来源写入的摘要快照，用于人工审核时对比。
+-- ==========================================================================
+
+-- 名词别名。重定向、简繁搜索辅助键、人工别名统一放这里，唯一约束不含 term_id 之外的全局约束。
+CREATE TABLE IF NOT EXISTS glossary_term_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    normalized_alias TEXT NOT NULL,
+    alias_type TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    external_page_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(term_id, normalized_alias, alias_type),
+    FOREIGN KEY(term_id) REFERENCES glossary_terms(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_alias_normalized ON glossary_term_aliases(normalized_alias);
+CREATE INDEX IF NOT EXISTS idx_glossary_alias_term ON glossary_term_aliases(term_id);
+
+-- 导入任务。长任务由后台线程或 CLI 驱动，API 只负责建任务和查进度。
+CREATE TABLE IF NOT EXISTS glossary_import_jobs (
+    id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL DEFAULT 'wikipedia',
+    dump_version TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+    scanned_count INTEGER NOT NULL DEFAULT 0,
+    accepted_count INTEGER NOT NULL DEFAULT 0,
+    redirect_count INTEGER NOT NULL DEFAULT 0,
+    filtered_count INTEGER NOT NULL DEFAULT 0,
+    inserted_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    conflict_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    current_file TEXT,
+    bytes_per_second REAL NOT NULL DEFAULT 0,
+    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+    error_message TEXT,
+    report_json TEXT,
+    auto_publish INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER,
+    finished_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_jobs_status ON glossary_import_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_glossary_jobs_created ON glossary_import_jobs(created_at DESC);
+
+-- staging：解析结果先落这里，校验通过后再发布。(job_id, page_id) 保证重复执行幂等。
+CREATE TABLE IF NOT EXISTS glossary_import_staging (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    page_id INTEGER NOT NULL,
+    revision_id INTEGER,
+    raw_title TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    redirect_title TEXT,
+    summary TEXT NOT NULL DEFAULT '',
+    clean_content TEXT,
+    revision_timestamp TEXT,
+    content_hash TEXT,
+    filter_status TEXT NOT NULL,
+    filter_reason TEXT,
+    parse_status TEXT NOT NULL DEFAULT 'ok',
+    parse_error TEXT,
+    publish_status TEXT NOT NULL DEFAULT 'pending',
+    target_term_id INTEGER,
+    quality_flag TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE(job_id, page_id),
+    FOREIGN KEY(job_id) REFERENCES glossary_import_jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_staging_job_status ON glossary_import_staging(job_id, filter_status, publish_status);
+CREATE INDEX IF NOT EXISTS idx_glossary_staging_redirect ON glossary_import_staging(job_id, normalized_title) WHERE redirect_title IS NOT NULL;
+
+-- 错误与业务冲突分列 record_type，context_json 不存整篇正文。
+CREATE TABLE IF NOT EXISTS glossary_import_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    page_id INTEGER,
+    title TEXT,
+    record_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context_json TEXT,
+    retryable INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(job_id) REFERENCES glossary_import_jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_issues_job ON glossary_import_issues(job_id, record_type);
+CREATE INDEX IF NOT EXISTS idx_glossary_issues_created ON glossary_import_issues(created_at DESC);
+
+-- 管理操作审计。本地单用户应用没有账号体系，actor 固定为 local_user。
+CREATE TABLE IF NOT EXISTS glossary_import_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    job_id TEXT,
+    detail TEXT,
+    actor TEXT NOT NULL DEFAULT 'local_user',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_audit_created ON glossary_import_audit(created_at DESC);
