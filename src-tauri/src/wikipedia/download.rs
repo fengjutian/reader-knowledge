@@ -50,6 +50,16 @@ pub struct DownloadResult {
     pub elapsed_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub enum DownloadOutcome {
+    Complete(DownloadResult),
+    /// The caller requested a stop. It decides whether the partial file is retained.
+    Stopped {
+        path: PathBuf,
+        bytes: u64,
+    },
+}
+
 pub fn build_client(user_agent: &str, timeout: Duration) -> Result<Client, AppError> {
     Client::builder()
         .user_agent(user_agent)
@@ -215,9 +225,9 @@ pub fn download_with_resume<F>(
     remote: &RemoteFile,
     dest_dir: &Path,
     on_progress: F,
-) -> Result<DownloadResult, AppError>
+) -> Result<DownloadOutcome, AppError>
 where
-    F: FnMut(u64),
+    F: FnMut(u64) -> bool,
 {
     fs::create_dir_all(dest_dir)
         .map_err(|error| AppError::Message(format!("创建下载目录失败：{error}")))?;
@@ -229,13 +239,18 @@ where
     let mut on_progress = on_progress;
     match plan {
         DownloadPlan::Complete => {
-            on_progress(existing);
-            return Ok(DownloadResult {
+            if !on_progress(existing) {
+                return Ok(DownloadOutcome::Stopped {
+                    path: part,
+                    bytes: existing,
+                });
+            }
+            return Ok(DownloadOutcome::Complete(DownloadResult {
                 path: part,
                 bytes: existing,
                 resumed_from: existing,
                 elapsed_ms: 0,
-            });
+            }));
         }
         DownloadPlan::Restart => {
             let _ = fs::remove_file(&part);
@@ -298,7 +313,15 @@ where
         file.write_all(&buffer[..read])
             .map_err(|error| AppError::Message(format!("写盘失败：{error}")))?;
         written += read as u64;
-        on_progress(written);
+        if !on_progress(written) {
+            file.flush().map_err(|error| {
+                AppError::Message(format!("停止下载前刷新临时文件失败：{error}"))
+            })?;
+            return Ok(DownloadOutcome::Stopped {
+                path: part,
+                bytes: written,
+            });
+        }
     }
     file.flush()
         .map_err(|error| AppError::Message(format!("刷新文件失败：{error}")))?;
@@ -313,12 +336,12 @@ where
     // 原子改名：只有下完的文件才会出现在正式路径上。
     fs::rename(&part, &target)
         .map_err(|error| AppError::Message(format!("dump 文件改名失败：{error}")))?;
-    Ok(DownloadResult {
+    Ok(DownloadOutcome::Complete(DownloadResult {
         path: target,
         bytes: written,
         resumed_from,
         elapsed_ms: started.elapsed().as_millis() as u64,
-    })
+    }))
 }
 
 /// 解析官方 md5sums.txt：每行 `md5  文件名`。

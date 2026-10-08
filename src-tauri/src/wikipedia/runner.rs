@@ -29,6 +29,11 @@ enum Signal {
     Cancel,
 }
 
+enum DownloadStep {
+    Finished(PathBuf),
+    Interrupted(Signal),
+}
+
 #[derive(Debug, Clone)]
 pub struct RunSummary {
     pub job_id: String,
@@ -163,7 +168,15 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
                 if status == JobStatus::Pending {
                     store::transition(db, job_id, JobStatus::Downloading)?;
                 }
-                let path = download_dump(db, job_id, &job, config, max_retries)?;
+                let path = match download_dump(db, job_id, &job, config, max_retries)? {
+                    DownloadStep::Finished(path) => path,
+                    DownloadStep::Interrupted(Signal::Pause) => {
+                        return Ok(paused_summary(job_id, JobStatus::Downloading));
+                    }
+                    DownloadStep::Interrupted(Signal::Cancel) => {
+                        return Ok(cancelled_summary(job_id));
+                    }
+                };
                 if status != JobStatus::Verifying {
                     store::transition(db, job_id, JobStatus::Verifying)?;
                 }
@@ -338,7 +351,7 @@ fn download_dump(
     job: &store::ImportJob,
     config: &WikipediaConfig,
     max_retries: u32,
-) -> Result<PathBuf, AppError> {
+) -> Result<DownloadStep, AppError> {
     let temp_dir = config.ensure_temp_dir()?;
     let client = download::build_client(&config.user_agent, Duration::from_secs(60))?;
     let remote = download::probe(&client, &job.source_url, &config.allowed_hosts)?;
@@ -348,10 +361,25 @@ fn download_dump(
     let started = Instant::now();
     let mut last_flush = Instant::now();
     let mut last_bytes = 0_u64;
+    let mut observed_signal = None;
+    let mut control_error = None;
     let mut progress = |bytes| {
+        // 下载没有数据库事务批次边界，必须在流读取期间主动观察控制状态。
+        // 每个数据块检查一次，取消后会关闭响应，不再继续接收网络数据。
+        match control_signal(db, job_id) {
+            Ok(Some(signal)) => {
+                observed_signal = Some(signal);
+                return false;
+            }
+            Err(error) => {
+                control_error = Some(error);
+                return false;
+            }
+            Ok(None) => {}
+        }
         // 进度写库要节流：最多每秒一次。
         if last_flush.elapsed() < Duration::from_millis(config.progress_interval_ms) {
-            return;
+            return true;
         }
         let elapsed = started.elapsed().as_secs_f64().max(0.001);
         let speed = (bytes as f64 - last_bytes as f64)
@@ -370,11 +398,37 @@ fn download_dump(
         );
         last_flush = Instant::now();
         last_bytes = bytes;
+        true
     };
     let mut attempt = 0_u32;
     let download_result = loop {
         match download::download_with_resume(&client, &remote, &temp_dir, &mut progress) {
-            Ok(result) => break result,
+            Ok(download::DownloadOutcome::Complete(result)) => break result,
+            Ok(download::DownloadOutcome::Stopped { path, bytes }) => {
+                if let Some(error) = control_error.take() {
+                    return Err(error);
+                }
+                let signal = observed_signal.take().ok_or_else(|| {
+                    AppError::Message("下载已停止，但没有收到暂停或取消状态".to_string())
+                })?;
+                let _ = store::update_progress(
+                    db,
+                    job_id,
+                    None,
+                    Some(bytes as i64),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(&remote.file_name),
+                    Some(0.0),
+                );
+                if signal == Signal::Cancel {
+                    // 取消是终态，删除断点文件；暂停则保留文件用于安全续传。
+                    let _ = std::fs::remove_file(path);
+                }
+                return Ok(DownloadStep::Interrupted(signal));
+            }
             Err(error) if attempt < max_retries => {
                 attempt += 1;
                 store::set_error_message(
@@ -399,7 +453,7 @@ fn download_dump(
         Some(&remote.file_name),
         None,
     )?;
-    Ok(download_result.path)
+    Ok(DownloadStep::Finished(download_result.path))
 }
 
 fn verify_dump(path: &std::path::Path, config: &WikipediaConfig) -> Result<(), AppError> {
