@@ -114,7 +114,7 @@ pending → downloading → verifying → parsing → resolving_redirects
 1. `inspect` 确认源可用。
 2. `import --limit 1000`，`validate --job <id>` 看报告：过滤原因分布、冲突数、错误样例。
 3. 人工抽查 ≥50 条摘要、≥20 条重定向。
-4. 跑单个官方分片（`pages-articles-multistream*.xml-*.bz2`），记录吞吐与内存。
+4. 跑单个官方分片（推荐 `zhwiki-latest-pages-articles1.xml-p1p187712.bz2`，约 255 MB），记录吞吐与内存。
 5. 全量 `import`（**不自动发布**），查看报告与异常分布。
 6. **备份数据库**后再 `publish --job <id>`。
 7. 发布后验证名词列表、搜索、详情页来源与许可证展示。
@@ -123,7 +123,7 @@ pending → downloading → verifying → parsing → resolving_redirects
 
 按 2026-10 的 dump 规模估算（程序不假设这些数字固定，下载前会探测实际大小）：
 
-- 正文 multistream 压缩包 ≈ 3.6 GB，解压后约 40 GB
+- 正文普通压缩包 `pages-articles.xml.bz2` ≈ 3.43 GB；当前程序顺序扫描，不需要更大的 multistream 包
 - 建议可用空间 ≥ 50 GB（临时文件 15 GB / 业务数据 10 GB / 索引日志 10 GB / 余量 15 GB）
 - 下载前会检查可用空间并保留 1 GiB 余量，不够直接失败而不是下到一半失败
 

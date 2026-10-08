@@ -122,10 +122,10 @@ export function Glossary() {
         <strong>维基百科导入</strong>
         <button className="icon-button" aria-label="关闭导入面板" onClick={() => setImportOpen(false)}><X size={17}/></button>
       </header>
-      <p className="glossary-import__note">从官方中文维基 dump 导入候选名词，默认进入待确认。首次建议先跑小样本（限 1000 条）检查摘要质量，再跑全量。</p>
+      <p className="glossary-import__note">从官方中文维基 dump 导入候选名词，默认进入待确认。填写处理上限时自动下载约 255 MB 的首个正文分片；清空上限才会下载约 3.43 GB 的完整正文包。</p>
       <div className="glossary-import__form">
         <label>最多处理<input type="number" min={1} value={importLimit} onChange={event => setImportLimit(event.target.value)}/></label>
-        <label>本地 dump 文件（可选）<input value={importLocalFile} placeholder="D:\dump\zhwiki-latest-pages-articles-multistream.xml.bz2" onChange={event => setImportLocalFile(event.target.value)}/></label>
+        <label>本地 dump 文件（可选）<input value={importLocalFile} placeholder="D:\dump\zhwiki-latest-pages-articles1.xml-p1p187712.bz2" onChange={event => setImportLocalFile(event.target.value)}/></label>
         <label className="glossary-import__check"><input type="checkbox" checked={importAutoPublish} onChange={event => setImportAutoPublish(event.target.checked)}/>校验通过后自动发布</label>
         <Button icon={<UploadCloud size={15}/>} disabled={busy} onClick={() => void startImport()}>开始导入</Button>
         <Button variant="secondary" icon={<RefreshCw size={15}/>} onClick={() => void loadImports()}>刷新</Button>

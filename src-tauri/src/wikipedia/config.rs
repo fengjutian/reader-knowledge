@@ -8,8 +8,11 @@ use std::path::{Path, PathBuf};
 pub const WIKIPEDIA_LICENSE: &str = "CC BY-SA 4.0";
 pub const WIKIPEDIA_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-sa/4.0/";
 pub const DEFAULT_DUMP_BASE_URL: &str = "https://dumps.wikimedia.org/zhwiki/latest/";
-/// 生产导入用的正文 dump（multistream 支持流式解压与索引定位）。
-pub const DUMP_ARTICLES_FILENAME: &str = "zhwiki-latest-pages-articles-multistream.xml.bz2";
+/// 顺序扫描全量正文时普通 pages-articles 包更小；当前导入器不依赖 multistream 索引。
+pub const DUMP_ARTICLES_FILENAME: &str = "zhwiki-latest-pages-articles.xml.bz2";
+/// 设置处理上限时默认使用第一个官方正文分片，避免为了 1000 条试跑下载 3.4 GB 全量包。
+pub const DUMP_ARTICLES_SAMPLE_FILENAME: &str =
+    "zhwiki-latest-pages-articles1.xml-p1p187712.bz2";
 pub const DUMP_MD5SUMS_FILENAME: &str = "zhwiki-latest-md5sums.txt";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

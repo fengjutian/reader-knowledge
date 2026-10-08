@@ -99,6 +99,26 @@ fn seed_job_with(
         .id
 }
 
+#[test]
+fn 限量任务默认选择首个正文分片而非完整包() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("sample-source.db")).expect("open db");
+    let config = config(dir.path());
+    let request = ImportRequest { max_items: Some(1000), ..ImportRequest::default() };
+    let job = store::create_job(&db, &request, &config).expect("create limited job");
+    assert!(job.source_url.ends_with("zhwiki-latest-pages-articles1.xml-p1p187712.bz2"));
+}
+
+#[test]
+fn 无上限任务默认选择较小的普通完整正文包() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("full-source.db")).expect("open db");
+    let config = config(dir.path());
+    let job = store::create_job(&db, &ImportRequest::default(), &config).expect("create full job");
+    assert!(job.source_url.ends_with("zhwiki-latest-pages-articles.xml.bz2"));
+    assert!(!job.source_url.contains("multistream"));
+}
+
 /// 把 dump 里的某个标题片段整段去掉，模拟"该页在新 dump 中消失"。
 fn dump_without(xml: &str, title: &str) -> String {
     let mut out = String::with_capacity(xml.len());

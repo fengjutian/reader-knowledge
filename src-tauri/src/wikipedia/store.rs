@@ -7,6 +7,7 @@
 use crate::database::Database;
 use crate::error::AppError;
 use crate::wikipedia::config::{ImportMode, WIKIPEDIA_LICENSE};
+use crate::wikipedia::config::{DUMP_ARTICLES_FILENAME, DUMP_ARTICLES_SAMPLE_FILENAME};
 use crate::wikipedia::redirect::RedirectOutcome;
 use crate::wikipedia::title::normalize_search_key;
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -227,6 +228,11 @@ pub fn create_job(
 ) -> Result<ImportJob, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_seconds();
+    let remote_file = if request.max_items.is_some() {
+        DUMP_ARTICLES_SAMPLE_FILENAME
+    } else {
+        DUMP_ARTICLES_FILENAME
+    };
     let source_url = request
         .local_file
         .as_ref()
@@ -235,19 +241,9 @@ pub fn create_job(
             request
                 .source_url
                 .clone()
-                .map(|base| {
-                    format!(
-                        "{}{}",
-                        base.trim_end_matches('/'),
-                        "/zhwiki-latest-pages-articles-multistream.xml.bz2"
-                    )
-                })
+                .map(|base| format!("{}/{}", base.trim_end_matches('/'), remote_file))
                 .or_else(|| {
-                    Some(format!(
-                        "{}{}",
-                        config.base_url.trim_end_matches('/'),
-                        "/zhwiki-latest-pages-articles-multistream.xml.bz2"
-                    ))
+                    Some(format!("{}/{}", config.base_url.trim_end_matches('/'), remote_file))
                 })
         })
         .unwrap_or_default();
