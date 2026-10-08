@@ -140,26 +140,30 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// 探测远端文件：优先 HEAD，405/501 时退回 Range: bytes=0-0 的 GET。
+/// 探测远端文件：先用 HEAD 获取大小，再用一个字节的 Range GET 确认是否支持续传。
+/// 部分 CDN 支持 Range，却不会在 HEAD 中返回 `Accept-Ranges`，不能仅凭该响应头判定。
 pub fn probe(client: &Client, url: &str, allowed_hosts: &[String]) -> Result<RemoteFile, AppError> {
     validate_source_url(url, allowed_hosts)?;
     let file_name = safe_file_name(url)?;
 
     let head = client.head(url).send();
-    if let Ok(response) = head {
+    let mut head_total = None;
+    if let Ok(response) = &head {
         if response.status().is_success() {
-            let total_bytes = response.content_length();
-            let supports_range = response
+            head_total = response.content_length();
+            let advertises_range = response
                 .headers()
                 .get(reqwest::header::ACCEPT_RANGES)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.contains("bytes"));
-            return Ok(RemoteFile {
-                url: url.to_string(),
-                file_name,
-                total_bytes,
-                supports_range,
-            });
+            if advertises_range {
+                return Ok(RemoteFile {
+                    url: url.to_string(),
+                    file_name,
+                    total_bytes: head_total,
+                    supports_range: true,
+                });
+            }
         }
     }
 
@@ -175,22 +179,22 @@ pub fn probe(client: &Client, url: &str, allowed_hosts: &[String]) -> Result<Rem
         )));
     }
     let partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    let total_bytes = response
+    let range_total = response
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| {
-            value
-                .rsplit('/')
-                .next()
-                .and_then(|total| total.trim().parse().ok())
-        });
+        .and_then(|value| parse_content_range_total(value));
     Ok(RemoteFile {
         url: url.to_string(),
         file_name,
-        total_bytes,
+        total_bytes: range_total.or(head_total),
         supports_range: partial,
     })
+}
+
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let total = value.rsplit('/').next()?.trim();
+    (total != "*").then(|| total.parse().ok()).flatten()
 }
 
 /// 续传决策。纯函数，方便单测覆盖各种组合。
@@ -503,6 +507,16 @@ mod tests {
         assert_eq!(plan_download(40, Some(100), false), DownloadPlan::Restart);
         // 不知道总量但支持 Range：可以续传。
         assert_eq!(plan_download(40, None, true), DownloadPlan::ResumeFrom(40));
+    }
+
+    #[test]
+    fn content_range_可提取完整文件大小() {
+        assert_eq!(
+            parse_content_range_total("bytes 0-0/255512522"),
+            Some(255_512_522)
+        );
+        assert_eq!(parse_content_range_total("bytes 0-0/*"), None);
+        assert_eq!(parse_content_range_total("invalid"), None);
     }
 
     #[test]
