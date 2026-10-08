@@ -2,6 +2,7 @@
 name = "wereader"
 version = "0.2.0"
 edition = "2021"
+default-run = "wereader"
 
 [lib]
 name = "wereader_lib"
