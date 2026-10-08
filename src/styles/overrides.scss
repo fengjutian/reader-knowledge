@@ -967,6 +967,19 @@ body { background-color:var(--bg); }
   font-size: 11px;
   line-height: 1.6;
 }
+.glossary-import__note span {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  gap: 4px 10px;
+}
+.glossary-import__note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.glossary-import__note a:hover {
+  text-decoration: underline;
+}
 .glossary-import__form {
   display: flex;
   flex-wrap: wrap;

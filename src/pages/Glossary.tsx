@@ -24,6 +24,8 @@ const JOB_STATUS_LABEL: Record<GlossaryImportJobStatus, string> = {
   cancelled: "已取消", failed: "失败",
 };
 const RUNNING: GlossaryImportJobStatus[] = ["downloading", "verifying", "parsing", "resolving_redirects", "validating", "publishing"];
+const WIKIPEDIA_SAMPLE_DUMP_URL = "https://dumps.wikimedia.org/zhwiki/latest/zhwiki-latest-pages-articles1.xml-p1p187712.bz2";
+const WIKIPEDIA_FULL_DUMP_URL = "https://dumps.wikimedia.org/zhwiki/latest/zhwiki-latest-pages-articles.xml.bz2";
 
 const formatTime = (seconds: number) => (seconds > 0 ? new Date(seconds * 1000).toLocaleString("zh-CN") : "—");
 const formatBytes = (bytes: number) => (bytes > 0 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : "—");
@@ -128,7 +130,10 @@ export function Glossary() {
         <strong>维基百科导入</strong>
         <button className="icon-button" aria-label="关闭导入面板" onClick={() => setImportOpen(false)}><X size={17}/></button>
       </header>
-      <p className="glossary-import__note">从中文维基 dump 导入候选名词，默认进入待确认。可粘贴其他 HTTPS 镜像的完整下载地址或目录地址；留空则使用官方地址。本地文件优先于下载地址。第三方地址无法使用官方校验文件，将由解压解析过程检查文件有效性。</p>
+      <p className="glossary-import__note">
+        从中文维基 dump 导入候选名词，默认进入待确认。可粘贴其他 HTTPS 镜像的完整下载地址或目录地址；留空则使用官方地址。本地文件优先于下载地址。第三方地址无法使用官方校验文件，将由解压解析过程检查文件有效性。
+        <span>官方下载：<a href={WIKIPEDIA_SAMPLE_DUMP_URL} target="_blank" rel="noreferrer">正文分片（约 255 MB）</a><a href={WIKIPEDIA_FULL_DUMP_URL} target="_blank" rel="noreferrer">完整正文包（约 3.43 GB）</a></span>
+      </p>
       <div className="glossary-import__form">
         <label>最多处理<input type="number" min={1} value={importLimit} onChange={event => setImportLimit(event.target.value)}/></label>
         <label>下载地址（可选）<input type="url" value={importSourceUrl} placeholder="https://mirror.example/zhwiki-pages-articles.xml.bz2" onChange={event => setImportSourceUrl(event.target.value)}/></label>

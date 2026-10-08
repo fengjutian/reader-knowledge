@@ -144,6 +144,8 @@ describe("名词库的维基导入与来源展示", () => {
     const spy = vi.spyOn(api, "createGlossaryImport").mockImplementation(async () => job({ status: "pending" }));
     render(<Glossary />);
     await userEvent.click(await screen.findByText("维基导入"));
+    expect(screen.getByRole("link", { name: /正文分片/ }).getAttribute("href")).toContain("dumps.wikimedia.org/zhwiki/latest/");
+    expect(screen.getByRole("link", { name: /完整正文包/ }).getAttribute("href")).toContain("zhwiki-latest-pages-articles.xml.bz2");
     await userEvent.type(screen.getByLabelText("下载地址（可选）"), "https://mirror.example/zhwiki.xml.bz2");
     await userEvent.click(screen.getByText("开始导入"));
     await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({ sourceUrl: "https://mirror.example/zhwiki.xml.bz2" })));

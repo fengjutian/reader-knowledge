@@ -243,7 +243,11 @@ pub fn create_job(
                 .clone()
                 .map(|url| resolve_source_url(&url, remote_file))
                 .or_else(|| {
-                    Some(format!("{}/{}", config.base_url.trim_end_matches('/'), remote_file))
+                    Some(format!(
+                        "{}/{}",
+                        config.base_url.trim_end_matches('/'),
+                        remote_file
+                    ))
                 })
         })
         .unwrap_or_default();

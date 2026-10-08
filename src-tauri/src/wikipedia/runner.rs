@@ -172,15 +172,16 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
                 if status == JobStatus::Pending {
                     store::transition(db, job_id, JobStatus::Downloading)?;
                 }
-                let path = match download_dump(db, job_id, &job, config, max_retries, custom_source)? {
-                    DownloadStep::Finished(path) => path,
-                    DownloadStep::Interrupted(Signal::Pause) => {
-                        return Ok(paused_summary(job_id, JobStatus::Downloading));
-                    }
-                    DownloadStep::Interrupted(Signal::Cancel) => {
-                        return Ok(cancelled_summary(job_id));
-                    }
-                };
+                let path =
+                    match download_dump(db, job_id, &job, config, max_retries, custom_source)? {
+                        DownloadStep::Finished(path) => path,
+                        DownloadStep::Interrupted(Signal::Pause) => {
+                            return Ok(paused_summary(job_id, JobStatus::Downloading));
+                        }
+                        DownloadStep::Interrupted(Signal::Cancel) => {
+                            return Ok(cancelled_summary(job_id));
+                        }
+                    };
                 if status != JobStatus::Verifying {
                     store::transition(db, job_id, JobStatus::Verifying)?;
                 }
@@ -369,7 +370,10 @@ fn download_dump(
             .host_str()
             .ok_or_else(|| AppError::Message("dump 地址缺少主机名".to_string()))?
             .to_lowercase();
-        if !allowed_hosts.iter().any(|item| item.eq_ignore_ascii_case(&host)) {
+        if !allowed_hosts
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(&host))
+        {
             allowed_hosts.push(host);
         }
     }
