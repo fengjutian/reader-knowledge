@@ -117,6 +117,10 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         .get("maxRetries")
         .and_then(json_u64)
         .unwrap_or(config.max_retries as u64) as u32;
+    let custom_source = job_config
+        .get("customSource")
+        .and_then(json_bool)
+        .unwrap_or(false);
     let mode = ImportMode::parse(&job.mode)?;
     let filter_disambiguation = job_config
         .get("filterDisambiguation")
@@ -168,7 +172,7 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
                 if status == JobStatus::Pending {
                     store::transition(db, job_id, JobStatus::Downloading)?;
                 }
-                let path = match download_dump(db, job_id, &job, config, max_retries)? {
+                let path = match download_dump(db, job_id, &job, config, max_retries, custom_source)? {
                     DownloadStep::Finished(path) => path,
                     DownloadStep::Interrupted(Signal::Pause) => {
                         return Ok(paused_summary(job_id, JobStatus::Downloading));
@@ -180,7 +184,9 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
                 if status != JobStatus::Verifying {
                     store::transition(db, job_id, JobStatus::Verifying)?;
                 }
-                verify_dump(&path, config)?;
+                if !custom_source {
+                    verify_dump(&path, config)?;
+                }
                 path
             }
         })
@@ -351,10 +357,23 @@ fn download_dump(
     job: &store::ImportJob,
     config: &WikipediaConfig,
     max_retries: u32,
+    custom_source: bool,
 ) -> Result<DownloadStep, AppError> {
     let temp_dir = config.ensure_temp_dir()?;
     let client = download::build_client(&config.user_agent, Duration::from_secs(60))?;
-    let remote = download::probe(&client, &job.source_url, &config.allowed_hosts)?;
+    let mut allowed_hosts = config.allowed_hosts.clone();
+    if custom_source {
+        let parsed = reqwest::Url::parse(&job.source_url)
+            .map_err(|error| AppError::Message(format!("dump 地址无法解析：{error}")))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| AppError::Message("dump 地址缺少主机名".to_string()))?
+            .to_lowercase();
+        if !allowed_hosts.iter().any(|item| item.eq_ignore_ascii_case(&host)) {
+            allowed_hosts.push(host);
+        }
+    }
+    let remote = download::probe(&client, &job.source_url, &allowed_hosts)?;
     if let Some(total) = remote.total_bytes {
         store::set_total_bytes(db, job_id, total as i64)?;
     }

@@ -43,6 +43,7 @@ export function Glossary() {
   const [jobs, setJobs] = useState<GlossaryImportJob[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [importLimit, setImportLimit] = useState("1000");
+  const [importSourceUrl, setImportSourceUrl] = useState("");
   const [importLocalFile, setImportLocalFile] = useState("");
   const [importAutoPublish, setImportAutoPublish] = useState(false);
 
@@ -80,18 +81,23 @@ export function Glossary() {
         mode: "summary",
         autoPublish: importAutoPublish,
         maxItems: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+        sourceUrl: importSourceUrl.trim() || undefined,
         localFile: importLocalFile.trim() || undefined,
       });
       await loadImports();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   }
-  async function jobAction(action: "pause" | "resume" | "cancel" | "publish", id: string) {
+  async function jobAction(action: "pause" | "resume" | "cancel" | "publish" | "delete", id: string) {
     setBusy(true); setError("");
     try {
       if (action === "pause") await api.pauseGlossaryImport(id);
       if (action === "resume") await api.resumeGlossaryImport(id);
       if (action === "cancel") await api.cancelGlossaryImport(id);
       if (action === "publish") await api.publishGlossaryImport(id);
+      if (action === "delete") {
+        if (!window.confirm("确定删除这条导入记录吗？已发布到名词库的内容不会被删除。")) return;
+        await api.deleteGlossaryImport(id);
+      }
       await loadImports();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   }
@@ -122,9 +128,10 @@ export function Glossary() {
         <strong>维基百科导入</strong>
         <button className="icon-button" aria-label="关闭导入面板" onClick={() => setImportOpen(false)}><X size={17}/></button>
       </header>
-      <p className="glossary-import__note">从官方中文维基 dump 导入候选名词，默认进入待确认。填写处理上限时自动下载约 255 MB 的首个正文分片；清空上限才会下载约 3.43 GB 的完整正文包。</p>
+      <p className="glossary-import__note">从中文维基 dump 导入候选名词，默认进入待确认。可粘贴其他 HTTPS 镜像的完整下载地址或目录地址；留空则使用官方地址。本地文件优先于下载地址。第三方地址无法使用官方校验文件，将由解压解析过程检查文件有效性。</p>
       <div className="glossary-import__form">
         <label>最多处理<input type="number" min={1} value={importLimit} onChange={event => setImportLimit(event.target.value)}/></label>
+        <label>下载地址（可选）<input type="url" value={importSourceUrl} placeholder="https://mirror.example/zhwiki-pages-articles.xml.bz2" onChange={event => setImportSourceUrl(event.target.value)}/></label>
         <label>本地 dump 文件（可选）<input value={importLocalFile} placeholder="D:\dump\zhwiki-latest-pages-articles1.xml-p1p187712.bz2" onChange={event => setImportLocalFile(event.target.value)}/></label>
         <label className="glossary-import__check"><input type="checkbox" checked={importAutoPublish} onChange={event => setImportAutoPublish(event.target.checked)}/>校验通过后自动发布</label>
         <Button icon={<UploadCloud size={15}/>} disabled={busy} onClick={() => void startImport()}>开始导入</Button>
@@ -203,7 +210,7 @@ function Attribution({ term }: { term: GlossaryTerm }) {
   </div>;
 }
 
-function ImportJobRow({ job, busy, onAction }: { job: GlossaryImportJob; busy: boolean; onAction: (action: "pause" | "resume" | "cancel" | "publish") => void }) {
+function ImportJobRow({ job, busy, onAction }: { job: GlossaryImportJob; busy: boolean; onAction: (action: "pause" | "resume" | "cancel" | "publish" | "delete") => void }) {
   const progress = job.totalBytes > 0 ? Math.min(100, Math.round((job.downloadedBytes / job.totalBytes) * 100)) : 0;
   const running = RUNNING.includes(job.status);
   return <article className="glossary-import__job">
@@ -231,6 +238,7 @@ function ImportJobRow({ job, busy, onAction }: { job: GlossaryImportJob; busy: b
       {job.status === "paused" && <Button variant="secondary" disabled={busy} icon={<Play size={13}/>} onClick={() => onAction("resume")}>继续</Button>}
       {job.status === "ready_to_publish" && <Button disabled={busy} icon={<Check size={13}/>} onClick={() => onAction("publish")}>发布本批</Button>}
       {(running || job.status === "paused" || job.status === "pending") && <Button variant="secondary" disabled={busy} icon={<X size={13}/>} onClick={() => onAction("cancel")}>取消</Button>}
+      {(["completed", "cancelled", "failed"] as GlossaryImportJobStatus[]).includes(job.status) && <Button variant="secondary" className="danger" disabled={busy} icon={<Trash2 size={13}/>} onClick={() => onAction("delete")}>删除记录</Button>}
     </footer>
   </article>;
 }

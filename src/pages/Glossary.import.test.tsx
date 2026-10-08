@@ -74,6 +74,7 @@ beforeEach(() => {
   vi.spyOn(api, "setGlossaryTermStatus").mockImplementation(async () => undefined);
   vi.spyOn(api, "bulkGlossaryTermStatus").mockImplementation(async () => 0);
   vi.spyOn(api, "createGlossaryImport").mockImplementation(async () => job({ status: "pending" }));
+  vi.spyOn(api, "deleteGlossaryImport").mockImplementation(async () => undefined);
   vi.spyOn(api, "publishGlossaryImport").mockImplementation(async () => ({ inserted: 1, updated: 0, skipped: 0, conflicts: 0, aliasesInserted: 0, sourceMissing: 0 }));
   vi.spyOn(api, "openExternalUrl").mockImplementation(async () => undefined);
 });
@@ -137,6 +138,25 @@ describe("名词库的维基导入与来源展示", () => {
     await userEvent.type(limit, "1000");
     await userEvent.click(screen.getByText("开始导入"));
     await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({ mode: "summary", maxItems: 1000 })));
+  });
+
+  it("可以从页面提供自定义 dump 下载地址", async () => {
+    const spy = vi.spyOn(api, "createGlossaryImport").mockImplementation(async () => job({ status: "pending" }));
+    render(<Glossary />);
+    await userEvent.click(await screen.findByText("维基导入"));
+    await userEvent.type(screen.getByLabelText("下载地址（可选）"), "https://mirror.example/zhwiki.xml.bz2");
+    await userEvent.click(screen.getByText("开始导入"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({ sourceUrl: "https://mirror.example/zhwiki.xml.bz2" })));
+  });
+
+  it("已停止的导入记录可以删除", async () => {
+    jobs = [job({ status: "cancelled" })];
+    const spy = vi.spyOn(api, "deleteGlossaryImport").mockImplementation(async () => undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Glossary />);
+    await userEvent.click(await screen.findByText("维基导入"));
+    await userEvent.click(await screen.findByText("删除记录"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("job-1"));
   });
 
   it("就绪任务提供发布按钮", async () => {

@@ -985,7 +985,8 @@ body { background-color:var(--bg); }
 .glossary-import__form input[type='number'] {
   width: 110px;
 }
-.glossary-import__form label:nth-child(2) input {
+.glossary-import__form label:nth-child(2) input,
+.glossary-import__form label:nth-child(3) input {
   width: min(420px, 46vw);
 }
 .glossary-import__check {

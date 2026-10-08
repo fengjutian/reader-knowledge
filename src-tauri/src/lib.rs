@@ -58,6 +58,7 @@ pub fn run() {
             commands::glossary_import::pause_glossary_import,
             commands::glossary_import::resume_glossary_import,
             commands::glossary_import::cancel_glossary_import,
+            commands::glossary_import::delete_glossary_import,
             commands::glossary_import::publish_glossary_import,
             commands::glossary_import::glossary_import_errors,
             commands::glossary_import::glossary_import_report,

@@ -119,6 +119,33 @@ fn 无上限任务默认选择较小的普通完整正文包() {
     assert!(!job.source_url.contains("multistream"));
 }
 
+#[test]
+fn 自定义完整下载地址不会再拼接默认文件名() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("custom-source.db")).expect("open db");
+    let config = config(dir.path());
+    let url = "https://dumps.wikimedia.org/other/zhwiki-custom.xml.bz2?download=1";
+    let request = ImportRequest {
+        source_url: Some(url.to_string()),
+        max_items: Some(1000),
+        ..ImportRequest::default()
+    };
+    let job = store::create_job(&db, &request, &config).expect("create custom job");
+    assert_eq!(job.source_url, url);
+}
+
+#[test]
+fn 已取消任务可删除且运行任务不可删除() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("delete-job.db")).expect("open db");
+    let config = config(dir.path());
+    let running = store::create_job(&db, &ImportRequest::default(), &config).expect("create job");
+    assert!(store::delete_job(&db, &running.id).is_err());
+    store::cancel_job(&db, &running.id).expect("cancel job");
+    store::delete_job(&db, &running.id).expect("delete job");
+    assert!(store::get_job(&db, &running.id).expect("get job").is_none());
+}
+
 /// 把 dump 里的某个标题片段整段去掉，模拟"该页在新 dump 中消失"。
 fn dump_without(xml: &str, title: &str) -> String {
     let mut out = String::with_capacity(xml.len());

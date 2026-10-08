@@ -241,12 +241,21 @@ pub fn create_job(
             request
                 .source_url
                 .clone()
-                .map(|base| format!("{}/{}", base.trim_end_matches('/'), remote_file))
+                .map(|url| resolve_source_url(&url, remote_file))
                 .or_else(|| {
                     Some(format!("{}/{}", config.base_url.trim_end_matches('/'), remote_file))
                 })
         })
         .unwrap_or_default();
+    if request.local_file.is_none() {
+        let parsed = reqwest::Url::parse(&source_url)
+            .map_err(|error| AppError::Message(format!("dump 地址无法解析：{error}")))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| AppError::Message("dump 地址缺少主机名".to_string()))?
+            .to_string();
+        crate::wikipedia::download::validate_source_url(&source_url, &[host])?;
+    }
     let dump_version = request
         .dump_version
         .clone()
@@ -263,6 +272,7 @@ pub fn create_job(
         "maxRetries": request.max_retries.unwrap_or(config.max_retries),
         "tempDir": request.temp_dir.clone().unwrap_or_else(|| config.temp_dir.clone()).display().to_string(),
         "localFile": request.local_file.as_ref().map(|path| path.display().to_string()),
+        "customSource": request.source_url.is_some(),
         "summaryMinChars": config.summary_min_chars,
         "summaryMaxChars": config.summary_max_chars,
     })
@@ -291,6 +301,47 @@ pub fn create_job(
         &format!("mode={}", mode.as_str()),
     )?;
     get_job(db, &id)?.ok_or_else(|| AppError::Message("任务创建后读不到".to_string()))
+}
+
+/// 用户既可以提供 dump 目录，也可以直接粘贴某个 dump 文件的下载地址。
+fn resolve_source_url(value: &str, default_file: &str) -> String {
+    let value = value.trim();
+    let path = value.split(['?', '#']).next().unwrap_or(value);
+    if path.ends_with(".bz2") || path.ends_with(".xml") {
+        value.to_string()
+    } else {
+        format!("{}/{}", value.trim_end_matches('/'), default_file)
+    }
+}
+
+/// 删除一条已经停止的导入记录。关联 staging 与 issue 由外键级联清理，
+/// 已发布到名词库的内容不受影响。
+pub fn delete_job(db: &Database, id: &str) -> Result<(), AppError> {
+    let mut connection = db.connect()?;
+    let transaction = connection.transaction()?;
+    let status: Option<String> = transaction
+        .query_row(
+            "SELECT status FROM glossary_import_jobs WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let status = status.ok_or_else(|| AppError::Message("导入任务不存在".to_string()))?;
+    let status = JobStatus::parse(&status)?;
+    if !status.is_terminal() {
+        return Err(AppError::Message(
+            "只能删除已完成、已取消或失败的导入记录；请先取消仍在进行的任务".to_string(),
+        ));
+    }
+    transaction.execute("DELETE FROM glossary_import_jobs WHERE id = ?1", [id])?;
+    audit(
+        &transaction,
+        "job_deleted",
+        Some(id),
+        &format!("status={}", status.as_str()),
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 const JOB_COLUMNS: &str = "id, source_type, dump_version, source_url, mode, status, total_bytes,

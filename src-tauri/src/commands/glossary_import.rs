@@ -132,6 +132,11 @@ pub fn cancel_glossary_import(db: State<'_, Database>, id: String) -> Result<Imp
 }
 
 #[tauri::command]
+pub fn delete_glossary_import(db: State<'_, Database>, id: String) -> Result<(), AppError> {
+    store::delete_job(db.inner(), &id)
+}
+
+#[tauri::command]
 pub fn publish_glossary_import(
     app: AppHandle,
     db: State<'_, Database>,
