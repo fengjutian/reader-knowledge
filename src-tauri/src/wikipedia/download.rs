@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(plan_download(0, Some(100), true), DownloadPlan::Restart);
         assert_eq!(plan_download(40, Some(100), true), DownloadPlan::ResumeFrom(40));
         assert_eq!(plan_download(100, Some(100), true), DownloadPlan::Complete);
-        assert_eq!(plan_download(120, Some(100), true), DownloadPlan::Complete);
+        assert_eq!(plan_download(120, Some(100), true), DownloadPlan::Restart);
         // 服务端不支持 Range：只能重来。
         assert_eq!(plan_download(40, Some(100), false), DownloadPlan::Restart);
         // 不知道总量但支持 Range：可以续传。

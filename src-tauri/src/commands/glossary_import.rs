@@ -11,7 +11,7 @@ use crate::error::AppError;
 use crate::wikipedia::config::WikipediaConfig;
 use crate::wikipedia::report;
 use crate::wikipedia::runner;
-use crate::wikipedia::store::{self, ImportIssue, ImportJob, ImportRequest, JobStatus, PublishSummary};
+use crate::wikipedia::store::{self, ImportIssue, ImportJob, ImportRequest, JobStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};

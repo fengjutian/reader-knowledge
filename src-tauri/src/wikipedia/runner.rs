@@ -13,11 +13,10 @@ use crate::wikipedia::store::{self, ImportRequest, JobStatus, PublishSummary, St
 use crate::wikipedia::title::{looks_like_list_page, normalize_search_key, normalize_title};
 use crate::wikipedia::wikitext::{SummaryOptions, SummaryQuality, extract_summary, soft_redirect_target};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use fs4::fs_std::FileExt;
 
 /// 清洗后短于这个长度就当作信息量不足过滤掉。
 const MIN_USEFUL_CHARS: usize = 12;
@@ -47,7 +46,7 @@ pub fn run_pipeline(
     let lock_path = config.temp_dir.join(format!("wikipedia-job-{job_id}.lock"));
     let lock_file = OpenOptions::new().create(true).read(true).write(true).open(&lock_path)
         .map_err(|error| AppError::Message(format!("无法打开任务锁 {}：{error}", lock_path.display())))?;
-    if lock_file.try_lock_exclusive().is_err() {
+    if lock_file.try_lock().is_err() {
         let current = store::get_job(&db, &job_id)?
             .ok_or_else(|| AppError::Message(format!("导入任务不存在：{job_id}")))?;
         return Ok(RunSummary {
@@ -104,6 +103,10 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
     let mode = ImportMode::parse(&job.mode)?;
     let filter_disambiguation = job_config
         .get("filterDisambiguation")
+        .and_then(json_bool)
+        .unwrap_or(true);
+    let handle_redirects = job_config
+        .get("handleRedirects")
         .and_then(json_bool)
         .unwrap_or(true);
     let filter_list_pages = job_config
@@ -165,6 +168,7 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         mode,
         filter_disambiguation,
         filter_list_pages,
+        handle_redirects,
         max_items,
         batch_size,
       )?;
@@ -366,6 +370,7 @@ fn stage_pages(
     mode: ImportMode,
     filter_disambiguation: bool,
     filter_list_pages: bool,
+    handle_redirects: bool,
     max_items: Option<u64>,
     batch_size: usize,
 ) -> Result<Option<Signal>, AppError> {
@@ -418,13 +423,17 @@ fn stage_pages(
             counters.skipped += 1;
             return Ok(Flow::Continue);
         }
-        let decision = classify(
-            &page,
-            summary_options,
-            mode,
-            filter_disambiguation,
-            filter_list_pages,
-        );
+        let decision = if !handle_redirects && page.redirect_target.is_some() {
+            PageDecision::Skip("redirect_disabled")
+        } else {
+            classify(
+                &page,
+                summary_options,
+                mode,
+                filter_disambiguation,
+                filter_list_pages,
+            )
+        };
         counters.scanned += 1;
         match decision {
             PageDecision::Skip(reason) => {

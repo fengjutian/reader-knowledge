@@ -123,6 +123,8 @@ fn 小样本导入到发布全流程() {
     let summary = runner::run_pipeline(Arc::new(db.reopen().expect("reopen")), id.clone(), config)
         .expect("pipeline should succeed");
     assert_eq!(summary.status, JobStatus::Completed, "{}", summary.message);
+    let finished = store::get_job(&db, &id).expect("job").expect("job row").finished_at;
+    assert!(finished > 0, "成功任务必须记录 finished_at，供报告和 staging 清理使用");
 
     // 普通词条成为待确认候选
     let (term_id, status, definition, edited) = term_of(&db, "人工智能").expect("人工智能 should exist");
@@ -163,6 +165,36 @@ fn 小样本导入到发布全流程() {
     );
     drop(connection);
     assert!(term_id > 0, "名词应有主键");
+}
+
+#[test]
+fn 后置阶段暂停后按阶段恢复而不重新解析() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("resume-stage.db")).expect("open db");
+    let config = config(dir.path());
+    let dump = write_fixture(dir.path());
+    let id = seed_job_with(&db, &dump, &config, false);
+
+    store::transition(&db, &id, JobStatus::Parsing).expect("to parsing");
+    store::transition(&db, &id, JobStatus::ResolvingRedirects).expect("to redirects");
+    store::pause_job(&db, &id).expect("pause redirects");
+    assert_eq!(store::resume_job(&db, &id).expect("resume redirects"), JobStatus::ResolvingRedirects);
+
+    let summary = runner::run_pipeline(Arc::new(db.reopen().expect("reopen")), id.clone(), config)
+        .expect("resume from redirects must succeed");
+    assert_eq!(summary.status, JobStatus::ReadyToPublish);
+}
+
+#[test]
+fn 非暂停任务不能重复恢复并启动第二执行器() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Database::open(dir.path().join("double-resume.db")).expect("open db");
+    let config = config(dir.path());
+    let dump = write_fixture(dir.path());
+    let id = seed_job_with(&db, &dump, &config, false);
+    store::pause_job(&db, &id).expect("pause");
+    store::resume_job(&db, &id).expect("first resume");
+    assert!(store::resume_job(&db, &id).is_err(), "第二次恢复必须被拒绝");
 }
 
 #[test]
