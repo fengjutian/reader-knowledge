@@ -87,7 +87,7 @@ export const api = {
   pauseGlossaryImport: (id: string) => call<GlossaryImportJob>("pause_glossary_import", { id }),
   resumeGlossaryImport: (id: string) => call<GlossaryImportJob>("resume_glossary_import", { id }),
   cancelGlossaryImport: (id: string) => call<GlossaryImportJob>("cancel_glossary_import", { id }),
-  publishGlossaryImport: (id: string) => call<GlossaryPublishSummary>("publish_glossary_import", { id }),
+  publishGlossaryImport: (id: string) => call<GlossaryImportJob>("publish_glossary_import", { id }),
   glossaryImportErrors: (id: string, recordType?: string, limit = 100) => call<GlossaryImportIssue[]>("glossary_import_errors", { id, recordType: recordType ?? null, limit }),
   glossaryImportReport: (id: string) => call<Record<string, unknown>>("glossary_import_report", { id }),
   cleanupGlossaryImport: (retentionDays?: number) => call<number>("cleanup_glossary_import", { retentionDays: retentionDays ?? null }),

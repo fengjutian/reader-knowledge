@@ -13,9 +13,11 @@ use crate::wikipedia::store::{self, ImportRequest, JobStatus, PublishSummary, St
 use crate::wikipedia::title::{looks_like_list_page, normalize_search_key, normalize_title};
 use crate::wikipedia::wikitext::{SummaryOptions, SummaryQuality, extract_summary, soft_redirect_target};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use fs4::fs_std::FileExt;
 
 /// 清洗后短于这个长度就当作信息量不足过滤掉。
 const MIN_USEFUL_CHARS: usize = 12;
@@ -41,6 +43,21 @@ pub fn run_pipeline(
     job_id: String,
     config: WikipediaConfig,
 ) -> Result<RunSummary, AppError> {
+    config.ensure_temp_dir()?;
+    let lock_path = config.temp_dir.join(format!("wikipedia-job-{job_id}.lock"));
+    let lock_file = OpenOptions::new().create(true).read(true).write(true).open(&lock_path)
+        .map_err(|error| AppError::Message(format!("无法打开任务锁 {}：{error}", lock_path.display())))?;
+    if lock_file.try_lock_exclusive().is_err() {
+        let current = store::get_job(&db, &job_id)?
+            .ok_or_else(|| AppError::Message(format!("导入任务不存在：{job_id}")))?;
+        return Ok(RunSummary {
+            job_id,
+            status: JobStatus::parse(&current.status)?,
+            scanned: current.scanned_count as u64,
+            published: None,
+            message: "任务已有执行器运行，本次启动已安全忽略".to_string(),
+        });
+    }
     let outcome = execute(&db, &job_id, &config);
     match outcome {
         Ok(summary) => {
@@ -60,7 +77,7 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
     let job = store::get_job(db, job_id)?
         .ok_or_else(|| AppError::Message(format!("任务不存在：{job_id}")))?;
     let job_config = store::job_config(db, job_id)?;
-    let status = JobStatus::parse(&job.status)?;
+    let mut status = JobStatus::parse(&job.status)?;
     if status.is_terminal() {
         return Ok(RunSummary {
             job_id: job_id.to_string(),
@@ -105,8 +122,9 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
             .unwrap_or(config.summary_max_chars as u64) as usize,
     };
 
-    // ---------- 1. 拿到 dump 文件 ----------
-    let dump_path: PathBuf = match request.local_file.clone() {
+    // 只有下载/校验/解析阶段需要 dump。后续阶段恢复时直接从 staging 继续。
+    let needs_dump = matches!(status, JobStatus::Pending | JobStatus::Downloading | JobStatus::Verifying | JobStatus::Parsing);
+    let dump_path: Option<PathBuf> = if needs_dump { Some(match request.local_file.clone() {
         Some(path) => {
             if !path.exists() {
                 return Err(AppError::Message(format!("本地 dump 不存在：{}", path.display())));
@@ -120,26 +138,28 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
                     Signal::Cancel => cancelled_summary(job_id),
                 });
             }
-            store::transition(db, job_id, JobStatus::Downloading)?;
+            if status == JobStatus::Pending { store::transition(db, job_id, JobStatus::Downloading)?; }
             let path = download_dump(db, job_id, &job, config)?;
-            store::transition(db, job_id, JobStatus::Verifying)?;
+            if status != JobStatus::Verifying { store::transition(db, job_id, JobStatus::Verifying)?; }
             verify_dump(&path, config)?;
             path
         }
-    };
+    }) } else { None };
 
     if control_signal(db, job_id)? == Some(Signal::Cancel) {
         return Ok(cancelled_summary(job_id));
     }
 
     // ---------- 2. 流式解析到 staging ----------
-    if !matches!(status, JobStatus::Parsing) {
+    if needs_dump && status != JobStatus::Parsing {
         store::transition(db, job_id, JobStatus::Parsing)?;
+        status = JobStatus::Parsing;
     }
-    let staged = stage_pages(
+    if needs_dump {
+      let staged = stage_pages(
         db,
         job_id,
-        &dump_path,
+        dump_path.as_deref().expect("dump path is present while parsing"),
         config,
         &summary_options,
         mode,
@@ -147,21 +167,27 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         filter_list_pages,
         max_items,
         batch_size,
-    )?;
-    if staged == Some(Signal::Pause) {
+      )?;
+      if staged == Some(Signal::Pause) {
         return Ok(paused_summary(job_id, JobStatus::Parsing));
-    }
-    if staged == Some(Signal::Cancel) {
+      }
+      if staged == Some(Signal::Cancel) {
         return Ok(cancelled_summary(job_id));
+      }
+      status = JobStatus::Parsing;
     }
 
     // ---------- 3. 重定向解析 ----------
-    store::transition(db, job_id, JobStatus::ResolvingRedirects)?;
-    if control_signal(db, job_id)? == Some(Signal::Cancel) {
-        return Ok(cancelled_summary(job_id));
+    if status == JobStatus::Parsing {
+      store::transition(db, job_id, JobStatus::ResolvingRedirects)?;
+      status = JobStatus::ResolvingRedirects;
     }
-    let (resolved, broken) = store::resolve_batch_redirects(db, job_id, DEFAULT_MAX_REDIRECT_DEPTH)?;
-    if resolved > 0 || broken > 0 {
+    if status == JobStatus::ResolvingRedirects {
+      if let Some(signal) = control_signal(db, job_id)? {
+        return Ok(match signal { Signal::Pause => paused_summary(job_id, status), Signal::Cancel => cancelled_summary(job_id) });
+      }
+      let (resolved, broken) = store::resolve_batch_redirects(db, job_id, DEFAULT_MAX_REDIRECT_DEPTH)?;
+      if resolved > 0 || broken > 0 {
         store::log_issue(
             db,
             job_id,
@@ -172,11 +198,17 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
             "",
             false,
         )?;
+      }
+      store::transition(db, job_id, JobStatus::Validating)?;
+      status = JobStatus::Validating;
     }
 
     // ---------- 4. 批次校验 ----------
-    store::transition(db, job_id, JobStatus::Validating)?;
-    let validation = store::validate_batch(db, job_id)?;
+    if status == JobStatus::Validating {
+      if let Some(signal) = control_signal(db, job_id)? {
+        return Ok(match signal { Signal::Pause => paused_summary(job_id, status), Signal::Cancel => cancelled_summary(job_id) });
+      }
+      let validation = store::validate_batch(db, job_id)?;
     store::save_checkpoint(
         db,
         job_id,
@@ -187,11 +219,13 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
             "aliasConflicts": validation.alias_conflicts,
         }),
     )?;
-    store::transition(db, job_id, JobStatus::ReadyToPublish)?;
+      store::transition(db, job_id, JobStatus::ReadyToPublish)?;
+      status = JobStatus::ReadyToPublish;
+    }
 
     // ---------- 5. 发布 ----------
     let mut published = None;
-    if job.auto_publish {
+    if job.auto_publish && status == JobStatus::ReadyToPublish {
         if let Some(signal) = control_signal(db, job_id)? {
             return Ok(match signal {
                 Signal::Pause => paused_summary(job_id, JobStatus::ReadyToPublish),
@@ -199,6 +233,9 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
             });
         }
         store::transition(db, job_id, JobStatus::Publishing)?;
+        status = JobStatus::Publishing;
+    }
+    if status == JobStatus::Publishing {
         let mut summary = store::publish_batch(db, job_id, &job.dump_version, batch_size.max(50))?;
         // 只有整批导入才允许判定“来源失效”，--limit 的部分批次不能做这件事，
         // 否则没扫到的词条会被误标成来源消失。
@@ -309,7 +346,12 @@ fn verify_dump(path: &std::path::Path, config: &WikipediaConfig) -> Result<(), A
     let expected = sums
         .get(file_name)
         .ok_or_else(|| AppError::Message(format!("md5sums.txt 里没有 {file_name} 的校验和")))?;
-    download::verify_md5(path, expected)?;
+    if let Err(error) = download::verify_md5(path, expected) {
+        // 下载目录里的已完成/断点文件校验失败时隔离掉，下一次恢复必须重新下载，
+        // 避免永久重复使用同一个等长损坏文件。
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
     Ok(())
 }
 

@@ -276,20 +276,10 @@ fn publish(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json:
         ));
     }
     store::transition(db, &id, JobStatus::Publishing).map_err(|error| error.to_string())?;
-    let summary = store::publish_batch(db, &id, &job.dump_version, 500).map_err(|error| error.to_string())?;
-    store::set_publish_counts(
-        db,
-        &id,
-        summary.inserted as i64,
-        summary.updated as i64,
-        summary.skipped as i64,
-        summary.conflicts as i64,
-        0,
-    )
-    .map_err(|error| error.to_string())?;
-    store::transition(db, &id, JobStatus::Completed).map_err(|error| error.to_string())?;
-    let _ = report::build_report(db, &id).and_then(|value| store::save_report(db, &id, &value));
-    Ok(serde_json::json!({ "ok": true, "jobId": id, "published": summary }))
+    let config = config_from(flags)?;
+    let summary = runner::run_pipeline(std::sync::Arc::new(db.reopen().map_err(|e| e.to_string())?), id.clone(), config)
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({ "ok": true, "jobId": id, "status": summary.status.as_str(), "published": summary.published }))
 }
 
 fn report_command(db: &Database, flags: &HashMap<String, String>) -> Result<serde_json::Value, String> {

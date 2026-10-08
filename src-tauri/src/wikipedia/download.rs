@@ -9,6 +9,7 @@
 use crate::error::AppError;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, RANGE, USER_AGENT};
+use reqwest::redirect::Policy;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -53,6 +54,9 @@ pub fn build_client(user_agent: &str, timeout: Duration) -> Result<Client, AppEr
     Client::builder()
         .user_agent(user_agent)
         .timeout(timeout)
+        // 不自动跟随 30x。否则初始白名单 URL 可以把客户端带到任意域名或内网地址。
+        // Wikimedia dump 使用稳定直链；如将来需要跟随，必须逐跳重新做域名/IP 校验。
+        .redirect(Policy::none())
         .build()
         .map_err(AppError::from)
 }
@@ -170,7 +174,8 @@ pub fn plan_download(existing: u64, total: Option<u64>, supports_range: bool) ->
         return DownloadPlan::Restart;
     }
     match total {
-        Some(total) if existing >= total => DownloadPlan::Complete,
+        Some(total) if existing == total => DownloadPlan::Complete,
+        Some(total) if existing > total => DownloadPlan::Restart,
         _ if supports_range => DownloadPlan::ResumeFrom(existing),
         _ => DownloadPlan::Restart,
     }

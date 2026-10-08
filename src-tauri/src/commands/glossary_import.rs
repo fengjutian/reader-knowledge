@@ -133,7 +133,7 @@ pub fn cancel_glossary_import(db: State<'_, Database>, id: String) -> Result<Imp
 }
 
 #[tauri::command]
-pub fn publish_glossary_import(db: State<'_, Database>, id: String) -> Result<PublishSummary, AppError> {
+pub fn publish_glossary_import(app: AppHandle, db: State<'_, Database>, id: String) -> Result<ImportJob, AppError> {
     let job = store::get_job(db.inner(), &id)?
         .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))?;
     let status = JobStatus::parse(&job.status)?;
@@ -144,27 +144,10 @@ pub fn publish_glossary_import(db: State<'_, Database>, id: String) -> Result<Pu
         )));
     }
     store::transition(db.inner(), &id, JobStatus::Publishing)?;
-    let batch_size = store::job_config(db.inner(), &id)?
-        .get("batchSize")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(500) as usize;
-    let summary = store::publish_batch(db.inner(), &id, &job.dump_version, batch_size.max(50))?;
-    let errors = store::list_issues(db.inner(), &id, Some("parse_error"), 1)?.len() as i64
-        + store::list_issues(db.inner(), &id, Some("validation_error"), 1)?.len() as i64;
-    store::set_publish_counts(
-        db.inner(),
-        &id,
-        summary.inserted as i64,
-        summary.updated as i64,
-        summary.skipped as i64,
-        summary.conflicts as i64,
-        errors,
-    )?;
-    store::transition(db.inner(), &id, JobStatus::Completed)?;
-    if let Ok(report) = report::build_report(db.inner(), &id) {
-        let _ = store::save_report(db.inner(), &id, &report);
-    }
-    Ok(summary)
+    let config = import_config(&app)?;
+    spawn_pipeline(app, db.inner(), id.clone(), config);
+    store::get_job(db.inner(), &id)?
+        .ok_or_else(|| AppError::Message("导入任务不存在".to_string()))
 }
 
 #[tauri::command]

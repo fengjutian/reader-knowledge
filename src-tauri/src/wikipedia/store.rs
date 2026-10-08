@@ -357,7 +357,8 @@ pub fn transition_on(connection: &rusqlite::Connection, id: &str, next: JobStatu
         "UPDATE glossary_import_jobs
             SET status = ?2,
                 updated_at = ?3,
-                started_at = coalesce(started_at, ?3)
+                started_at = coalesce(started_at, ?3),
+                finished_at = CASE WHEN ?2 IN ('completed','cancelled','failed') THEN ?3 ELSE finished_at END
           WHERE id = ?1",
         params![id, next.as_str(), now],
     )?;
@@ -493,6 +494,11 @@ pub fn pause_job(db: &Database, id: &str) -> Result<(), AppError> {
 
 /// 恢复：回到 checkpoint 里记录的阶段。
 pub fn resume_job(db: &Database, id: &str) -> Result<JobStatus, AppError> {
+    let current = get_job(db, id)?
+        .ok_or_else(|| AppError::Message(format!("导入任务不存在：{id}")))?;
+    if JobStatus::parse(&current.status)? != JobStatus::Paused {
+        return Err(AppError::Message(format!("只有 paused 任务可以继续，当前是 {}", current.status)));
+    }
     let checkpoint = load_checkpoint(db, id)?;
     let resume_to = checkpoint
         .get("pausedFrom")
