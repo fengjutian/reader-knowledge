@@ -243,14 +243,25 @@ where
     let mut on_progress = on_progress;
     match plan {
         DownloadPlan::Complete => {
+            // .part 已经是完整大小，但仍必须改名成 target：
+            // 否则 verify_dump 会拿 `xxx.bz2.part` 去 md5sums.txt 里查表，
+            // 永远查不到，任务卡死在无法自愈的校验错误上。
+            if target.exists() {
+                // 上一次已经改过名，直接复用正式文件。
+                let _ = fs::remove_file(&part);
+            } else {
+                fs::rename(&part, &target).map_err(|error| {
+                    AppError::Message(format!("dump 文件改名失败：{error}"))
+                })?;
+            }
             if !on_progress(existing) {
                 return Ok(DownloadOutcome::Stopped {
-                    path: part,
+                    path: target,
                     bytes: existing,
                 });
             }
             return Ok(DownloadOutcome::Complete(DownloadResult {
-                path: part,
+                path: target,
                 bytes: existing,
                 resumed_from: existing,
                 elapsed_ms: 0,

@@ -133,7 +133,7 @@ export function KnowledgeGraph3D({ nodes, edges, focusId, selectedId, showIsolat
         };
       }),
     };
-  }, [nodes, edges, focusId, selectedId]);
+  }, [nodes, edges, focusId, selectedId, showIsolated]);
 
   useEffect(() => {
     const host = hostRef.current;

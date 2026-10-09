@@ -434,14 +434,30 @@ pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),Ap
     let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let c=db.connect()?;
     // 维基来源的词条必须保留全部来源字段：人工编辑只改展示内容（需求 5.1 / 7.8.7）。
-    let existing:Option<(i64,String,Option<i64>,String,String,i64)>=c.query_row("SELECT id,source,external_page_id,definition,canonical_name,coalesce(manually_edited,0) FROM glossary_terms WHERE term=?1",[term.term.trim()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-    let Some((row_id,stored_source,external_page_id,stored_definition,stored_canonical,manually_edited))=existing else {
-        c.execute("INSERT INTO glossary_terms(id,term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(nullif(?1,0),?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",rusqlite::params![term.id,term.term.trim(),term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(term.term.trim())])?;
-        if term.id>0{return Ok(())}
+    // 定位已有行必须优先用 id：用户改了名词文本后，按 term 查会查不到，
+    // 于是走 INSERT 分支并带上原 id，直接撞 `UNIQUE constraint failed: glossary_terms.id`。
+    let trimmed=term.term.trim();
+    let existing:Option<(i64,String,Option<i64>,String,String,i64,String)>=if term.id>0{
+        c.query_row("SELECT id,source,external_page_id,definition,canonical_name,coalesce(manually_edited,0),term FROM glossary_terms WHERE id=?1",[term.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?
+    }else{
+        c.query_row("SELECT id,source,external_page_id,definition,canonical_name,coalesce(manually_edited,0),term FROM glossary_terms WHERE term=?1",[trimmed],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?
+    };
+    // 带 id 却查不到行：原词条已被删除，按新建处理，且不能再带 id（否则撞主键）。
+    if term.id>0&&existing.is_none(){
+        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
+        return Ok(());
+    }
+    let Some((row_id,stored_source,external_page_id,stored_definition,stored_canonical,manually_edited,stored_term))=existing else {
+        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
         return Ok(());
     };
     let definition=term.definition.trim();
     let canonical=term.canonical_name.trim();
+    // 改名：term 与 normalized_term 必须一起更新，否则按新名词检索不到。
+    let renamed=stored_term!=trimmed;
+    if renamed{
+        c.execute("UPDATE glossary_terms SET term=?2,normalized_term=?3 WHERE id=?1",rusqlite::params![row_id,trimmed,crate::wikipedia::title::normalize_search_key(trimmed)])?;
+    }
     if stored_source=="wikipedia"{
         // 展示内容被人改过就标记 manually_edited，后续同步只更新来源快照。
         let edited=if manually_edited==1{1}else if definition!=stored_definition||canonical!=stored_canonical{1}else{0};
@@ -1272,9 +1288,11 @@ fn global_search_impl(db: &Database, request: &GlobalSearchRequest) -> Result<Gl
                 .then_with(|| left.title.cmp(&right.title))
                 .then_with(|| left.id.cmp(&right.id))
         });
-        let has_more = results.len() > limit as usize;
-        results.truncate(limit as usize);
-        let page = results.into_iter().skip(offset as usize).collect::<Vec<_>>();
+        // 先 skip 再 take：反过来的话 offset=limit 时会把结果全跳光，第二页恒空，
+        // 而 has_more 仍为 true，前端「加载更多」会无限空转。
+        let total = results.len();
+        let page = results.into_iter().skip(offset as usize).take(limit as usize).collect::<Vec<_>>();
+        let has_more = offset as usize + page.len() < total;
         return Ok(GlobalSearchPage { results: page, has_more });
     }
 
@@ -2095,8 +2113,18 @@ pub fn clear_suggested_concepts(db: State<'_, Database>) -> Result<i64, AppError
 }
 
 fn clear_suggested_concepts_impl(db: &Database) -> Result<i64, AppError> {
-    let c = db.connect()?;
-    let removed = c.execute("DELETE FROM knowledge_entities WHERE status='suggested'", [])?;
+    let mut connection = db.connect()?;
+    let transaction = connection.transaction()?;
+    // knowledge_relations 没有指向 knowledge_entities 的外键，
+    // 只删实体会把关系行留下来；下次扫描时同 id 实体重建，这些陈旧关系
+    // 会带着旧的 summary/confidence 重新挂回图谱。必须先删两端待清理实体的关系。
+    transaction.execute(
+        "DELETE FROM knowledge_relations WHERE from_entity_id IN (SELECT id FROM knowledge_entities WHERE status='suggested')
+            OR to_entity_id IN (SELECT id FROM knowledge_entities WHERE status='suggested')",
+        [],
+    )?;
+    let removed = transaction.execute("DELETE FROM knowledge_entities WHERE status='suggested'", [])?;
+    transaction.commit()?;
     Ok(removed as i64)
 }
 

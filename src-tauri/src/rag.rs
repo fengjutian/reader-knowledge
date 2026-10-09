@@ -229,7 +229,9 @@ pub fn merge_evidence(mut notes: Vec<Evidence>, sources: Vec<Evidence>) -> Vec<E
     let mut seen: HashMap<String, ()> = HashMap::new();
     notes.extend(sources);
     notes.retain(|item| {
-        let key = format!("{}|{:?}|{}", item.book_id(), item.citation_target(), &item.content()[..item.content().len().min(80)]);
+        // 必须按字符截断：正文以中文为主，按字节切会落在多字节字符中间而 panic。
+        let head: String = item.content().chars().take(80).collect();
+        let key = format!("{}|{:?}|{}", item.book_id(), item.citation_target(), head);
         seen.insert(key, ()).is_none()
     });
     notes

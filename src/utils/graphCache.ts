@@ -11,22 +11,48 @@ export const SEMANTIC_CACHE_PREFIX = "semantic-relations:v4";
 /** 本地图谱分析缓存的命名空间前缀。 */
 export const LOCAL_CACHE_PREFIX = `local-relations:${GRAPH_ALGORITHM_VERSION}`;
 
+/**
+ * 单例连接：每次读写都新开一条 IDBDatabase 会让连接无界累积（且易触发
+ * versionchange 阻塞）。这里复用同一条，事务用完立即 end，不依赖 close()。
+ */
+let connection: Promise<IDBDatabase> | null = null;
+
 function database() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
+  if (connection) return connection;
+  connection = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      // 别的标签页升级版本时主动让路，避免本连接永久阻塞对方的 versionchange。
+      db.onversionchange = () => {
+        db.close();
+        connection = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      connection = null;
+      reject(request.error);
+    };
+    request.onblocked = () => {
+      connection = null;
+      reject(new Error("IndexedDB 升级被其他标签页阻塞"));
+    };
   });
+  return connection;
 }
 
+/** 在一个只读事务里读一个键，事务结束即释放。 */
 export async function readGraphCache<T>(key: string): Promise<T | undefined> {
   try {
     const db = await database();
     return await new Promise<T | undefined>((resolve, reject) => {
-      const request = db.transaction(STORE, "readonly").objectStore(STORE).get(key);
+      const transaction = db.transaction(STORE, "readonly");
+      const request = transaction.objectStore(STORE).get(key);
       request.onsuccess = () => resolve(request.result as T | undefined);
       request.onerror = () => reject(request.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } catch { return undefined; }
 }
@@ -35,9 +61,11 @@ export async function writeGraphCache(key: string, value: unknown) {
   try {
     const db = await database();
     await new Promise<void>((resolve, reject) => {
-      const request = db.transaction(STORE, "readwrite").objectStore(STORE).put(value, key);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+      const transaction = db.transaction(STORE, "readwrite");
+      transaction.objectStore(STORE).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } catch { /* Cache failure must not block the graph. */ }
 }
@@ -46,13 +74,16 @@ async function deleteKeys(predicate: (key: string) => boolean) {
   try {
     const db = await database();
     await new Promise<void>((resolve, reject) => {
-      const store = db.transaction(STORE, "readwrite").objectStore(STORE);
+      const transaction = db.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
       const request = store.getAllKeys();
       request.onsuccess = () => {
         for (const key of request.result) if (typeof key === "string" && predicate(key)) store.delete(key);
-        resolve();
       };
       request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } catch { /* Cache cleanup is best-effort. */ }
 }
@@ -76,9 +107,11 @@ export async function clearGraphCache() {
   try {
     const db = await database();
     await new Promise<void>((resolve, reject) => {
-      const request = db.transaction(STORE, "readwrite").objectStore(STORE).clear();
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+      const transaction = db.transaction(STORE, "readwrite");
+      transaction.objectStore(STORE).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } catch { /* Cache cleanup is best-effort. */ }
 }

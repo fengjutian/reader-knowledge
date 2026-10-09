@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUp, BookOpen, ChevronRight, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Search, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, startAiStream } from "../api/tauri";
 import type { AiStreamSession } from "../api/tauri";
@@ -48,7 +48,9 @@ function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; op
   const sourceCitations = answer.sourceCitations ?? [];
   return <><ReactMarkdown
     remarkPlugins={[remarkGfm]}
-    urlTransform={url => url.startsWith("citation:") ? url : url}
+    // 只放行应用自己的引用协议；其余 URL 一律交给 react-markdown 的默认消毒，
+// 否则 AI 回答（或被其复述的导入正文）里的 javascript: 等危险协议会原样进入 href。
+urlTransform={url => url.startsWith("citation:") || url.startsWith("glossary:") ? url : defaultUrlTransform(url)}
     components={{
       a: ({ href, children }) => {
         if (href?.startsWith("citation:")) {
@@ -64,7 +66,10 @@ function MarkdownAnswer({ answer, openBook, openSource }: { answer: AiAnswer; op
           const citation = glossaryCitations.find(item => item.index === index);
           return citation ? <button type="button" className="answer__source-link answer__source-link--glossary" title={citation.definition}>{children}</button> : <>{children}</>;
         }
-        return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+        // 兜底分支同样不能盲信 href：只有安全协议才允许渲染成可点击外链。
+        const safe = href ? defaultUrlTransform(href) : "";
+        if (!safe) return <>{children}</>;
+        return <a href={safe} target="_blank" rel="noreferrer">{children}</a>;
       },
     }}
   >{markdown}</ReactMarkdown>{glossaryCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>名词库来源</h3><span>引用 {glossaryCitations.length} 条</span></div>{glossaryCitations.map(citation => <article className="glossary-citation" key={citation.index}><span>W{citation.index}</span><div><strong>{citation.term}<small>{citation.source}</small></strong><p>{citation.definition}</p>{citation.sourceUrl && <button type="button" onClick={() => void api.openExternalUrl(citation.sourceUrl)}>查看来源</button>}</div></article>)}</div>}{sourceCitations.length > 0 && <div className="answer__glossary"><div className="answer__glossary-head"><h3>引用的导入资料</h3><span>引用 {sourceCitations.length} 条</span></div>{sourceCitations.map(citation => <button type="button" className="glossary-citation glossary-citation--source" key={citation.index} onClick={() => openSource(citation.sourceId, citation.locator)}><span>{citation.index}</span><div><strong>{citation.title}<small>{citation.locator.page !== undefined ? `第 ${citation.locator.page} 页` : citation.locator.chapter !== undefined ? `第 ${citation.locator.chapter} 章` : "导入资料"}</small></strong><p>“{citation.quote}”</p></div></button>)}</div>}</>;

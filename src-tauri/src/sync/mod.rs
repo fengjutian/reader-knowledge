@@ -187,29 +187,24 @@ fn persist(
         // `/book/bookmarklist` 没有分页参数（官方只声明 bookId 入参），拿不全时
         // 对该书做软删除会把超出部分的划线永远标记为删除。所以截断的书整本跳过。
         let skip_highlights = if truncated_books.is_empty() {
-            "0".to_string()
+            // 无截断时不加任何额外条件。
+            String::new()
         } else {
             let list = truncated_books
                 .iter()
                 .map(|id| format!("'{}'", id.replace('\'', "''")))
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("book_id IN ({list})")
+            format!(" AND book_id NOT IN ({list})")
         };
         let affected = tx.execute(
             &format!(
                 "UPDATE highlights SET is_deleted=1
-                  WHERE coalesce(last_seen_sync_id,'')<>?1 AND {skip_highlights}"
+                  WHERE coalesce(last_seen_sync_id,'')<>?1{skip_highlights}"
             ),
             params![session_id],
         )?;
-        #[cfg(test)]
-        {
-            let inside: i64 = tx
-                .query_row("SELECT count(*) FROM highlights WHERE is_deleted=1", [], |r| r.get(0))
-                .unwrap();
-            println!("[diag] finalize={finalize} affected={affected} inside_tx={inside}");
-        }
+        let _ = affected;
         tx.execute(
             "UPDATE thoughts SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
             params![session_id],
@@ -753,39 +748,20 @@ mod tests {
             .unwrap()
             .query_row("SELECT count(*) FROM highlights WHERE book_id='bk-trunc' AND is_deleted=1", [], |r| r.get(0))
             .unwrap();
-        let seen: Vec<String> = db
-            .connect()
-            .unwrap()
-            .prepare("SELECT coalesce(last_seen_sync_id,'<null>')||':'||is_deleted FROM highlights WHERE book_id='bk-trunc'")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        let probe: i64 = db
-            .connect()
-            .unwrap()
-            .query_row(
-                "SELECT count(*) FROM highlights WHERE coalesce(last_seen_sync_id,'')<>'sync-truncated' AND 0",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let probe2: i64 = db
-            .connect()
-            .unwrap()
-            .query_row(
-                "SELECT count(*) FROM highlights WHERE coalesce(last_seen_sync_id,'')<>'sync-truncated'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(deleted, 2, "拿全时仍应正常软删除，实际行状态 {seen:?} 条件匹配 probe={probe2}");
+        assert_eq!(deleted, 2, "拿全时仍应正常软删除");
 
         // 截断情况：该书在 truncated_books 里，划线一条都不能被标记删除。
         db.connect()
             .unwrap()
             .execute("UPDATE highlights SET is_deleted=0,last_seen_sync_id='sync-old' WHERE book_id='bk-trunc'", [])
+            .unwrap();
+        // 且要在同步记录里留下可追溯的原因。
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO sync_sessions(id,source,started_at,status) VALUES('sync-2','weread',1,'running')",
+                [],
+            )
             .unwrap();
         persist(&db, "sync-2", 1, &shelf, &[], true, false, &["bk-trunc".to_string()]).unwrap();
         let deleted: i64 = db
@@ -794,8 +770,6 @@ mod tests {
             .query_row("SELECT count(*) FROM highlights WHERE book_id='bk-trunc' AND is_deleted=1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(deleted, 0, "划线未完整获取时绝不能软删除，否则超页划线会永久丢失");
-
-        // 且要在同步记录里留下可追溯的原因。
         let message: Option<String> = db
             .connect()
             .unwrap()
