@@ -268,6 +268,12 @@ pub fn validate_extraction(
                 });
             }
         }
+        // 与实体分支对齐：没有一条真实证据的关系是模型编的，直接丢弃并计数，
+        // 否则它会以 confidence=0.5 的正常形态落进图谱。
+        if evidence.is_empty() {
+            result.rejected_unknown_note += 1;
+            continue;
+        }
         let confidence = relation.confidence.filter(|value| value.is_finite()).unwrap_or(0.5).clamp(0.0, 1.0);
         result.relations.push(ValidatedRelation {
             from_name: from,

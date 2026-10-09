@@ -429,6 +429,10 @@ pub(crate) fn bulk_set_glossary_term_status(db:&Database,ids:&[i64],status:&str)
 
 #[tauri::command]
 pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),AppError>{
+    save_glossary_term_impl(db.inner(), &term)
+}
+
+fn save_glossary_term_impl(db:&Database,term:&GlossaryTerm)->Result<(),AppError>{
     if term.term.trim().is_empty()||term.definition.trim().is_empty(){return Err(AppError::Message("名词和解释不能为空".into()));}
     if !term.status.is_empty()&&!GLOSSARY_STATUSES.contains(&term.status.as_str()){return Err(AppError::Message(format!("未知的名词状态：{}",term.status)));}
     let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
@@ -444,11 +448,11 @@ pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),Ap
     };
     // 带 id 却查不到行：原词条已被删除，按新建处理，且不能再带 id（否则撞主键）。
     if term.id>0&&existing.is_none(){
-        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
+        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title.clone(),term.source_url.clone(),term.wikipedia_snapshot.clone(),if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
         return Ok(());
     }
     let Some((row_id,stored_source,external_page_id,stored_definition,stored_canonical,manually_edited,stored_term))=existing else {
-        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
+        c.execute("INSERT INTO glossary_terms(term,canonical_name,aliases_json,definition,source,source_title,source_url,wikipedia_snapshot,status,updated_at,external_page_id,source_revision_id,license_code,manually_edited,normalized_term) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",rusqlite::params![trimmed,term.canonical_name.trim(),serde_json::to_string(&term.aliases)?,term.definition.trim(),if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title.clone(),term.source_url.clone(),term.wikipedia_snapshot.clone(),if term.status.is_empty(){"confirmed".to_string()}else{term.status.clone()},now,term.external_page_id,term.source_revision_id,term.license_code,if term.source=="wikipedia"&&term.external_page_id>0{0}else{1},crate::wikipedia::title::normalize_search_key(trimmed)])?;
         return Ok(());
     };
     let definition=term.definition.trim();
@@ -464,7 +468,7 @@ pub fn save_glossary_term(db:State<'_,Database>,term:GlossaryTerm)->Result<(),Ap
         c.execute("UPDATE glossary_terms SET canonical_name=?2,definition=?3,status=coalesce(nullif(?4,''),status),manually_edited=?5,updated_at=?6 WHERE id=?1",rusqlite::params![row_id,canonical,definition,term.status,edited,now])?;
         sync_human_aliases(&c,row_id,&term.aliases,now)?;
     } else {
-        c.execute("UPDATE glossary_terms SET canonical_name=?2,definition=?3,aliases_json=?4,source=?5,source_title=?6,source_url=?7,wikipedia_snapshot=?8,status=coalesce(nullif(?9,''),status),manually_edited=1,updated_at=?10 WHERE id=?1",rusqlite::params![row_id,canonical,definition,serde_json::to_string(&term.aliases)?,if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title,term.source_url,term.wikipedia_snapshot,term.status,now])?;
+        c.execute("UPDATE glossary_terms SET canonical_name=?2,definition=?3,aliases_json=?4,source=?5,source_title=?6,source_url=?7,wikipedia_snapshot=?8,status=coalesce(nullif(?9,''),status),manually_edited=1,updated_at=?10 WHERE id=?1",rusqlite::params![row_id,canonical,definition,serde_json::to_string(&term.aliases)?,if term.source.is_empty(){"manual".to_string()}else{term.source.clone()},term.source_title.clone(),term.source_url.clone(),term.wikipedia_snapshot.clone(),term.status,now])?;
     }
     let _=external_page_id;
     Ok(())
@@ -1272,13 +1276,15 @@ fn global_search_impl(db: &Database, request: &GlobalSearchRequest) -> Result<Gl
 
     if query.is_empty() {
         // 空查询不跑 FTS，只返回最近更新的内容，数量同样受限。
-        let mut results = recent_note_results(&db, &active_types, book_id.as_ref(), limit + 1)?;
+        // 取数必须覆盖 offset+limit：只取 limit+1 的话，第二页永远取不到数据。
+        let fetch = offset.saturating_add(limit).saturating_add(1);
+        let mut results = recent_note_results(&db, &active_types, book_id.as_ref(), fetch)?;
         if active_types.iter().any(|kind| kind == "book") {
-            results.extend(recent_book_results(&db, book_id.as_ref(), limit + 1)?);
+            results.extend(recent_book_results(&db, book_id.as_ref(), fetch)?);
         }
         // 导入资料：书籍过滤对它没有意义，只在未限定书籍时参与
         if active_types.iter().any(|kind| kind == "source") && book_id.is_none() {
-            results.extend(recent_source_results(&db, limit + 1)?);
+            results.extend(recent_source_results(&db, fetch)?);
         }
         // 同分按更新时间倒序，书名稳定排序避免同毫秒抖动。
         results.sort_by(|left, right| {
@@ -2118,6 +2124,7 @@ fn clear_suggested_concepts_impl(db: &Database) -> Result<i64, AppError> {
     // knowledge_relations 没有指向 knowledge_entities 的外键，
     // 只删实体会把关系行留下来；下次扫描时同 id 实体重建，这些陈旧关系
     // 会带着旧的 summary/confidence 重新挂回图谱。必须先删两端待清理实体的关系。
+
     transaction.execute(
         "DELETE FROM knowledge_relations WHERE from_entity_id IN (SELECT id FROM knowledge_entities WHERE status='suggested')
             OR to_entity_id IN (SELECT id FROM knowledge_entities WHERE status='suggested')",
@@ -3832,14 +3839,14 @@ mod tests {
         cover_file_name, find_duplicate, is_own_cover_file, list_sources_impl, read_local_file,
         relevance_from_bm25, reranker_settings_from_db, request_default, save_reranker_settings_impl, search_terms,
         snippet_of, source_candidates, source_detail_impl, score_note, unchanged_notes, validate_secret_kind,
-        weread_reader_id, NoteCandidate,
+        weread_reader_id, NoteCandidate, glossary_terms_for_review, save_glossary_term_impl,
         MAX_LOCAL_FILE_BYTES,
         MetadataBatchFuture, MetadataFetchResult, AppError, GLOBAL_SEARCH_SNIPPET_CHARS,
     };
     use crate::{
         database::Database,
         models::{
-            ConceptGraphQuery, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, GlobalSearchResult, Note,
+            ConceptGraphQuery, EntityCorrection, GlobalSearchPage, GlobalSearchRequest, GlobalSearchResult, GlossaryTerm, Note,
             RerankerSettings, SearchResult,
         },
     };
@@ -5367,6 +5374,152 @@ mod tests {
         let graph = list_concept_graph_impl(&db, &ConceptGraphQuery { include_hidden: true, ..Default::default() }).unwrap();
         assert_eq!(graph.entities.len(), 2);
         assert!(!graph.entities.iter().any(|item| item.canonical_name == "待确认"));
+    }
+
+    #[test]
+    fn 空查询翻页不会拿到空页() {
+        // 真实缺陷：空查询分支先 truncate(limit) 再 skip(offset)，
+        // offset=limit 时把结果全跳光，第二页恒空，而 has_more 仍为 true，
+        // 前端「加载更多」无限空转。
+        let (_dir, db) = search_test_db();
+        seed_book(&db, "b1", "甲书", "作者甲", "社科");
+        for index in 0..7 {
+            seed_highlight(&db, &format!("h{index}"), "b1", "第一章", &format!("划线正文 {index}"));
+        }
+
+        let request = |offset: i64| GlobalSearchRequest {
+            query: "".into(),
+            types: vec!["highlight".into()],
+            book_id: None,
+            limit: Some(3),
+            offset: Some(offset),
+        };
+
+        let first = global_search_impl(&db, &request(0)).unwrap();
+        assert_eq!(first.results.len(), 3, "第一页应满页");
+        assert!(first.has_more);
+
+        let second = global_search_impl(&db, &request(3)).unwrap();
+        assert_eq!(second.results.len(), 3, "第二页不能是空的");
+        assert!(second.has_more);
+
+        let third = global_search_impl(&db, &request(6)).unwrap();
+        assert_eq!(third.results.len(), 1, "最后一页应只剩 1 条");
+        assert!(!third.has_more, "取完之后 has_more 必须为 false，否则前端继续空转");
+
+        // 三页合起来必须是全部 7 条且互不重复。
+        let ids: Vec<String> = first
+            .results
+            .iter()
+            .chain(second.results.iter())
+            .chain(third.results.iter())
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 7);
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), 7, "翻页不得重复");
+    }
+
+    #[test]
+    fn 清理建议项不会留下孤儿关系() {
+        // 真实缺陷：knowledge_relations 没有指向 knowledge_entities 的外键，
+        // 删实体只级联清 evidence，关系行会残留；重扫时同 id 实体重建，
+        // 这些陈旧关系带着旧 summary/confidence 重新出现在图谱里。
+        let (_dir, db) = search_test_db();
+        seed_entity(&db, "concept:1", "concept", "待确认甲", "suggested", 0.9);
+        seed_entity(&db, "concept:2", "concept", "已确认乙", "confirmed", 0.9);
+        seed_entity(&db, "concept:3", "concept", "已确认丙", "confirmed", 0.9);
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO knowledge_relations(id,from_entity_id,to_entity_id,relation,summary,confidence,updated_at)
+                 VALUES('r1','concept:1','concept:2','supports','陈旧关系',0.9,1)",
+                [],
+            )
+            .unwrap();
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO knowledge_relations(id,from_entity_id,to_entity_id,relation,summary,confidence,updated_at)
+                 VALUES('r2','concept:2','concept:3','supports','正常关系',0.9,1)",
+                [],
+            )
+            .unwrap();
+
+        clear_suggested_concepts_impl(&db).unwrap();
+
+        let left: Vec<String> = db
+            .connect()
+            .unwrap()
+            .prepare("SELECT id FROM knowledge_relations ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        // 只应剩 r2；r1 两端之一被删，必须一起消失。
+        assert_eq!(left, vec!["r2".to_string()], "孤儿关系必须随实体一起清理");
+    }
+
+    #[test]
+    fn 名词改名不会撞主键且能按新名检索() {
+        // 真实缺陷：save_glossary_term 按 term 文本查已有行，改名后查不到 →
+        // 走 INSERT 分支并带上原 id → UNIQUE constraint failed: glossary_terms.id，
+        // 名词库改名功能完全不可用。
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let mut term = GlossaryTerm {
+            id: 0,
+            term: "人工智能".into(),
+            canonical_name: "人工智能".into(),
+            aliases: vec![],
+            definition: "研究让机器具有智能的学科".into(),
+            source: String::new(),
+            source_title: String::new(),
+            source_url: String::new(),
+            wikipedia_snapshot: String::new(),
+            status: String::new(),
+            updated_at: 0,
+            external_page_id: 0,
+            source_revision_id: 0,
+            source_dump_version: String::new(),
+            source_updated_at: 0,
+            source_synced_at: 0,
+            license_code: String::new(),
+            manually_edited: false,
+            source_content_hash: String::new(),
+            published_batch_id: String::new(),
+        };
+        save_glossary_term_impl(&db, &term).unwrap();
+        let created_id: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT id FROM glossary_terms WHERE term='人工智能'", [], |r| r.get(0))
+            .unwrap();
+
+        // 改名后保存：必须更新原行，而不是插入撞主键。
+        term.id = created_id;
+        term.term = "机器学习".into();
+        term.canonical_name = "机器学习".into();
+        save_glossary_term_impl(&db, &term).unwrap();
+
+        let total: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM glossary_terms", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 1, "改名不应产生新行");
+        let stored: (String, i64) = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT term,id FROM glossary_terms WHERE id=?1", [created_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(stored, ("机器学习".to_string(), created_id), "原行应被就地改名");
+        // normalized_term 必须一起更新，否则按新名词检索不到。
+        let by_new_name = glossary_terms_for_review(&db, Some("机器学习"), None, None).unwrap();
+        assert_eq!(by_new_name.len(), 1, "改名后必须能按新名词检索到");
+        let by_old_name = glossary_terms_for_review(&db, Some("人工智能"), None, None).unwrap();
+        assert!(by_old_name.is_empty(), "旧名词不应再命中");
     }
 
     #[test]
