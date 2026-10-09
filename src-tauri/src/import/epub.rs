@@ -354,6 +354,10 @@ pub fn chapter_heading(html: &str) -> Option<String> {
             while cursor < bytes.len() && bytes[cursor] != b'>' {
                 cursor += 1;
             }
+            // 标签没有闭合（`<h1` 直接到结尾）时越界切片会 panic，与 web.rs 的同类函数保持一致。
+            if cursor >= bytes.len() {
+                continue;
+            }
             let rest = &lower[cursor + 1..];
             let close = format!("</{tag}>");
             if let Some(end) = rest.find(&close) {
@@ -370,6 +374,28 @@ pub fn chapter_heading(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 未闭合的标题标签不会越界崩溃() {
+        // 真实缺陷：`<h1` 没有 `>` 时，扫描到字符串末尾后 `&lower[cursor + 1..]` 会 panic。
+        for html in [
+            "<html><body><p>正文</p><h1",
+            "<html><body><p>正文</p><title",
+            "<html><body><p>正文</p><h2 ",
+            "<h3",
+            "<html>",
+        ] {
+            let result = std::panic::catch_unwind(|| chapter_heading(html));
+            assert!(result.is_ok(), "{html} 不应触发 panic");
+        }
+        // 正常输入仍然能取到标题，不能被守卫误伤。
+        assert_eq!(chapter_heading("<html><body><h1>第一章</h1></body></html>"), Some("第一章".into()));
+        // 未闭合但后面还有别的标签时，继续往下找。
+        assert_eq!(
+            chapter_heading("<html><body><h1 <h2>第二章</h2></body></html>"),
+            Some("第二章".into())
+        );
+    }
 
     #[test]
     fn 拒绝_zip_slip_路径() {

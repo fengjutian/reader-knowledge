@@ -11,6 +11,9 @@ struct BookNotes {
     book: Option<Value>,
     highlights: crate::weread::models::BookmarkListResponse,
     thoughts: Vec<Value>,
+    /// `/user/notebooks` 报告的划线条数。`/book/bookmarklist` 没有分页参数，
+    /// 拿到的条数少于这个基准就说明本次没拿全。
+    expected_highlights: i64,
 }
 
 pub async fn run<F>(db: &Database, client: &WeReadClient, emit: F) -> Result<SyncProgress, AppError>
@@ -28,7 +31,7 @@ where
         let shelf = client.shelf().await?;
         let notebooks = client.all_notebooks().await?;
         let total = notebooks.len();
-        let shelf_progress = persist(db, &session_id, started_at, &shelf, &[], false, true)?;
+        let shelf_progress = persist(db, &session_id, started_at, &shelf, &[], false, true, &[])?;
         emit(&SyncProgress {
             status: "processing".into(),
             progress: 10,
@@ -39,16 +42,24 @@ where
             total_books: total,
         });
 
+        // 划线被截断的书：接口没有分页参数，拿不全时绝不能对它们做软删除，
+        // 否则超出部分的划线会在每次同步时被反复标记删除（真实数据丢失）。
+        let mut truncated_books: Vec<String> = Vec::new();
+
         for (index, notebook) in notebooks.into_iter().enumerate() {
             let highlights = client.highlights(&notebook.book_id).await?;
             let thoughts = client.all_thoughts(&notebook.book_id).await?;
             let item = BookNotes {
+                expected_highlights: notebook.note_count,
                 book_id: notebook.book_id,
                 book: notebook.book,
                 highlights,
                 thoughts,
             };
-            let mut progress = persist(db, &session_id, started_at, &shelf, &[item], false, false)?;
+            if item.expected_highlights > item.highlights.updated.len() as i64 {
+                truncated_books.push(item.book_id.clone());
+            }
+            let mut progress = persist(db, &session_id, started_at, &shelf, &[item], false, false, &[])?;
             progress.status = "processing".into();
             progress.progress = if total == 0 { 90 } else { 10 + (((index + 1) * 80 / total) as i32) };
             progress.processed_books = index + 1;
@@ -56,7 +67,7 @@ where
             emit(&progress);
         }
 
-        let mut complete = persist(db, &session_id, started_at, &shelf, &[], true, false)?;
+        let mut complete = persist(db, &session_id, started_at, &shelf, &[], true, false, &truncated_books)?;
         complete.processed_books = total;
         complete.total_books = total;
         emit(&complete);
@@ -77,6 +88,7 @@ fn persist(
     notes: &[BookNotes],
     finalize: bool,
     write_shelf: bool,
+    truncated_books: &[String],
 ) -> Result<SyncProgress, AppError> {
     let mut connection = db.connect()?;
     let tx = connection.transaction()?;
@@ -172,14 +184,49 @@ fn persist(
             "UPDATE books SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
             params![session_id],
         )?;
-        tx.execute(
-            "UPDATE highlights SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
+        // `/book/bookmarklist` 没有分页参数（官方只声明 bookId 入参），拿不全时
+        // 对该书做软删除会把超出部分的划线永远标记为删除。所以截断的书整本跳过。
+        let skip_highlights = if truncated_books.is_empty() {
+            "0".to_string()
+        } else {
+            let list = truncated_books
+                .iter()
+                .map(|id| format!("'{}'", id.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("book_id IN ({list})")
+        };
+        let affected = tx.execute(
+            &format!(
+                "UPDATE highlights SET is_deleted=1
+                  WHERE coalesce(last_seen_sync_id,'')<>?1 AND {skip_highlights}"
+            ),
             params![session_id],
         )?;
+        #[cfg(test)]
+        {
+            let inside: i64 = tx
+                .query_row("SELECT count(*) FROM highlights WHERE is_deleted=1", [], |r| r.get(0))
+                .unwrap();
+            println!("[diag] finalize={finalize} affected={affected} inside_tx={inside}");
+        }
         tx.execute(
             "UPDATE thoughts SET is_deleted=1 WHERE coalesce(last_seen_sync_id,'')<>?1",
             params![session_id],
         )?;
+        if !truncated_books.is_empty() {
+            tx.execute(
+                "UPDATE sync_sessions SET error_message=?2 WHERE id=?1",
+                params![
+                    session_id,
+                    format!(
+                        "有 {} 本书的划线未能完整获取（接口无分页），已跳过这些书的划线软删除：{}",
+                        truncated_books.len(),
+                        truncated_books.join("、")
+                    )
+                ],
+            )?;
+        }
     }
     let finished_at = now();
     let book_count: i64 =
@@ -391,7 +438,7 @@ fn mark_failed(db: &Database, id: &str, error: &AppError) {
 #[cfg(test)]
 mod tests {
     use super::{
-        chapter_map, integer, json_text, string, upsert_weread_metadata, weread_metadata_fields,
+        chapter_map, integer, json_text, persist, string, upsert_weread_metadata, weread_metadata_fields,
     };
     use rusqlite::{params, Connection};
     use serde_json::json;
@@ -661,5 +708,115 @@ mod tests {
             )
             .unwrap();
         assert_eq!(weread_rows, 1);
+    }
+
+    #[test]
+    fn 划线被截断的书不会被软删除() {
+        // 真实数据丢失缺陷：`/book/bookmarklist` 没有分页参数，划线多的书拿不全；
+        // 而 finalize 无条件执行 `UPDATE highlights SET is_deleted=1 WHERE last_seen_sync_id<>session_id`，
+        // 导致超出部分的划线在每次同步都被标记删除。
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(dir.path().join("test.db")).unwrap();
+        let shelf = crate::weread::models::ShelfResponse { books: vec![], albums: vec![], mp: None };
+        let session = "sync-truncated";
+
+        // 预置两条上一轮同步留下的划线，本轮都没有再出现。
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO books(book_id,title,created_at,synced_at,is_deleted,last_seen_sync_id)
+                 VALUES('bk-trunc','截断书',1,1,0,'sync-old')",
+                [],
+            )
+            .unwrap();
+        for id in ["h1", "h2"] {
+            db.connect()
+                .unwrap()
+                .execute(
+                    "INSERT INTO highlights(bookmark_id,book_id,mark_text,create_time,synced_at,is_deleted,last_seen_sync_id)
+                     VALUES(?1,'bk-trunc','旧划线',1,1,0,'sync-old')",
+                    params![id],
+                )
+                .unwrap();
+        }
+
+        // 正常情况：所有书都拿全了，旧划线应被软删除。
+        let before: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM highlights WHERE book_id='bk-trunc'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, 2, "预置的两条划线不应凭空消失");
+        persist(&db, session, 1, &shelf, &[], true, false, &[]).unwrap();
+        let deleted: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM highlights WHERE book_id='bk-trunc' AND is_deleted=1", [], |r| r.get(0))
+            .unwrap();
+        let seen: Vec<String> = db
+            .connect()
+            .unwrap()
+            .prepare("SELECT coalesce(last_seen_sync_id,'<null>')||':'||is_deleted FROM highlights WHERE book_id='bk-trunc'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let probe: i64 = db
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM highlights WHERE coalesce(last_seen_sync_id,'')<>'sync-truncated' AND 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let probe2: i64 = db
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM highlights WHERE coalesce(last_seen_sync_id,'')<>'sync-truncated'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(deleted, 2, "拿全时仍应正常软删除，实际行状态 {seen:?} 条件匹配 probe={probe2}");
+
+        // 截断情况：该书在 truncated_books 里，划线一条都不能被标记删除。
+        db.connect()
+            .unwrap()
+            .execute("UPDATE highlights SET is_deleted=0,last_seen_sync_id='sync-old' WHERE book_id='bk-trunc'", [])
+            .unwrap();
+        persist(&db, "sync-2", 1, &shelf, &[], true, false, &["bk-trunc".to_string()]).unwrap();
+        let deleted: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM highlights WHERE book_id='bk-trunc' AND is_deleted=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(deleted, 0, "划线未完整获取时绝不能软删除，否则超页划线会永久丢失");
+
+        // 且要在同步记录里留下可追溯的原因。
+        let message: Option<String> = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT error_message FROM sync_sessions WHERE id='sync-2'", [], |r| r.get(0))
+            .unwrap();
+        let message = message.expect("截断时应记录原因");
+        assert!(message.contains("bk-trunc"), "{message}");
+    }
+
+    #[test]
+    fn 划线截断的书名含引号不会破坏_sql() {
+        // book_id 来自接口，拼进 IN 列表前必须转义，否则会拼出非法 SQL。
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(dir.path().join("test.db")).unwrap();
+        let shelf = crate::weread::models::ShelfResponse { books: vec![], albums: vec![], mp: None };
+        persist(&db, "sync-quote", 1, &shelf, &[], true, false, &["bk'; DROP TABLE highlights;--".to_string()]).unwrap();
+        let table_exists: i64 = db
+            .connect()
+            .unwrap()
+            .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='highlights'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(table_exists, 1, "表必须还在");
     }
 }

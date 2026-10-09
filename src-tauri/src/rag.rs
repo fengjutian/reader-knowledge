@@ -139,13 +139,43 @@ pub fn source_evidence(
             .collect::<Result<Vec<_>, _>>()?;
     }
     if rows.is_empty() {
-        let mut statement = c.prepare(
-            "SELECT d.source_id,coalesce(s.title,''),coalesce(s.source_type,''),coalesce(d.heading,''),d.content,coalesce(d.locator_json,'{}')
+        // FTS 落空时走包含匹配兜底。`unicode61` 不切分中文，纯 MATCH 对中文查询几乎必然落空，
+        // 所以这里必须按 terms 做 LIKE 过滤；不能只 LIMIT 取前 N 块再让上层打分，
+        // 否则命中块排在靠后位置时资料会一条都进不了 prompt（静默降级）。
+        let scan_limit = (limit as i64).saturating_mul(8).clamp(200, 5000);
+        let patterns: Vec<String> = terms
+            .iter()
+            .map(|term| term.trim())
+            .filter(|term| !term.is_empty())
+            .map(|term| format!("%{}%", commands_normalize(term)))
+            .collect();
+        if patterns.is_empty() {
+            return Ok(Vec::new());
+        }
+        let or_clause = (1..=patterns.len())
+            .map(|index| {
+                let slot = format!("?{index}");
+                format!(
+                    "coalesce(d.content,'') LIKE {slot} OR coalesce(d.heading,'') LIKE {slot} OR coalesce(s.title,'') LIKE {slot}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let limit_slot = patterns.len() + 1;
+        let sql = format!(
+            "SELECT d.source_id,coalesce(s.title,''),coalesce(s.source_type,''),coalesce(d.heading,''),d.content,coalesce(d.locator_json,'{{}}')
              FROM source_documents d JOIN library_sources s ON s.id=d.source_id
-             WHERE s.is_deleted=0 LIMIT ?1",
-        )?;
+             WHERE s.is_deleted=0 AND ({or_clause})
+             LIMIT ?{limit_slot}"
+        );
+        let mut statement = c.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(patterns.len() + 1);
+        for pattern in &patterns {
+            params.push(Box::new(pattern.clone()));
+        }
+        params.push(Box::new(scan_limit));
         rows = statement
-            .query_map([limit as i64], |r| {
+            .query_map(rusqlite::params_from_iter(params.iter().map(|value| value.as_ref())), |r| {
                 Ok((
                     r.get(0)?,
                     r.get(1)?,
@@ -344,6 +374,42 @@ mod tests {
         seed_source(&db, "s1", "pdf", "导入的PDF");
         seed_doc(&db, "d1", "s1", "第 5 页", "一些内容", crate::import::Locator::default());
         assert!(source_evidence(&db, "  ", &[], &[], 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 资料_中文查询走包含匹配兵底也能命中() {
+        // 真实缺陷：source_docs_fts 用 unicode61，中文整段是单个 token，
+        // `MATCH "地方政府"` 匹配不到「地方政府的债务问题」，必然落入兜底分支；
+        // 而兜底分支原本是无条件 LIMIT，取 rowid 顺序前 N 块再被 score_block 全过滤 → 恒空。
+        // 这里用「命中内容排在很多无关块之后」来复现：只有加了 LIKE 条件才找得到。
+        let (_dir, db) = test_db();
+        seed_source(&db, "s1", "pdf", "财政报告");
+        // 先塞 300 条无关块，让目标块排在靠后位置。
+        for index in 0..300 {
+            seed_doc(
+                &db,
+                &format!("noise{index}"),
+                "s1",
+                &format!("第 {index} 页"),
+                &format!("无关内容 {index}，与查询毫无关系"),
+                crate::import::Locator::default(),
+            );
+        }
+        seed_doc(&db, "target", "s1", "第 900 页", "地方政府的债务问题与化解路径", crate::import::Locator { page: Some(900), chapter: None, heading: None });
+
+        let terms = vec!["地方政府".to_string()];
+        let found = source_evidence(&db, "地方政府", &terms, &[], 10).unwrap();
+        assert!(!found.is_empty(), "中文查询必须能通过包含匹配兜底命中资料");
+        assert!(found.iter().any(|item| item.content().contains("地方政府")), "命中的应是包含目标词的块，实际 {:?}", found.iter().map(|item| item.content()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn 资料_兜底不会把无关块当证据() {
+        let (_dir, db) = test_db();
+        seed_source(&db, "s1", "pdf", "无关文档");
+        seed_doc(&db, "d1", "s1", "第 1 页", "完全无关的正文内容", crate::import::Locator::default());
+        let found = source_evidence(&db, "不存在的词", &["不存在的词".to_string()], &[], 10).unwrap();
+        assert!(found.is_empty(), "没有命中词的块不应成为证据");
     }
 
     #[test]

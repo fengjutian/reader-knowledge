@@ -709,7 +709,6 @@ fn snippet_of(text: &str) -> String {
 
 /// bm25 返回负数，越小越相关；这里统一翻成「越大越相关」。
 /// 读 FTS 分数时统一走这个函数，避免各处自己写符号判断。
-#[cfg(test)]
 fn relevance_from_bm25(bm25: f64) -> f64 {
     (-bm25).max(0.0)
 }
@@ -897,7 +896,7 @@ fn map_note_candidate(r: &rusqlite::Row<'_>) -> rusqlite::Result<NoteCandidate> 
         chapter: r.get(4)?,
         content: r.get(5)?,
         updated_at: r.get(6)?,
-        relevance: r.get(7)?,
+        relevance: relevance_from_bm25(r.get(7)?),
     })
 }
 
@@ -973,7 +972,7 @@ fn map_book_candidate(r: &rusqlite::Row<'_>) -> rusqlite::Result<BookCandidate> 
         category: r.get(3)?,
         isbn: r.get(4)?,
         updated_at: r.get(5)?,
-        relevance: r.get(6)?,
+        relevance: relevance_from_bm25(r.get(6)?),
     })
 }
 
@@ -3804,7 +3803,8 @@ mod tests {
         normalize_scores, notes_grouped_by_book, parse_extraction, parse_relation_analysis, persist_extraction,
         cover_file_name, find_duplicate, is_own_cover_file, list_sources_impl, read_local_file,
         relevance_from_bm25, reranker_settings_from_db, request_default, save_reranker_settings_impl, search_terms,
-        snippet_of, source_candidates, source_detail_impl, unchanged_notes, validate_secret_kind, weread_reader_id,
+        snippet_of, source_candidates, source_detail_impl, score_note, unchanged_notes, validate_secret_kind,
+        weread_reader_id, NoteCandidate,
         MAX_LOCAL_FILE_BYTES,
         MetadataBatchFuture, MetadataFetchResult, AppError, GLOBAL_SEARCH_SNIPPET_CHARS,
     };
@@ -4358,6 +4358,42 @@ mod tests {
         // FTS5 的 bm25 返回负数，越小越相关；统一翻成「越大越相关」。
         assert!(relevance_from_bm25(-12.0) > relevance_from_bm25(-2.0));
         assert_eq!(relevance_from_bm25(3.0), 0.0, "异常正数不应变成负分");
+        // 兜底扫描写 0.0，翻转后仍必须是 0，不能变成 -0.0 之外的数。
+        assert_eq!(relevance_from_bm25(0.0), 0.0);
+    }
+
+    #[test]
+    fn fts_命中最强项不会被零分阈值丢弃() {
+        // 真实缺陷：relevance 直接用 bm25 负数时，FTS 命中的强结果 score 会变成负数，
+        // 被 global_search_impl 的 `score <= 0.0` 过滤掉，反而不如兜底扫描。
+        // 这里只验证打分链路：relevance 必须已经翻正，score 恒为正。
+        let strong = NoteCandidate {
+            id: "n1".into(),
+            entity_type: "highlight".into(),
+            book_id: "b1".into(),
+            title: "地方债".into(),
+            chapter: String::new(),
+            content: "地方债的风险".into(),
+            updated_at: String::new(),
+            relevance: relevance_from_bm25(-12.0),
+        };
+        let weak = NoteCandidate {
+            id: "n2".into(),
+            entity_type: "highlight".into(),
+            book_id: "b1".into(),
+            title: "地方债".into(),
+            chapter: String::new(),
+            content: "地方债的风险".into(),
+            updated_at: String::new(),
+            relevance: relevance_from_bm25(-1.0),
+        };
+        let terms = vec!["地方债".to_string()];
+        let strong_score = score_note(&strong, "地方债", &terms);
+        let weak_score = score_note(&weak, "地方债", &terms);
+        assert!(strong_score > 0.0, "FTS 最强命中必须能通过 score > 0 的筛选");
+        assert!(strong_score > weak_score, "bm25 更负的候选分数必须更高");
+        // 未翻转成负数时这里会得到 -12+12+5+1 = 6 之外的负值并被 continue 丢弃。
+        assert!(strong_score >= 12.0, "relevance 必须以正数参与累加，实际 {strong_score}");
     }
 
     #[test]
