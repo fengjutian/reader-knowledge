@@ -69,3 +69,28 @@ pub struct ReviewsResponse {
     #[serde(default)]
     pub synckey: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ShelfResponse;
+
+    #[test]
+    fn shelf_book_deserializes_reader_link() {
+        let response: ShelfResponse = serde_json::from_value(serde_json::json!({
+            "books": [{
+                "bookId": "book-1",
+                "title": "测试书籍",
+                "readerLink": "https://weread.qq.com/web/reader/book-1",
+                "deepLink": "weread://bookDetail/book-1"
+            }]
+        }))
+        .expect("shelf response should deserialize");
+
+        let book = &response.books[0];
+        assert_eq!(
+            book.reader_link.as_deref(),
+            Some("https://weread.qq.com/web/reader/book-1")
+        );
+        assert_eq!(book.deep_link.as_deref(), Some("weread://bookDetail/book-1"));
+    }
+}
