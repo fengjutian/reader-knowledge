@@ -18,7 +18,7 @@ Tauri commands → sync / AI services → repositories → SQLite/FTS5
 
 - 统一入口：`POST https://i.weread.qq.com/api/agent/gateway`
 - 鉴权：`Authorization: Bearer wrk-...`
-- 每个请求上报 `skill_version: "1.0.4"`
+- 每个请求上报 `skill_version: "1.0.5"`
 - `api_name`、`skill_version` 和业务参数全部位于 JSON 顶层
 - 书架使用 `/shelf/sync`
 - 笔记概览使用 `/user/notebooks` 和 `lastSort` 游标

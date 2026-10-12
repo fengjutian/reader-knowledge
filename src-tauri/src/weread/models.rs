@@ -20,6 +20,7 @@ pub struct ShelfBook {
     #[serde(default)]
     pub cover: String,
     pub category: Option<String>,
+    pub reader_link: Option<String>,
     pub deep_link: Option<String>,
     pub read_update_time: Option<i64>,
     #[serde(default)]

@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 pub const GATEWAY_URL: &str = "https://i.weread.qq.com/api/agent/gateway";
-pub const SKILL_VERSION: &str = "1.0.4";
+pub const SKILL_VERSION: &str = "1.0.5";
 
 pub struct WeReadClient {
     api_key: String,
