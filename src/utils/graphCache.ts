@@ -5,7 +5,7 @@ const STORE = "analyses";
  * 本地图谱关系的算法版本。改动 worker 的关系计算逻辑时必须递增，
  * 否则旧缓存会被当成新结果复用。
  */
-export const GRAPH_ALGORITHM_VERSION = "v9";
+export const GRAPH_ALGORITHM_VERSION = "v10";
 /** 语义关系缓存的命名空间前缀，用于按前缀批量失效。 */
 export const SEMANTIC_CACHE_PREFIX = "semantic-relations:v4";
 /** 本地图谱分析缓存的命名空间前缀。 */
@@ -129,15 +129,18 @@ export interface GraphCacheInput {
 }
 
 /**
- * 本地图谱缓存 key：包含算法版本、活跃书籍 ID 及其更新时间/笔记数、笔记 ID 及其内容摘要。
+ * 本地图谱缓存 key：包含算法版本、活跃书籍 ID 及其更新时间/笔记数、笔记元数据。
  * 任何一项变化都会得到不同的 key，从而自动失效旧缓存。
+ *
+ * 缓存键只采样正文首尾各 128 字，而不在 UI 主线程逐字哈希全部正文，
+ * 既能识别常见内容变化，也避免进入图谱时产生与笔记总字数线性相关的卡顿。
  */
 export function graphCacheKey({ books, notes }: GraphCacheInput) {
   const bookPart = books
     .map(book => `${book.id}:${book.updatedAt}:${book.highlightCount}:${book.thoughtCount}`)
     .join("|");
   const notePart = notes
-    .map(note => `${note.id}:${note.bookId}:${note.type}:${note.createdAt}:${note.chapter}:${note.content.length}:${fnv1a([note.content])}`)
+    .map(note => `${note.id}:${note.bookId}:${note.type}:${note.createdAt}:${note.chapter}:${note.content.length}:${fnv1a([note.content.slice(0, 128), note.content.slice(-128)])}`)
     .join("|");
   return `${LOCAL_CACHE_PREFIX}:${books.length}:${notes.length}:${fnv1a([bookPart, notePart])}`;
 }

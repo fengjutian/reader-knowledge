@@ -1,9 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Eraser, Focus, GitCompareArrows, Globe2, Link2, Maximize2, Network, RotateCw, Search, Share2, Sparkles, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/tauri";
-import { ConceptGraphPanel } from "../components/graph/ConceptGraphPanel";
-import { KnowledgeGraphCanvas } from "../components/graph/KnowledgeGraphCanvas";
-import { KnowledgeGraph3D } from "../components/graph/KnowledgeGraph3D";
 import { Button } from "../components/ui/Button";
 import { useLibraryRevision } from "../hooks/useLibraryRevision";
 import { useAppStore } from "../stores/app";
@@ -24,6 +21,25 @@ const relationLabels: Record<RelationKind, string> = { same_concept: "同义概�
 const workerStrength = (strength: Strength): WorkerStrength => strength === "standard" ? "all" : strength;
 /** 元数据关系目前只支持微信读书与豆瓣，图谱中据此明确说明。 */
 const METADATA_SOURCES = ["weread", "douban"] as const;
+const GLOBAL_EDGE_LIMIT = 450;
+const GLOBAL_NEIGHBOR_LIMIT = 3;
+
+const ConceptGraphPanel = lazy(() => import("../components/graph/ConceptGraphPanel").then(module => ({ default: module.ConceptGraphPanel })));
+const KnowledgeGraphCanvas = lazy(() => import("../components/graph/KnowledgeGraphCanvas").then(module => ({ default: module.KnowledgeGraphCanvas })));
+const KnowledgeGraph3D = lazy(() => import("../components/graph/KnowledgeGraph3D").then(module => ({ default: module.KnowledgeGraph3D })));
+
+function limitGlobalEdges(edges: Edge[]) {
+  const degree = new Map<string, number>();
+  const visible: Edge[] = [];
+  for (const edge of edges) {
+    if (visible.length >= GLOBAL_EDGE_LIMIT) break;
+    if ((degree.get(edge.from) ?? 0) >= GLOBAL_NEIGHBOR_LIMIT || (degree.get(edge.to) ?? 0) >= GLOBAL_NEIGHBOR_LIMIT) continue;
+    visible.push(edge);
+    degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+    degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+  }
+  return visible;
+}
 
 type GraphView = "books" | "concepts";
 
@@ -251,7 +267,9 @@ export function KnowledgeGraph() {
     const key = graphCacheKey({ books, notes }); cacheKeyRef.current = key; setAnalyzing(true);
     void readGraphCache<Analysis>(key).then(cached => {
       const usableCached = cached?.nodes?.length ? cached : undefined;
-      if (!cancelled) workerRef.current?.postMessage({ type: "init", books, notes: notes.map(({ id, type, bookId, chapter, content, bookTitle, createdAt }) => ({ id, type, bookId, chapter, content, bookTitle, createdAt })), strength: workerStrength(strength), cached: usableCached });
+      if (!cancelled) workerRef.current?.postMessage(usableCached
+        ? { type: "init", strength: workerStrength(strength), cached: usableCached }
+        : { type: "init", books, notes: notes.map(({ id, type, bookId, chapter, content, bookTitle, createdAt }) => ({ id, type, bookId, chapter, content, bookTitle, createdAt })), strength: workerStrength(strength) });
     });
     return () => { cancelled = true; };
     // strength 刻意不参与：切换强度只通过下面的 filter 消息生效，不触发全量重算。
@@ -272,7 +290,7 @@ export function KnowledgeGraph() {
       if (relationFilter === "analyzable") return [edge.from, edge.to].every(id => { const book = bookById.get(id); return !!book && book.highlightCount + book.thoughtCount > 0; });
       return true;
     }).sort((a, b) => b.score - a.score);
-    if (strength === "all") return { nodes: graph.nodes, edges: filteredEdges };
+    if (strength === "all") return { nodes: graph.nodes, edges: limitGlobalEdges(filteredEdges) };
     if (!focusId) return { nodes: [], edges: [] as Edge[] };
     const edges = filteredEdges.filter(edge => edge.from === focusId || edge.to === focusId);
     const visibleEdges = edges.slice(0, strength === "strong" ? 5 : strength === "balanced" ? 10 : strength === "standard" ? 12 : 20);
@@ -364,7 +382,7 @@ export function KnowledgeGraph() {
       <button type="button" role="tab" aria-selected={false} onClick={() => setView("books")}><BookOpen size={15}/>书籍关系</button>
       <button type="button" role="tab" aria-selected onClick={() => setView("concepts")}><Network size={15}/>概念网络</button>
     </div>
-    <ConceptGraphPanel/>
+    <Suspense fallback={<div className="graph-state">正在加载概念网络…</div>}><ConceptGraphPanel/></Suspense>
   </div>;
   return <div className="knowledge-graph-page">
     <div className="graph-view-tabs" role="tablist" aria-label="图谱视图">
@@ -380,7 +398,7 @@ export function KnowledgeGraph() {
       {!loading && !error && !analyzing && books.length > 0 && notes.length > 0 && !graph.nodes.length && !graph.edges.length && <div className="graph-state"><Share2/><strong>暂时没有发现书籍之间的关系</strong><span>共同作者、相同主题或相似的笔记内容会生成关系；也可以在书籍元数据页补全元数据来增加关系来源。</span><div className="graph-state__actions"><Button variant="secondary" onClick={() => void recomputeLocalRelations()}>重新计算本地关系</Button><Button variant="secondary" onClick={() => useAppStore.getState().setPage("metadata")}>前往书籍元数据</Button></div></div>}
       {!loading && !error && !analyzing && books.length > 0 && notes.length > 0 && !!graph.nodes.length && !viewGraph.edges.length && connectedOnly && <div className="graph-refresh-hint">当前"仅显示有关联"已开启，但这些书籍之间还没有找到关系。关闭该选项可以查看全部书籍，或前往书籍元数据补全共同作者与主题。</div>}
       {!!graph.nodes.length && !embeddingReady && !semanticLoading && <div className="graph-embedding-hint"><Sparkles size={13}/>尚未配置 Embedding，语义关系不可用。本地关系与元数据关系仍然有效。</div>}
-      {isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D
+      <Suspense fallback={<div className="graph-state">正在加载图谱画布…</div>}>{isActivePage && strength === "all" && !loading && !error && !!viewGraph.nodes.length && <KnowledgeGraph3D
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId} showIsolated={!connectedOnly}
         fitRequest={fitRequest}
         onNodeClick={id => { setSelectedId(id); setEdgeId(undefined); }} onNodeOpen={navigateToBook}
@@ -389,7 +407,7 @@ export function KnowledgeGraph() {
         nodes={viewGraph.nodes} edges={renderedEdges} focusId={focusId} selectedId={selectedId}
         selectedEdgeId={edgeId} fitRequest={fitRequest}
         onNodeClick={id => { setSelectedId(id); setEdgeId(undefined); }} onNodeOpen={navigateToBook}
-        onEdgeClick={id => { setEdgeId(id); setSelectedId(undefined); }} />}
+        onEdgeClick={id => { setEdgeId(id); setSelectedId(undefined); }} />}</Suspense>
       {selected && <aside className="graph-detail"><button className="graph-detail__close" onClick={() => setSelectedId(undefined)}><X size={16}/></button><span className="graph-kind">书籍</span><h2>《{selected.title}》</h2><p>{selected.author}</p><small>{selected.highlightCount} 条划线 · {selected.thoughtCount} 条想法 · {graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).length} 本关联书籍</small><button className={`graph-compare-toggle${compareIds.includes(selected.id) ? " selected" : ""}`} onClick={() => toggleCompare(selected.id)} disabled={selected.highlightCount + selected.thoughtCount === 0 || (!compareIds.includes(selected.id) && compareIds.length >= 4)}>{compareIds.includes(selected.id) ? <Check size={14}/> : <GitCompareArrows size={14}/>} {compareIds.includes(selected.id) ? "已加入比较" : "加入比较"}</button><div className="graph-detail__actions"><button onClick={() => navigateToBook(selected.id)}><Focus size={14}/>设为中心书</button><button onClick={() => openBook(selected.id)}><BookOpen size={14}/>打开书籍</button></div></aside>}
       {selectedEdge && (() => { const from = graph.nodes.find(n => n.id === selectedEdge.from)!, to = graph.nodes.find(n => n.id === selectedEdge.to)!, missing = [from, to].filter(book => book.highlightCount + book.thoughtCount === 0), canAnalyze = missing.length === 0, authorRelation = selectedEdge.relation.includes("作者"); return <aside className="graph-detail graph-relation-detail"><button className="graph-detail__close" onClick={() => setEdgeId(undefined)}><X size={16}/></button><span className="graph-kind">{deepAnalysis ? relationLabels[deepAnalysis.relation] : selectedEdge.relation}</span><h2>《{from.title}》<br/>与《{to.title}》</h2><p>{authorRelation && !deepAnalysis ? "共同作者：" : "共同主题："}</p><div className="relation-keywords">{(deepAnalysis?.concepts.length ? deepAnalysis.concepts : selectedEdge.keywords).map(word => <span key={word}>{word}</span>)}</div>{!deepAnalysis && selectedEdge.evidence.map(item => <button className="relation-evidence" key={item.noteId} onClick={() => openBook(item.bookId, item.noteId)}>“{short(item.text, 72)}”</button>)}{deepAnalysis && <div className="deep-relation"><p>{deepAnalysis.summary}</p>{deepAnalysis.claims.map((claim, index) => <section key={`${claim.relation}-${index}`}><strong>{relationLabels[claim.relation]} · {Math.round(claim.confidence * 100)}%</strong><p>{claim.summary}</p>{claim.evidence.map(item => <button className="relation-evidence" key={item.noteId} onClick={() => openBook(item.bookId, item.noteId)}><i>{item.noteType === "thought" ? "我的想法" : "原文划线"}</i>“{short(item.text, 90)}”</button>)}</section>)}</div>}<small>{deepAnalysis ? `AI 判断置信度 ${Math.round(deepAnalysis.confidence * 100)}%${deepAnalysis.cached ? " · 已缓存" : ""}` : `综合关联度 ${Math.round(selectedEdge.score * 100)}%`}</small>{deepError && <p className="relation-analysis-error">{deepError}</p>}{!canAnalyze && <p className="relation-analysis-notice">《{missing.map(book => book.title).join("》《")}》暂无划线或想法，不能进行有证据的观点分析。</p>}<div className="relation-analysis-actions"><button onClick={() => openAiCompare([from.id, to.id])} disabled={!canAnalyze}><GitCompareArrows size={14}/>比较这两本</button><button onClick={() => void analyzeRelation(!!deepAnalysis)} disabled={deepLoading || !canAnalyze}>{deepAnalysis ? <RotateCw size={14}/> : <Sparkles size={14}/>} {deepLoading ? "正在分析…" : deepAnalysis ? "重新分析" : "AI 深度分析"}</button></div></aside>; })()}
       {!!viewGraph.nodes.length && <div className="graph-legend graph-legend--help"><span>单击节点查看相邻关系</span><span>拖动平移画布</span><span>滚轮缩放</span></div>}
