@@ -50,4 +50,13 @@ describe("sync store revision", () => {
     await useSyncStore.getState().run();
     expect(useSyncStore.getState().revision).toBe(2);
   });
+
+  it("把 Skill 升级响应转换为桌面软件升级提示", async () => {
+    vi.spyOn(api, "sync").mockRejectedValue(new Error("微信读书技能需要升级：微信读书 Skill 有新版本，请立即从 upgrade_url 下载最新版 SKILL.md"));
+
+    await useSyncStore.getState().run();
+
+    expect(useSyncStore.getState().status).toBe("failed");
+    expect(useSyncStore.getState().message).toBe("当前软件内置的微信读书接口协议已过期，请升级 wereader 后再同步。现有书籍、划线和想法仍保存在本机，不会丢失。");
+  });
 });
