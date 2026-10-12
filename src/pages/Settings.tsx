@@ -139,7 +139,7 @@ function AppearanceSettings() {
 }
 
 function AboutSettings() {
-  const [version, setVersion] = useState("0.3.0");
+  const [version, setVersion] = useState("0.5.0");
   useEffect(() => { getVersion().then(setVersion).catch(() => undefined); }, []);
   return <div className="about-settings" role="tabpanel">
     <section className="settings-card about-hero">
