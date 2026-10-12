@@ -9,7 +9,7 @@ pub enum AppError {
     Network(#[from] reqwest::Error),
     #[error("invalid response: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("微信读书技能需要升级：{0}")]
+    #[error("微信读书接口协议需要升级：{0}")]
     UpgradeRequired(String),
     #[error("{0}")]
     Message(String),

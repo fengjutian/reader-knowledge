@@ -24,9 +24,11 @@ interface SyncState extends SyncProgress {
 
 function syncErrorMessage(error: unknown) {
   const message = typeof error === "string" ? error : error instanceof Error ? error.message : "同步失败";
-  return message.includes("No matching entry found in secure storage")
-    ? "请先在设置中填写并保存微信读书 API Key"
-    : message;
+  if (message.includes("No matching entry found in secure storage")) return "请先在设置中填写并保存微信读书 API Key";
+  if (message.includes("微信读书技能需要升级") || message.includes("微信读书接口协议需要升级") || message.includes("upgrade_url") || message.includes("SKILL.md")) {
+    return "当前软件内置的微信读书接口协议已过期，请升级 wereader 后再同步。现有书籍、划线和想法仍保存在本机，不会丢失。";
+  }
+  return message;
 }
 
 export const useSyncStore = create<SyncState>((set, get) => ({

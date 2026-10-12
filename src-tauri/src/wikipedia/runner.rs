@@ -151,7 +151,28 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         status,
         JobStatus::Pending | JobStatus::Downloading | JobStatus::Verifying | JobStatus::Parsing
     );
-    let dump_path: Option<PathBuf> = if needs_dump {
+    // 解析阶段暂停后，dump 已经改名成 target 静静躺在 temp 目录里。
+    // 不先认它的话，下载分支看到 .part 不存在就会判定 Restart，把几十 GB 重下一遍。
+    let reusable_dump = if status == JobStatus::Parsing && request.local_file.is_none() {
+        config.ensure_temp_dir().ok().and_then(|dir| {
+            std::fs::read_dir(dir)
+                .ok()?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| {
+                    path.is_file()
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.ends_with(".bz2"))
+                })
+        })
+    } else {
+        None
+    };
+    let dump_path: Option<PathBuf> = if let Some(path) = reusable_dump {
+        Some(path)
+    } else if needs_dump {
         Some(match request.local_file.clone() {
             Some(path) => {
                 if !path.exists() {
@@ -195,12 +216,24 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
         None
     };
 
-    if control_signal(db, job_id)? == Some(Signal::Cancel) {
-        return Ok(cancelled_summary(job_id));
+    // 暂停和取消都必须在这里接住：只判 Cancel 的话，verifying/validating 阶段
+    // 的 Pause 会被后面无条件执行的 transition(Parsing) 覆盖掉——状态机允许
+    // Paused → 任意阶段，于是「暂停」被静默抹掉，auto_publish 任务照跑到底。
+    if let Some(signal) = control_signal(db, job_id)? {
+        return Ok(match signal {
+            Signal::Pause => paused_summary(job_id, status),
+            Signal::Cancel => cancelled_summary(job_id),
+        });
     }
 
     // ---------- 2. 流式解析到 staging ----------
     if needs_dump && status != JobStatus::Parsing {
+        if let Some(signal) = control_signal(db, job_id)? {
+            return Ok(match signal {
+                Signal::Pause => paused_summary(job_id, status),
+                Signal::Cancel => cancelled_summary(job_id),
+            });
+        }
         store::transition(db, job_id, JobStatus::Parsing)?;
         status = JobStatus::Parsing;
     }
@@ -231,6 +264,12 @@ fn execute(db: &Database, job_id: &str, config: &WikipediaConfig) -> Result<RunS
 
     // ---------- 3. 重定向解析 ----------
     if status == JobStatus::Parsing {
+        if let Some(signal) = control_signal(db, job_id)? {
+            return Ok(match signal {
+                Signal::Pause => paused_summary(job_id, status),
+                Signal::Cancel => cancelled_summary(job_id),
+            });
+        }
         store::transition(db, job_id, JobStatus::ResolvingRedirects)?;
         status = JobStatus::ResolvingRedirects;
     }

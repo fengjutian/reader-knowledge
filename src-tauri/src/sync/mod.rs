@@ -106,7 +106,7 @@ fn persist(
             "INSERT INTO books(book_id,title,author,cover,category,deep_link,read_update_time,finish_reading,update_time,created_at,synced_at,is_deleted,last_seen_sync_id)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,0,?11)
              ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=excluded.deep_link,read_update_time=excluded.read_update_time,finish_reading=excluded.finish_reading,update_time=excluded.update_time,synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
-            params![book.book_id,book.title,book.author,book.cover,book.category,book.deep_link,book.read_update_time,book.finish_reading,book.update_time,started_at,session_id],
+            params![book.book_id,book.title,book.author,book.cover,book.category,book.reader_link.as_ref().or(book.deep_link.as_ref()),book.read_update_time,book.finish_reading,book.update_time,started_at,session_id],
             )?;
             let raw = serde_json::to_value(book)?;
             upsert_weread_metadata(&tx, &book.book_id, &raw, started_at)?;
@@ -120,7 +120,7 @@ fn persist(
                 "INSERT INTO books(book_id,title,author,cover,category,deep_link,created_at,synced_at,is_deleted,last_seen_sync_id)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?7,0,?8)
                  ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,cover=excluded.cover,category=excluded.category,deep_link=coalesce(excluded.deep_link,books.deep_link),synced_at=excluded.synced_at,is_deleted=0,last_seen_sync_id=excluded.last_seen_sync_id",
-                params![item.book_id,title,string(book,"author"),string(book,"cover"),string(book,"category"),string(book,"deepLink"),started_at,session_id],
+                params![item.book_id,title,string(book,"author"),string(book,"cover"),string(book,"category"),string(book,"readerLink").or_else(|| string(book,"deepLink")),started_at,session_id],
             )?;
             upsert_weread_metadata(&tx, &item.book_id, book, started_at)?;
             save_raw(&tx, "notebook", &item.book_id, book, started_at)?;
@@ -299,7 +299,7 @@ pub(crate) fn weread_metadata_fields(value: &Value) -> Result<WereadMetadataFiel
         description: string(value, "intro"),
         rating: number(value, "newRating"),
         rating_count: integer(value, "newRatingCount"),
-        source_url: string(value, "deepLink"),
+        source_url: string(value, "readerLink").or_else(|| string(value, "deepLink")),
         raw_json: serde_json::to_string(value)?,
     })
 }

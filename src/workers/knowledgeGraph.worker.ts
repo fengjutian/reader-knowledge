@@ -115,7 +115,7 @@ function filter(strength: Strength) {
   return { nodes, edges: Number.isFinite(limit.edges) ? selected.slice(0, limit.edges) : selected };
 }
 
-self.onmessage = (event: MessageEvent<{ type: "init"; books: Book[]; notes: Note[]; strength: Strength; cached?: Analysis } | { type: "filter"; strength: Strength }>) => {
+self.onmessage = (event: MessageEvent<{ type: "init"; strength: Strength; cached: Analysis; books?: never; notes?: never } | { type: "init"; books: Book[]; notes: Note[]; strength: Strength; cached?: never } | { type: "filter"; strength: Strength }>) => {
   if (event.data.type === "filter") { self.postMessage({ type: "result", graph: filter(event.data.strength) }); return; }
   if (event.data.cached) { analysis = event.data.cached; self.postMessage({ type: "result", graph: filter(event.data.strength), cached: true }); return; }
   const nodes = position([...event.data.books].sort((a, b) => b.highlightCount + b.thoughtCount - a.highlightCount - a.thoughtCount));

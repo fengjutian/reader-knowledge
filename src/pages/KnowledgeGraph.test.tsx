@@ -146,7 +146,7 @@ describe("KnowledgeGraph 视图切换", () => {
     expect(screen.getByRole("tab", { name: /书籍关系/ })).toHaveAttribute("aria-selected", "true");
 
     await user.click(screen.getByRole("tab", { name: /概念网络/ }));
-    expect(screen.getByTestId("concept-panel")).toBeInTheDocument();
+    expect(await screen.findByTestId("concept-panel")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /概念网络/ })).toHaveAttribute("aria-selected", "true");
   });
 

@@ -429,6 +429,27 @@ mod tests {
     }
 
     #[test]
+    fn 合并时中文超长内容不会越界崩溃() {
+        // 真实缺陷：去重 key 之前用 `&content[..len.min(80)]` 按字节截断，
+        // 第 80 字节落在多字节字符中间时直接 panic（正文全是中文，几乎必然踩中）。
+        let long = "字".repeat(500);
+        let result = std::panic::catch_unwind(|| {
+            merge_evidence(
+                vec![note("n1", &long)],
+                vec![Evidence::Source {
+                    source_id: "s1".into(),
+                    source_title: "资料".into(),
+                    source_type: "pdf".into(),
+                    content: format!("{long}尾巴"),
+                    locator: crate::import::Locator::default(),
+                }],
+            )
+        });
+        assert!(result.is_ok(), "中文正文按字符截断，不应 panic");
+        assert_eq!(result.unwrap().len(), 2, "两条内容不同，都应保留");
+    }
+
+    #[test]
     fn 合并时去掉完全重复的证据() {
         let merged = merge_evidence(vec![note("n1", "重复内容")], vec![Evidence::Source {
             source_id: "s1".into(),
